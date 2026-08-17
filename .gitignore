@@ -33,7 +33,7 @@ __pycache__/
 htmlcov/
 runtime/
 tools/
-bin/
+/bin/
 node_modules/
 dist/
 build/
