@@ -129,6 +129,7 @@ pub(crate) fn acquire_vault_operation_lock() -> Result<VaultOperationGuard> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .mode(0o600)
         .open(path)?;
     // SAFETY: file is open and its descriptor remains live in the guard.
