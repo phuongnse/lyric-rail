@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LyricRail Player",
+  "version": "0.8.0",
+  "identifier": "com.lyricrail.player",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1422",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "LyricRail Player",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob: lrailmedia: http://lrailmedia.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'",
+      "capabilities": ["player-main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Music",
+    "shortDescription": "Authenticated private karaoke player",
+    "longDescription": "Plays encrypted LyricRail karaoke packages with dynamic lyrics and switchable Karaoke and Original Reference audio.",
+    "fileAssociations": [
+      {
+        "ext": ["lrail"],
+        "name": "LyricRail Karaoke Package",
+        "description": "LyricRail Karaoke Package",
+        "mimeType": "application/vnd.lyricrail.package",
+        "role": "Viewer",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "com.lyricrail.package",
+          "conformsTo": ["public.data"]
+        }
+      }
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

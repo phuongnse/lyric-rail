@@ -1,0 +1,211 @@
+:root {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f5f7fb;
+  background: #080b12;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --bg: #080b12;
+  --panel: rgba(18, 23, 35, 0.82);
+  --panel-solid: #111622;
+  --panel-high: #171d2a;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.15);
+  --text: #f5f7fb;
+  --muted: #98a2b3;
+  --soft: #cad0db;
+  --accent: #ffcc4d;
+  --accent-strong: #ffb82e;
+  --cyan: #53d6d0;
+  --blue: #70a9ff;
+  --pink: #ff78b8;
+  --danger: #ff6b72;
+  --success: #62d69a;
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 24px;
+  --shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(83, 214, 208, 0.09), transparent 29%),
+    radial-gradient(circle at 86% 8%, rgba(255, 204, 77, 0.08), transparent 26%),
+    var(--bg);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 78%, white);
+  outline-offset: 2px;
+}
+
+::selection {
+  color: #0b0d12;
+  background: var(--accent);
+}
+
+.brand-mark {
+  position: relative;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 204, 77, 0.45);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(255, 204, 77, 0.21), rgba(255, 184, 46, 0.06));
+  box-shadow: inset 0 0 22px rgba(255, 204, 77, 0.1);
+}
+
+.brand-mark::before,
+.brand-mark::after {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 46px;
+  content: "";
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(255, 204, 77, 0.35);
+  transform: rotate(24deg);
+}
+
+.brand-mark::before {
+  left: 12px;
+}
+
+.brand-mark::after {
+  right: 12px;
+}
+
+.brand-mark span {
+  z-index: 1;
+  width: 23px;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 -7px 0 var(--accent), 0 7px 0 var(--accent);
+  transform: rotate(24deg);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--soft);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.055);
+  font-weight: 700;
+  transition: 150ms ease;
+}
+
+.button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.09);
+  transform: translateY(-1px);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.button-primary {
+  border-color: var(--accent);
+  color: #111318;
+  background: linear-gradient(135deg, #ffdc72, var(--accent-strong));
+  box-shadow: 0 10px 28px rgba(255, 184, 46, 0.16);
+}
+
+.button-primary:hover:not(:disabled) {
+  border-color: #ffe195;
+  background: linear-gradient(135deg, #ffe38e, #ffc33f);
+}
+
+.button-danger {
+  border-color: rgba(255, 107, 114, 0.32);
+  color: #ffadb1;
+  background: rgba(255, 107, 114, 0.08);
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(18px);
+}
+
+.eyebrow {
+  margin: 0 0 7px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}

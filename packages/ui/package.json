@@ -1,0 +1,9 @@
+{
+  "name": "@lyricrail/ui",
+  "private": true,
+  "version": "0.8.0",
+  "type": "module",
+  "exports": {
+    "./theme.css": "./theme.css"
+  }
+}

@@ -1,0 +1,34 @@
+[package]
+name = "lrail-volume-security"
+version.workspace = true
+description = "Fail-closed encrypted-volume inspection and broker protocol for LyricRail"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+
+[target.'cfg(windows)'.dependencies]
+rand.workspace = true
+windows-service = "=0.8.1"
+windows = { version = "0.61.3", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_IO",
+  "Win32_System_Ole",
+  "Win32_System_Pipes",
+  "Win32_System_Rpc",
+  "Win32_System_Threading",
+  "Win32_System_Variant",
+  "Win32_System_Wmi",
+] }

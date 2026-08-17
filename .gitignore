@@ -1,0 +1,68 @@
+# User media and generated artifacts
+input/*
+!input/README.md
+output/*
+!output/README.md
+cache/*
+!cache/.gitkeep
+logs/*
+!logs/.gitkeep
+models/*
+!models/README.md
+
+# Credentials and tokens
+credentials/*
+!credentials/README.md
+.env
+.env.*
+!.env.example
+client_secret*.json
+token*.json
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+runtime/
+tools/
+bin/
+node_modules/
+dist/
+build/
+target/
+fuzz/artifacts/
+apps/**/node_modules/
+apps/**/dist/
+apps/studio/src-tauri/windows/payload/*.exe
+*.lrail
+
+# Generated release artifacts stay out of source history. Publish signed
+# binaries through GitHub Releases after the corresponding release gates pass.
+release/windows/*.exe
+release/windows/*.msi
+release/windows/SHA256SUMS.txt
+release/windows/stale-*/
+*.cdx.json
+!release/sbom/*.cdx.json
+*.egg-info/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Interrupted local work
+*.partial
+*.tmp
+*.lock
+!Cargo.lock

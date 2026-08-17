@@ -1,0 +1,14 @@
+# Versions used for the production audit. Install the appropriate PyTorch build
+# (CPU, CUDA, or Metal) for the platform before applying these constraints.
+audio-separator==0.44.5
+librosa==0.11.0
+numpy==2.4.4
+pillow==12.3.0
+PyNaCl==1.6.2
+setuptools==83.0.0
+soundfile==0.14.0
+torch==2.13.0
+torchaudio==2.11.0
+torchvision==0.28.0
+transformers==5.15.0
+yt-dlp==2026.7.4

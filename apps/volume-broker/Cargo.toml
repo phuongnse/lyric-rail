@@ -1,0 +1,21 @@
+[package]
+name = "lyricrail-volume-broker"
+version.workspace = true
+description = "Least-privilege Windows BitLocker status broker for LyricRail Studio"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lrail-volume-security = { path = "../../crates/lrail-volume-security" }
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "=0.8.1"
+windows = { version = "0.61.3", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }

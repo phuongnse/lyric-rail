@@ -1,0 +1,22 @@
+{
+  "titleTemplate": "Karaoke {songTitle} - {artist} | Beat Chuẩn",
+  "titleTemplateWithoutArtist": "Karaoke {songTitle} | Beat Chuẩn",
+  "descriptionTemplate": "KARAOKE: {songTitle}\nCa sĩ bản tham chiếu: {artist}\n\n{rightsNotice}\n\n{descriptionFooter}\n\n#karaoke #karaokeviet #beatchuan",
+  "descriptionTemplateWithoutArtist": "KARAOKE: {songTitle}\n\n{rightsNotice}\n\n{descriptionFooter}\n\n#karaoke #karaokeviet #beatchuan",
+  "tags": [
+    "karaoke",
+    "karaoke việt nam",
+    "karaoke beat chuẩn",
+    "nhạc karaoke",
+    "{songTitle}",
+    "{artist}"
+  ],
+  "categoryId": "10",
+  "defaultLanguage": "vi",
+  "defaultAudioLanguage": "vi",
+  "limits": {
+    "titleCharacters": 100,
+    "descriptionCharacters": 5000,
+    "tagsCharacters": 500
+  }
+}

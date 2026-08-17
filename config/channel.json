@@ -1,0 +1,18 @@
+{
+  "profile": "main",
+  "expectedChannelId": "",
+  "channelDisplayName": "",
+  "channelHandle": "",
+  "defaultPlaylistId": "",
+  "descriptionFooter": "",
+  "rightsNotice": "Chỉ đăng nội dung mà kênh có quyền sử dụng hoặc được chủ sở hữu cho phép.",
+  "contactEmail": "",
+  "defaultPrivacy": "private",
+  "publishDelayHours": 24,
+  "notifySubscribers": false,
+  "madeForKids": false,
+  "containsSyntheticMedia": false,
+  "license": "youtube",
+  "embeddable": true,
+  "publicStatsViewable": true
+}

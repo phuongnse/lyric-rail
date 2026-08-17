@@ -1,0 +1,14 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Published non-secret runtime signing public-key fingerprint"
+condition = "AND"
+regexTarget = "match"
+paths = [
+  '''^docs/RUNTIME_PACK\.md$''',
+  '''^docs/RELEASE_STATUS\.md$''',
+]
+regexes = [
+  '''5588062a9fe343d44535cf651382ef21''',
+]

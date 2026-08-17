@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "policy": "exact-revision-and-checkpoint-hash",
+  "models": {
+    "instrumental-primary": {
+      "type": "audio-separator-checkpoint",
+      "filename": "bs_roformer_instrumental_resurrection_unwa.ckpt",
+      "sha256": "16311025a5133ae6411760ccfe9e3e66b31a01d9d8bec0a03fa7ec4bedac7a15",
+      "associatedFileSha256": {
+        "config_bs_roformer_instrumental_resurrection_unwa.yaml": "d28c16f35e3118c8db3b5b28320d70e3fbb7ab46ab1ff1e60e0332b1e5871ba1"
+      },
+      "configPaths": ["audioSeparation.modelFilename"],
+      "task": "instrumental extraction",
+      "source": "https://github.com/nomadkaraoke/python-audio-separator/blob/main/docs/deton24-model-mapping-and-ensemble-guide.md",
+      "licenseNote": "Checkpoint terms are controlled by the upstream model publisher; weights are not distributed by LyricRail."
+    },
+    "instrumental-residual-consensus": {
+      "type": "audio-separator-checkpoint",
+      "filename": "melband_roformer_inst_v2.ckpt",
+      "sha256": "bd19766620f7d6f58fdf7aaada7e89907fe41bc64490ce3faa9a6dab15d6e1f2",
+      "associatedFileSha256": {
+        "config_melbandroformer_inst_v2.yaml": "4b902a7360a930c178edb4846b30e4e326aa1219d1b2daf660d46a311e0cd50b"
+      },
+      "configPaths": [
+        "lyrics.leakageQualityGate.residualConsensusModelFilename",
+        "roles.backingCleanupModelFilename"
+      ],
+      "task": "independent residual-vocal consensus and backing cleanup",
+      "source": "https://github.com/nomadkaraoke/python-audio-separator",
+      "licenseNote": "Checkpoint terms are controlled by the upstream model publisher; weights are not distributed by LyricRail."
+    },
+    "lead-backing-analysis": {
+      "type": "audio-separator-checkpoint",
+      "filename": "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
+      "sha256": "1de20d459332fe8869aeb01327a31df0032262706e1365114e852dc271779813",
+      "associatedFileSha256": {
+        "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml": "b35077d94861f068097cce1a5e54633c055e7dcc2613eade4e4dc7c7c9c3f48b"
+      },
+      "configPaths": ["roles.leadBackingModelFilename"],
+      "task": "lead/backing analysis only",
+      "source": "https://github.com/nomadkaraoke/python-audio-separator",
+      "licenseNote": "Checkpoint terms are controlled by the upstream model publisher; weights are not distributed by LyricRail."
+    },
+    "opposite-gender-colead-analysis": {
+      "type": "audio-separator-checkpoint",
+      "filename": "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt",
+      "sha256": "123c00786bdbc6bd462dddb35cd21fd6ae99ab8319f93f63a8abc1012e593d94",
+      "associatedFileSha256": {
+        "config_chorus_male_female_bs_roformer.yaml": "363ef6bef5f0fd89b69e6e0f90dcc102dec6aaeb6e55790cae1796bebdf5097e"
+      },
+      "configPaths": ["roles.oppositeGenderCoLeadModelFilename"],
+      "task": "independent opposite-gender co-lead consensus",
+      "source": "https://github.com/nomadkaraoke/python-audio-separator",
+      "licenseNote": "Checkpoint terms are controlled by the upstream model publisher; weights are not distributed by LyricRail."
+    },
+    "vietnamese-song-aligner": {
+      "type": "huggingface-snapshot",
+      "repository": "nguyenvulebinh/lyric-alignment",
+      "revision": "2d0b61d13e9da6cae03a6c01fe3eeebdb6e4b4ed",
+      "repositoryConfigPath": "lyrics.forcedAlignmentModel",
+      "revisionConfigPath": "lyrics.forcedAlignmentModelRevision",
+      "requiredFiles": ["config.json", "pytorch_model.bin"],
+      "fileSha256": {
+        "pytorch_model.bin": "0c25b2cd0aaea6417a0ed325493300d1a46799c2e123dafd73412cafa1886123"
+      },
+      "task": "Vietnamese singing forced alignment against authoritative lyrics",
+      "source": "https://huggingface.co/nguyenvulebinh/lyric-alignment",
+      "license": "CC-BY-NC-4.0"
+    },
+    "speaker-embedding": {
+      "type": "huggingface-snapshot",
+      "repository": "microsoft/wavlm-base-plus-sv",
+      "revision": "feb593a6c23c1cc3d9510425c29b0a14d2b07b1e",
+      "repositoryConfigPath": "roles.speakerEmbeddingModel",
+      "revisionConfigPath": "roles.speakerEmbeddingModelRevision",
+      "requiredFiles": ["config.json", "pytorch_model.bin"],
+      "fileSha256": {
+        "pytorch_model.bin": "e906bce2fa42fb497a1d1a9ecf81548adb7e03b12a5644e32d2f42f0d6500fad"
+      },
+      "task": "speaker-identity embedding; singing decisions require independent pitch and lexical evidence",
+      "source": "https://huggingface.co/microsoft/wavlm-base-plus-sv",
+      "license": "MIT"
+    }
+  }
+}

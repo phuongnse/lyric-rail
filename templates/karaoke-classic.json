@@ -1,0 +1,72 @@
+{
+  "name": "Karaoke Classic Two-Line",
+  "referenceResolution": [1920, 1080],
+  "layout": {
+    "lineMode": "alternating-two-lines",
+    "alignment": "top-left-bottom-right",
+    "bottomMargin": 84,
+    "lineGap": 28,
+    "safeAreaPercent": 3.5,
+    "displayLeadSeconds": 1.6,
+    "minimumDisplayLeadSeconds": 0.45,
+    "preferredPostHoldSeconds": 0.2,
+    "maximumPostHoldSeconds": 2.5,
+    "slotTransitionGapSeconds": 0.08,
+    "minimumVisualSweepSeconds": 0.28,
+    "maximumVisualBoundaryShiftSeconds": 0.08,
+    "maximumVisualJoinGapSeconds": 0.12,
+    "lineBreakPolicy": "semantic-audio-width",
+    "maximumLineWidthPercent": 93,
+    "autoShrinkLongLines": false,
+    "minimumFontSize": 134,
+    "preferredMinimumFontSize": 134
+  },
+  "font": {
+    "family": "Be Vietnam Pro Bold",
+    "file": "BeVietnamPro-Bold.ttf",
+    "bold": false,
+    "sizeAt1080p": 134,
+    "scaleX": 96,
+    "scaleY": 100,
+    "letterSpacing": 0
+  },
+  "roleChangeCue": {
+    "enabled": true,
+    "transitionOnly": true,
+    "showAfterPauseSeconds": 4.0,
+    "dotCount": 3,
+    "durationSeconds": 3.2,
+    "minimumDurationSeconds": 1.2,
+    "minimumIntraPhraseDurationSeconds": 0.35,
+    "maximumIntraPhraseResumeInterruptionSeconds": 1.2,
+    "maximumIntraPhraseResumeGapSeconds": 0.5,
+    "requiredOnEveryTransition": true,
+    "requiredDotCount": 3,
+    "dotFontSizeAt1080p": 82
+  },
+  "unsung": {
+    "fill": "#FFFFFF",
+    "outerOutline": "#000000",
+    "outerOutlineWidth": 4.5,
+    "shadow": "#000000",
+    "shadowOffset": 2
+  },
+  "sung": {
+    "direction": "left-to-right",
+    "timing": "syllable",
+    "innerOutline": "#FFFFFF",
+    "innerOutlineWidth": 4.5,
+    "colors": {
+      "male": "#153CFF",
+      "female": "#F02A2A",
+      "duet": "#FF3D9D"
+    }
+  },
+  "effects": {
+    "entrance": "none",
+    "exit": "none",
+    "bounce": false,
+    "glow": false,
+    "backgroundBox": false
+  }
+}

@@ -1,0 +1,44 @@
+[package]
+name = "lrail-format"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Authenticated, seekable LyricRail karaoke package format"
+
+[lib]
+name = "lrail_format"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lrail"
+path = "src/bin/lrail.rs"
+
+[dependencies]
+anyhow.workspace = true
+argon2.workspace = true
+chacha20poly1305.workspace = true
+ciborium.workspace = true
+clap.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+hkdf.workspace = true
+keyring.workspace = true
+memsec.workspace = true
+rand.workspace = true
+rpassword.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

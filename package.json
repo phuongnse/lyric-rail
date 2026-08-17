@@ -1,0 +1,22 @@
+{
+  "name": "lyricrail-desktop",
+  "private": true,
+  "version": "0.8.0",
+  "workspaces": [
+    "apps/studio",
+    "apps/player",
+    "packages/ui"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "build:studio": "npm run build --workspace @lyricrail/studio",
+    "build:player": "npm run build --workspace @lyricrail/player",
+    "dev:studio": "npm run tauri dev --workspace @lyricrail/studio",
+    "dev:player": "npm run tauri dev --workspace @lyricrail/player",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
