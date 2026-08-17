@@ -201,8 +201,8 @@ def collect_doctor_report(root: Path, *, production: bool = False) -> dict[str, 
         root / "config" / "metadata_rules.json",
         root / "config" / "model-manifest.json",
         root / "templates" / "karaoke-classic.json",
-        root / "tools" / "lyric-alignment" / "model_handling.py",
-        root / "tools" / "lyric-alignment" / "LICENSE",
+        root / "vendor" / "lyric-alignment" / "model_handling.py",
+        root / "vendor" / "lyric-alignment" / "LICENSE",
     )
     missing_project_files = [str(path) for path in project_files if not path.is_file()]
     checks.append(

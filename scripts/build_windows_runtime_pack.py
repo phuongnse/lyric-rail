@@ -166,12 +166,12 @@ def _assemble(root: Path, staging: Path, lrail: Path) -> None:
     # signed pack to reduce both size and executable attack surface. Retain the
     # upstream license alongside the vendored source.
     _copy_file(
-        root / "tools" / "lyric-alignment" / "model_handling.py",
-        staging / "tools" / "lyric-alignment" / "model_handling.py",
+        root / "vendor" / "lyric-alignment" / "model_handling.py",
+        staging / "vendor" / "lyric-alignment" / "model_handling.py",
     )
     _copy_file(
-        root / "tools" / "lyric-alignment" / "LICENSE",
-        staging / "tools" / "lyric-alignment" / "LICENSE",
+        root / "vendor" / "lyric-alignment" / "LICENSE",
+        staging / "vendor" / "lyric-alignment" / "LICENSE",
     )
     _copy_file(root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe", staging / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe")
     _copy_file(root / "tools" / "ffmpeg" / "bin" / "ffprobe.exe", staging / "tools" / "ffmpeg" / "bin" / "ffprobe.exe")

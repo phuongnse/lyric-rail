@@ -341,10 +341,10 @@ class VietnameseSongAligner:
                 "The forced-alignment runtime is missing; install the LyricRail 'alignment' extra."
             ) from exc
 
-        vendor = root / "tools" / "lyric-alignment"
+        vendor = root / "vendor" / "lyric-alignment"
         if not (vendor / "model_handling.py").is_file():
             raise RuntimeError(
-                "Vietnamese song aligner source is missing from tools/lyric-alignment."
+                "Vietnamese song aligner source is missing from vendor/lyric-alignment."
             )
         sys.path.insert(0, str(vendor))
         from model_handling import Wav2Vec2ForCTC

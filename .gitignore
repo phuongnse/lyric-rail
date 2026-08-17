@@ -20,6 +20,7 @@ client_secret*.json
 token*.json
 *.pem
 *.key
+!config/runtime-signing-public.key
 
 # Python
 __pycache__/
@@ -32,7 +33,7 @@ __pycache__/
 .coverage.*
 htmlcov/
 runtime/
-tools/
+/tools/
 /bin/
 node_modules/
 dist/

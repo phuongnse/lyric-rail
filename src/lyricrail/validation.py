@@ -186,7 +186,7 @@ def validate_project(root: Path) -> dict[str, Any]:
                 "config/pipeline.json:lyrics.forcedAlignmentEngine",
                 "Production timing requires the vietnamese-song-ctc engine.",
             )
-        vendor = root / "tools" / "lyric-alignment"
+        vendor = root / "vendor" / "lyric-alignment"
         if not (vendor / "model_handling.py").is_file() or not (
             vendor / "LICENSE"
         ).is_file():
@@ -194,7 +194,7 @@ def validate_project(root: Path) -> dict[str, Any]:
                 issues,
                 "error",
                 "FORCED_ALIGNMENT_VENDOR_MISSING",
-                "tools/lyric-alignment",
+                "vendor/lyric-alignment",
                 "Vietnamese song aligner source or license is missing.",
             )
     leakage_gate = lyrics.get("leakageQualityGate", {})
