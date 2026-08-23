@@ -118,6 +118,22 @@ different current key. The format is documented in
 
 ## Verification
 
+LyricRail pins `engineering-process` v0.4.0 with a complete hash lock. Non-trivial
+changes use the managed lifecycle in `AGENTS.md`: define the contract, plan the
+work, implement, verify the immutable checkpoint, obtain independent review, and
+resolve every required finding before completion. Install and inspect the authority
+with:
+
+```text
+python -m pip install --require-hashes -r requirements/process.txt
+processctl sync --project-root . --check
+processctl doctor --project-root . --profile python
+```
+
+The required profiles are `python`, `frontend`, and `rust`; security-sensitive
+changes also require `security`. CI invokes the same profile definitions on Linux,
+macOS, and Windows where applicable.
+
 ```text
 python -m pytest -q
 cargo test --workspace --locked

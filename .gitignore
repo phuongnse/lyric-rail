@@ -67,3 +67,4 @@ Desktop.ini
 *.tmp
 *.lock
 !Cargo.lock
+/.process/runs/
