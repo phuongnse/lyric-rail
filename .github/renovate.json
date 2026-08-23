@@ -57,7 +57,7 @@
   },
   "packageRules": [
     {
-      "description": "Generate one complete engineering-process authority adoption PR.",
+      "description": "Reserve engineering-process adoption for the pre-publication lifecycle host.",
       "matchFileNames": [
         ".github/workflows/ci.yml",
         "requirements/process.in",
@@ -67,7 +67,7 @@
         "engineering-process",
         "phuongnse/engineering-process"
       ],
-      "enabled": true,
+      "enabled": false,
       "automerge": false,
       "groupName": "engineering-process authority",
       "groupSlug": "engineering-process-authority",
