@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install published engineering-process authority
-        uses: phuongnse/engineering-process@8458d9e211d95ae9749ccf71b5a5b9d90bc1503c # v0.5.0
+        uses: phuongnse/engineering-process@dd16e711d7c95a71173add8f31fac163cbc85e3f # v0.5.1
         with:
           project-root: .
           requirements-lock: requirements/process.txt
@@ -87,7 +87,7 @@ jobs:
           node-version: "24"
           cache: npm
       - name: Install published engineering-process authority
-        uses: phuongnse/engineering-process@8458d9e211d95ae9749ccf71b5a5b9d90bc1503c # v0.5.0
+        uses: phuongnse/engineering-process@dd16e711d7c95a71173add8f31fac163cbc85e3f # v0.5.1
         with:
           project-root: .
           requirements-lock: requirements/process.txt
@@ -113,7 +113,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install published engineering-process authority
-        uses: phuongnse/engineering-process@8458d9e211d95ae9749ccf71b5a5b9d90bc1503c # v0.5.0
+        uses: phuongnse/engineering-process@dd16e711d7c95a71173add8f31fac163cbc85e3f # v0.5.1
         with:
           project-root: .
           requirements-lock: requirements/process.txt
@@ -140,7 +140,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install published engineering-process authority
-        uses: phuongnse/engineering-process@8458d9e211d95ae9749ccf71b5a5b9d90bc1503c # v0.5.0
+        uses: phuongnse/engineering-process@dd16e711d7c95a71173add8f31fac163cbc85e3f # v0.5.1
         with:
           project-root: .
           requirements-lock: requirements/process.txt

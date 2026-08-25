@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 POLICY_REVISION = "2152dab51edd6c84163a71b48f50e6ad042eb331"
-PROCESS_REVISION = "8458d9e211d95ae9749ccf71b5a5b9d90bc1503c"
+PROCESS_REVISION = "dd16e711d7c95a71173add8f31fac163cbc85e3f"
 EXPECTED_POLICY_JOB = (
     "  policy-verification:\n"
     "    name: policy-verification\n"
@@ -50,10 +50,15 @@ def test_process_adoption_is_owned_by_the_completed_lifecycle_host() -> None:
     assert "processctl adoption check" in workflow
     assert extract_policy_job(workflow) == EXPECTED_POLICY_JOB
 
-    process_action = f"phuongnse/engineering-process@{PROCESS_REVISION} # v0.5.0"
+    process_action = f"phuongnse/engineering-process@{PROCESS_REVISION} # v0.5.1"
     assert workflow.count(process_action) == 4
-    assert "# v0.4.0" not in workflow
+    assert "# v0.5.0" not in workflow
     assert "cargo install cargo-audit --version 0.22.2 --locked" in workflow
+
+    windows_helper = (
+        ROOT / ".process" / "adopt-process-windows-job.py"
+    ).read_text(encoding="utf-8")
+    assert "NATURAL_DRAIN_GRACE_MILLISECONDS = 5_000" in windows_helper
 
     project = json.loads((ROOT / ".process" / "project.json").read_text())
     fuzz_command = next(
@@ -68,6 +73,40 @@ def test_process_adoption_is_owned_by_the_completed_lifecycle_host() -> None:
     )
     assert audit_command["run"] == ["python", "scripts/run_cargo_audit.py"]
     assert fuzz_command["run"] == ["python", "scripts/run_package_fuzz_smoke.py"]
+
+    automation = json.loads(
+        (ROOT / ".process" / "automation.json").read_text(encoding="utf-8")
+    )
+    assert automation == {
+        "schemaVersion": 1,
+        "kind": "engineering-process-standing-automation-policy",
+        "enabled": True,
+        "confirmationMode": "exceptions-only",
+        "actions": [
+            "adopt",
+            "commit",
+            "deploy",
+            "ephemeral-cleanup",
+            "merge",
+            "publish",
+            "push",
+            "release",
+            "review-object",
+        ],
+        "merge": {
+            "method": "squash",
+            "requireCompletedLifecycle": True,
+            "requireCurrentBase": True,
+            "requireExactHead": True,
+            "requireIndependentReview": True,
+            "requireRequiredChecks": True,
+        },
+        "escalationReasons": [
+            "bounded-recovery-exhausted",
+            "capability-unavailable",
+            "decision-required",
+        ],
+    }
 
 
 def test_policy_job_rejects_trust_root_and_permission_mutations() -> None:
