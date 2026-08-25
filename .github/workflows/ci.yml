@@ -50,7 +50,8 @@ jobs:
         if: >-
           runner.os == 'Linux' &&
           github.event_name == 'pull_request' &&
-          startsWith(github.head_ref, 'automation/process/engineering-process')
+          (startsWith(github.head_ref, 'automation/process/engineering-process') ||
+          startsWith(github.head_ref, 'automation/renovate/engineering-process'))
         run: >-
           processctl adoption check
           --project-root .
