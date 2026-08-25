@@ -1,0 +1,81 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "enabled": true,
+  "configMigration": true,
+  "automerge": false,
+  "branchPrefix": "automation/renovate/",
+  "dependencyDashboard": true,
+  "draftPR": true,
+  "labels": [
+    "dependencies"
+  ],
+  "schedule": [
+    "before 5am on monday"
+  ],
+  "timezone": "Asia/Bangkok",
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "constraints": {
+    "python": "==3.14"
+  },
+  "pip-compile": {
+    "managerFilePatterns": [
+      "/^requirements\\/process\\.txt$/"
+    ]
+  },
+  "pip_requirements": {
+    "enabled": false
+  },
+  "prBodyTemplate": "<!-- engineering-process:pr-description:start -->\n## Summary\n\nRenovate proposes one locked dependency update for LyricRail.\n\n{{{table}}}\n\n## Contract and scope\n\nDependency automation follows repository-owned manifests; an engineering-process authority proposal must include the complete adoption output.\n\n## Impact and risk\n\nThe dependency proposal remains draft and non-automerge until project verification and review complete.\n\n## Verification\n\nProject checks validate the exact published dependency checkpoint and complete process adoption when applicable.\n\n## Independent review\n\nProcess-authority changes require exact lifecycle and adoption evidence before merge.\n\n## Requirements and rules followed\n\n- [ ] **Scope and contract** — accepted scope is implemented without unapproved expansion. [status: pending]\n- [ ] **Verification evidence** — required current profiles pass on the published checkpoint. [status: pending]\n- [ ] **Independent review** — a separate reviewer approved the published checkpoint with no open required finding. [status: pending]\n<!-- engineering-process:pr-description:end -->",
+  "postUpgradeTasks": {
+    "commands": [
+      "python .process/adopt-process.py --project-root . --requirements-lock requirements/process.txt"
+    ],
+    "executionMode": "branch",
+    "fileFilters": [
+      ".agents/.gitattributes",
+      ".agents/skills/**",
+      ".github/PULL_REQUEST_TEMPLATE.md",
+      ".github/workflows/ci.yml",
+      ".process/adopt-process.py",
+      ".process/adopt-process-windows-job.py",
+      ".process/adoption-migrations/**",
+      ".process/process.lock",
+      ".process/project.json",
+      "AGENTS.md",
+      "requirements/process.in",
+      "requirements/process.txt"
+    ],
+    "installTools": {
+      "python": {}
+    }
+  },
+  "packageRules": [
+    {
+      "description": "Generate a complete review-gated engineering-process authority adoption proposal.",
+      "matchFileNames": [
+        ".github/workflows/ci.yml",
+        "requirements/process.in",
+        "requirements/process.txt"
+      ],
+      "matchPackageNames": [
+        "engineering-process",
+        "phuongnse/engineering-process"
+      ],
+      "enabled": true,
+      "automerge": false,
+      "groupName": "engineering-process authority",
+      "groupSlug": "engineering-process-authority",
+      "schedule": [
+        "at any time"
+      ],
+      "prPriority": 100,
+      "commitMessageTopic": "engineering-process authority"
+    }
+  ]
+}

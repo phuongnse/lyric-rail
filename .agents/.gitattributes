@@ -1,0 +1,4 @@
+# engineering-process:attributes:start
+.gitattributes text=auto eol=lf -working-tree-encoding -filter -ident
+skills/** text=auto eol=lf -working-tree-encoding -filter -ident
+# engineering-process:attributes:end
