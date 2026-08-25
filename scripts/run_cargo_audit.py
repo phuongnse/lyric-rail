@@ -39,7 +39,10 @@ def advisory_ids(entries: object) -> set[str] | None:
         advisory = entry.get("advisory")
         if not isinstance(advisory, dict) or not isinstance(advisory.get("id"), str):
             return None
-        identifiers.add(advisory["id"])
+        identifier = advisory["id"]
+        if identifier in identifiers:
+            return None
+        identifiers.add(identifier)
     return identifiers
 
 
@@ -54,11 +57,12 @@ def report_is_accepted(report: object) -> bool:
     informational = report.get("warnings")
     if not isinstance(informational, dict):
         return False
-    actual = {
-        category: advisory_ids(entries)
-        for category, entries in informational.items()
-        if entries
-    }
+    actual: dict[str, set[str]] = {}
+    for category, entries in informational.items():
+        identifiers = advisory_ids(entries)
+        if identifiers is None:
+            return False
+        actual[category] = identifiers
     return actual == EXPECTED_INFORMATIONAL_ADVISORIES
 
 
