@@ -19,7 +19,7 @@ def load_cargo_audit_module():
 
 def accepted_report(module) -> dict[str, object]:
     return {
-        "vulnerabilities": {"count": 0, "list": []},
+        "vulnerabilities": {"found": False, "count": 0, "list": []},
         "warnings": {
             category: [
                 {"advisory": {"id": identifier}}
@@ -72,3 +72,20 @@ def test_cargo_audit_policy_rejects_vulnerabilities_and_malformed_reports() -> N
     }
     assert not module.report_is_accepted(report)
     assert not module.report_is_accepted({})
+
+
+def test_cargo_audit_policy_requires_exact_vulnerability_schema_and_types() -> None:
+    module = load_cargo_audit_module()
+    mutations = [
+        {"found": True, "count": 0, "list": []},
+        {"count": 0, "list": []},
+        {"found": False, "count": False, "list": []},
+        {"found": False, "count": 0.0, "list": []},
+        {"found": 0, "count": 0, "list": []},
+        {"found": False, "count": 0, "list": (),},
+        {"found": False, "count": 0, "list": [], "unexpected": None},
+    ]
+    for vulnerabilities in mutations:
+        report = accepted_report(module)
+        report["vulnerabilities"] = vulnerabilities
+        assert not module.report_is_accepted(report)

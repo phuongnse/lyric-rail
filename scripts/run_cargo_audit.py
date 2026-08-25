@@ -52,7 +52,13 @@ def report_is_accepted(report: object) -> bool:
     vulnerabilities = report.get("vulnerabilities")
     if not isinstance(vulnerabilities, dict):
         return False
-    if vulnerabilities.get("count") != 0 or vulnerabilities.get("list") != []:
+    if set(vulnerabilities) != {"found", "count", "list"}:
+        return False
+    if vulnerabilities["found"] is not False:
+        return False
+    if type(vulnerabilities["count"]) is not int or vulnerabilities["count"] != 0:
+        return False
+    if type(vulnerabilities["list"]) is not list or vulnerabilities["list"] != []:
         return False
     informational = report.get("warnings")
     if not isinstance(informational, dict):
