@@ -23,7 +23,11 @@ repeatable execution deterministic.
    checks through `processctl verify`, or ad-hoc foreground tasks
    through `processctl exec --profile ... -- ...` so verified managed-tool bindings
    and paths are injected. Keep secrets out of arguments and
-   evidence. Do not run commands concurrently when they share mutable build outputs.
+   evidence. Process-owned success requires both a successful execution boundary and
+   warning/error-free admitted stdout and stderr; exit zero cannot override a
+   diagnostic failure. Correct the diagnostic at its owner instead of suppressing it
+   or substituting a quieter command. Do not run commands concurrently when they
+   share mutable build outputs.
 5. On a missing prerequisite, use `processctl setup` to inspect the complete plan.
    Apply it only with explicit approval for every declared mutation scope. On failure,
    preserve the exact command, exit status, environment, and missing prerequisite. Do

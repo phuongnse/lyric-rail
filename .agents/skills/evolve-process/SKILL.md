@@ -22,24 +22,46 @@ incident history into permanent ceremony.
    semantics, keep the consumer candidate blocked and remove any provisional consumer
    wrapper or duplicate implementation. Change shared skills only for portable
    semantics. Add CLI or schema enforcement only when deterministic.
+   If root-cause evidence leaves multiple valid owner, trust, compatibility, rollout,
+   or lifecycle corrections, stop and use the run-change owner-decision escalation
+   protocol; do not try alternate process architectures until one is accepted.
 4. Add regression cases at the lowest reliable owner boundary for both valid behavior
    and the fail-closed class. A shared fix also requires producer profiles and a real
    affected-consumer reproduction before release authorization. For skill behavior,
    run a realistic forward test without providing the expected answer.
-5. Validate backward compatibility, version impact, consumer locks, and migration
+5. Treat exit-zero warning or error diagnostics from any process-owned command as a
+   validated failure. Preserve their redacted evidence and correct the owning source,
+   configuration, dependency, or external boundary; do not add a suppression,
+   consumer wrapper, alternate command, or legacy evidence conversion.
+6. Validate backward compatibility, version impact, consumer locks, and migration
    needs. Remove superseded guidance instead of preserving duplicate paths.
    Check the full `production-v1` boundary and derive every release identity surface
    from the release contract so a local fix cannot create a new cross-surface drift.
-6. Measure whether the change improves task fidelity without disproportionate
+7. Measure whether the change improves task fidelity without disproportionate
    workflow cost.
-7. For an operations or external transient, require bounded idempotent recovery with
+8. For an operations or external transient, require bounded idempotent recovery with
    retained per-attempt diagnostics. Never mutate source or version merely to retry.
+9. For a self-hosted authority rotation, let the old immutable authority govern the
+   new authority's introduction, publish the new identity before any consumer pin,
+   prove cutover without a control gap, and retire the old authority only after the
+   new boundary is active. Use separate lifecycle changes when provider mechanics
+   make introduction and cutover separately publishable.
+10. Own the mandatory `improvement-required` phase. For a shared consumer case, export
+   one bounded untrusted signal and keep dependent work in `improvement-pending`.
+   Producer disposition assigns the canonical catalog invariant and linked lifecycle;
+   immutable release resolution and exact consumer reproduction close the chain.
 
 ## Hard gates
 
 - Do not promote an agent-host quirk into the portable core.
 - Do not add a gate without an owner, failure message, and regression proof.
 - Do not break a released schema within its major version.
+- Do not respond to a rejected process direction by autonomously trying another
+  boundary-changing direction.
+- Do not let a new trust root approve its own introduction or pin an authority that
+  is not yet immutable and resolvable by the consumer.
+- Do not treat a signal, disposition, producer completion, or pre-release candidate
+  as implementation, merge, release, adoption, or consumer-recovery authority.
 
 ## Output
 

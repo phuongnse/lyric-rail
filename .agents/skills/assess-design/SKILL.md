@@ -24,7 +24,10 @@ product behavior or reopening foundational choices.
    future capabilities out of scope without weakening the implemented boundary.
 6. Define implementation units, stop conditions, focused evidence, review evidence,
    and required human decisions. Record durable decisions in their project owner.
-7. Return ready only when blocking decisions and required approvals are resolved.
+7. If evidence supports multiple materially different owners, trust boundaries,
+   compatibility choices, rollout paths, or lifecycle sequences, present the options,
+   trade-offs, and recommendation to the project owner. Do not select one implicitly.
+8. Return ready only when blocking decisions and required approvals are resolved.
 
 ## Hard gates
 
@@ -32,6 +35,7 @@ product behavior or reopening foundational choices.
 - Do not replace a required owner, trust boundary, invariant, or evidence boundary
   merely to bypass a failure.
 - Do not preserve obsolete compatibility paths without a supported requirement.
+- Do not turn an unresolved project-owner decision into an implementation assumption.
 
 ## Output
 

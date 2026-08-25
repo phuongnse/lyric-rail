@@ -20,15 +20,90 @@ from pathlib import Path
 COMMAND_TIMEOUT_SECONDS = 300
 TERMINATION_TIMEOUT_SECONDS = 5
 MAX_CAPTURE_BYTES = 128_000
+COMMAND_OUTPUT_STREAM_LIMIT = 1_000_000
+COMMAND_OUTPUT_TOTAL_LIMIT = 1_500_000
 READ_CHUNK_BYTES = 64 * 1024
+MAX_STATUS_BYTES = 4096
+MAX_STATUS_ERROR_CHARACTERS = 1024
 MAX_REQUIREMENTS_BYTES = 1_000_000
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 PathIdentity = tuple[int, int, int, int]
+
+# Bootstrap snapshot of the non-configurable policy in
+# engineering_process/diagnostics.py. This runner executes before the target
+# authority exists, so its regression suite keeps the two classifiers aligned.
+_TOOL_PREFIX = (
+    r"(?:cmake|cargo|dotnet|go|gradle|maven|msbuild|npm|pip|pnpm|rustc|yarn)"
+)
+_WARNING_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        rf"^\s*{_TOOL_PREFIX}\s+warn(?:ing)?\b",
+        r"^\s*::warning(?:\s+[^\r\n]{0,4096})?::",
+        r"^\s*(?:##)?\[\s*warn(?:ing)?\s*\]",
+        r"^\s*warn(?:ing)?\b(?:\s*:|\s+\[|$)",
+        r"^\s*[A-Za-z0-9_.+-]+\s+Warning\b(?:\s+at\b|\s*:|\s+\[|$)",
+        r"^[^\r\n]{0,512}:\d+(?::\d+)?:\s*warning\b",
+        r"\b[A-Za-z][A-Za-z0-9_.]*Warning\s*:",
+        r'^\s*\{[^\r\n]{0,4096}"(?:level|severity)"\s*:\s*"(?:warn|warning)"',
+        r"^\s*(?:level|severity)\s*[=:]\s*(?:warn|warning)\b",
+    )
+)
+_ERROR_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        rf"^\s*{_TOOL_PREFIX}\s+error\b",
+        r"^\s*::error(?:\s+[^\r\n]{0,4096})?::",
+        r"^\s*(?:##)?\[\s*error\s*\]",
+        r"^\s*error\b(?:\s*:|\s+\[|$)",
+        r"^[^\r\n]{0,512}:\d+(?::\d+)?:\s*error\b",
+        r"\b[A-Za-z][A-Za-z0-9_.]*Error\s*:",
+        r'^\s*\{[^\r\n]{0,4096}"(?:level|severity)"\s*:\s*"error"',
+        r"^\s*(?:level|severity)\s*[=:]\s*error\b",
+    )
+)
+
+
+def _diagnostic_severity(line: str) -> str | None:
+    if any(pattern.search(line) is not None for pattern in _ERROR_PATTERNS):
+        return "error"
+    if any(pattern.search(line) is not None for pattern in _WARNING_PATTERNS):
+        return "warning"
+    return None
+
+
+def _diagnostic_failure(stdout: bytes, stderr: bytes) -> str | None:
+    count = 0
+    first: tuple[str, str, int, str] | None = None
+    for stream, content in (("stdout", stdout), ("stderr", stderr)):
+        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+            severity = _diagnostic_severity(
+                raw_line.decode("utf-8", errors="replace")
+            )
+            if severity is None:
+                continue
+            count += 1
+            if first is None:
+                first = (
+                    severity,
+                    stream,
+                    line_number,
+                    hashlib.sha256(raw_line).hexdigest(),
+                )
+    if first is None:
+        return None
+    severity, stream, line_number, digest = first
+    return (
+        "command emitted forbidden warning/error diagnostics: "
+        f"count={count}; first={severity} on {stream} line {line_number} "
+        f"sha256:{digest}"
+    )
 
 
 @dataclass
 class Capture:
     content: bytearray = field(default_factory=bytearray)
+    diagnostic_content: bytearray = field(default_factory=bytearray)
     count: int = 0
     digest: object = field(default_factory=hashlib.sha256)
 
@@ -38,6 +113,11 @@ class Capture:
         remaining = MAX_CAPTURE_BYTES - len(self.content)
         if remaining > 0:
             self.content.extend(chunk[:remaining])
+        diagnostic_remaining = (
+            COMMAND_OUTPUT_STREAM_LIMIT - len(self.diagnostic_content)
+        )
+        if diagnostic_remaining > 0:
+            self.diagnostic_content.extend(chunk[:diagnostic_remaining])
 
     def text(self) -> str:
         value = bytes(self.content).decode("utf-8", errors="replace")
@@ -47,6 +127,53 @@ class Capture:
                 f"sha256:{self.digest.hexdigest()}]\n"
             )
         return value
+
+
+@dataclass(frozen=True)
+class WindowsCleanup:
+    descendants_found: bool = False
+    error: str | None = None
+
+
+def _decode_windows_status(content: bytes) -> WindowsCleanup:
+    if not content or len(content) > MAX_STATUS_BYTES:
+        return WindowsCleanup(error="Windows Job Object status is missing or oversized")
+    try:
+        document = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return WindowsCleanup(error="Windows Job Object status is not valid UTF-8 JSON")
+    if not isinstance(document, dict) or set(document) != {
+        "schemaVersion",
+        "descendantsFound",
+        "cleanupError",
+    }:
+        return WindowsCleanup(error="Windows Job Object status has an unexpected contract")
+    if (
+        type(document["schemaVersion"]) is not int
+        or document["schemaVersion"] != 1
+        or not isinstance(document["descendantsFound"], bool)
+    ):
+        return WindowsCleanup(error="Windows Job Object status fields are invalid")
+    cleanup_error = document["cleanupError"]
+    if cleanup_error is not None and (
+        not isinstance(cleanup_error, str)
+        or not cleanup_error
+        or cleanup_error != cleanup_error.strip()
+        or len(cleanup_error) > MAX_STATUS_ERROR_CHARACTERS
+        or "\x00" in cleanup_error
+    ):
+        return WindowsCleanup(error="Windows Job Object cleanup error is invalid")
+    canonical = (
+        json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if content != canonical:
+        return WindowsCleanup(error="Windows Job Object status is not canonical")
+    if cleanup_error is not None:
+        return WindowsCleanup(
+            descendants_found=document["descendantsFound"],
+            error="Windows Job Object wrapper failed: " + cleanup_error,
+        )
+    return WindowsCleanup(descendants_found=document["descendantsFound"])
 
 
 def _drain(stream: object, capture: Capture) -> None:
@@ -139,7 +266,7 @@ def _terminate_tree(process: subprocess.Popen[bytes]) -> bool:
     return _terminate_posix_group(process.pid)
 
 
-def _windows_wrapped_command(argv: list[str]) -> list[str]:
+def _windows_wrapped_command(argv: list[str], status_handle: int) -> list[str]:
     supplied = Path(argv[0])
     if not supplied.is_absolute() or supplied.suffix.casefold() != ".exe":
         raise RuntimeError("Windows adoption commands require an absolute .exe path")
@@ -154,11 +281,68 @@ def _windows_wrapped_command(argv: list[str]) -> list[str]:
         sys.executable,
         "-I",
         str(helper),
+        "--status-handle",
+        str(status_handle),
         "--application",
         str(application),
         "--",
         *argv,
     ]
+
+
+def _spawn_command(
+    argv: list[str], *, cwd: Path, options: dict[str, object]
+) -> tuple[subprocess.Popen[bytes], int | None]:
+    if os.name != "nt":
+        options["start_new_session"] = True
+        return subprocess.Popen(argv, **options), None
+
+    try:
+        import msvcrt
+
+        read_fd, write_fd = os.pipe()
+        process: subprocess.Popen[bytes] | None = None
+        try:
+            os.set_inheritable(read_fd, False)
+            os.set_inheritable(write_fd, True)
+            status_handle = msvcrt.get_osfhandle(write_fd)
+            startup = subprocess.STARTUPINFO()
+            startup.lpAttributeList = {"handle_list": [status_handle]}
+            command = _windows_wrapped_command(argv, status_handle)
+            options.update(
+                {
+                    "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP,
+                    "close_fds": True,
+                    "startupinfo": startup,
+                }
+            )
+            process = subprocess.Popen(command, **options)
+        finally:
+            os.close(write_fd)
+            if process is None:
+                os.close(read_fd)
+        return process, read_fd
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"cannot start bounded Windows adoption command: {error}") from error
+
+
+def _read_windows_status(read_fd: int, *, forced: bool) -> WindowsCleanup:
+    content = bytearray()
+    try:
+        while True:
+            chunk = os.read(read_fd, MAX_STATUS_BYTES + 1 - len(content))
+            if not chunk:
+                break
+            content.extend(chunk)
+            if len(content) > MAX_STATUS_BYTES:
+                break
+    except OSError as error:
+        return WindowsCleanup(error=f"Windows Job Object status pipe read failed: {error}")
+    finally:
+        os.close(read_fd)
+    if not content and forced:
+        return WindowsCleanup()
+    return _decode_windows_status(bytes(content))
 
 
 def _child_environment() -> dict[str, str]:
@@ -395,7 +579,6 @@ def _require_unchanged(
 
 
 def _run(argv: list[str], *, cwd: Path) -> str:
-    command = _windows_wrapped_command(argv) if os.name == "nt" else argv
     options: dict[str, object] = {
         "cwd": cwd,
         "env": _child_environment(),
@@ -403,11 +586,7 @@ def _run(argv: list[str], *, cwd: Path) -> str:
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
     }
-    if os.name == "nt":
-        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        options["start_new_session"] = True
-    process = subprocess.Popen(command, **options)
+    process, status_reader = _spawn_command(argv, cwd=cwd, options=options)
     stdout = Capture()
     stderr = Capture()
     stdout_thread = threading.Thread(
@@ -418,39 +597,68 @@ def _run(argv: list[str], *, cwd: Path) -> str:
     )
     stdout_thread.start()
     stderr_thread.start()
+    forced = False
     try:
         return_code = process.wait(timeout=COMMAND_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as error:
+        forced = True
         try:
             _terminate_tree(process)
         finally:
             stdout_thread.join(timeout=TERMINATION_TIMEOUT_SECONDS)
             stderr_thread.join(timeout=TERMINATION_TIMEOUT_SECONDS)
+            if status_reader is not None:
+                _read_windows_status(status_reader, forced=True)
+                status_reader = None
         raise RuntimeError(
             f"command timed out after {COMMAND_TIMEOUT_SECONDS} seconds"
         ) from error
     except BaseException:
+        forced = True
         try:
             _terminate_tree(process)
         finally:
             stdout_thread.join(timeout=TERMINATION_TIMEOUT_SECONDS)
             stderr_thread.join(timeout=TERMINATION_TIMEOUT_SECONDS)
+            if status_reader is not None:
+                _read_windows_status(status_reader, forced=True)
+                status_reader = None
         raise
     try:
         descendants_found = _terminate_tree(process)
+        if status_reader is not None:
+            cleanup = _read_windows_status(status_reader, forced=forced)
+            status_reader = None
+            if cleanup.error is not None:
+                raise RuntimeError(cleanup.error)
+            descendants_found = cleanup.descendants_found
     finally:
         stdout_thread.join(timeout=TERMINATION_TIMEOUT_SECONDS)
         stderr_thread.join(timeout=TERMINATION_TIMEOUT_SECONDS)
+        if status_reader is not None:
+            os.close(status_reader)
     if stdout_thread.is_alive() or stderr_thread.is_alive():
         _terminate_tree(process)
         raise RuntimeError("command output readers did not terminate")
     if descendants_found:
         raise RuntimeError("command left descendant processes; they were terminated")
+    if (
+        stdout.count > COMMAND_OUTPUT_STREAM_LIMIT
+        or stderr.count > COMMAND_OUTPUT_STREAM_LIMIT
+        or stdout.count + stderr.count > COMMAND_OUTPUT_TOTAL_LIMIT
+    ):
+        raise RuntimeError("command output exceeded the fail-closed byte budget")
     if return_code != 0:
         raise RuntimeError(
             f"command failed with exit status {return_code}\n"
             f"stdout:\n{stdout.text()}\nstderr:\n{stderr.text()}"
         )
+    diagnostic_error = _diagnostic_failure(
+        bytes(stdout.diagnostic_content),
+        bytes(stderr.diagnostic_content),
+    )
+    if diagnostic_error is not None:
+        raise RuntimeError(diagnostic_error)
     return stdout.text()
 
 

@@ -206,9 +206,9 @@
           "timeoutSeconds": 30,
           "readOnly": true,
           "outputStream": "stdout",
-          "outputRegex": "^cargo-audit 0\\."
+          "outputRegex": "^cargo-audit-audit 0\\.22\\.2"
         },
-        "remediation": "Install cargo-audit with `cargo install cargo-audit --locked`, then rerun doctor."
+        "remediation": "Install cargo-audit 0.22.2 with `cargo install cargo-audit --version 0.22.2 --locked`, then rerun doctor."
       },
       {
         "id": "cargo-fuzz-runtime",

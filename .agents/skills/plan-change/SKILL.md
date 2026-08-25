@@ -21,6 +21,8 @@ plan without changing implementation source.
    work item and project-owned profile.
 4. Record concrete risks and mitigations. Leave behavior-changing ambiguity as an
    open decision; do not plan around it.
+   When new evidence creates multiple valid boundary choices, present them with an
+   evidence-backed recommendation and wait for the project owner before registration.
 5. Validate the plan with processctl contract validate --kind plan, then register it
    with processctl change plan. Implementation remains blocked while required
    sign-off or open decisions remain.
@@ -31,6 +33,8 @@ plan without changing implementation source.
 - Do not omit required security, compatibility, data, accessibility, rollout, or
   rollback work merely to reduce scope.
 - Do not invent project commands; select profiles from .process/project.json.
+- Do not register a preferred architecture, authority, compatibility, rollout, or
+  lifecycle route while the owning decision remains unresolved.
 
 ## Output
 

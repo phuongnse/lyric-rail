@@ -17,7 +17,10 @@ or deploying implicitly.
    review and every required verification report.
 3. Confirm every acceptance criterion and applicable quality dimension is covered,
    every required finding is resolved, required sign-off is current, and
-   project-owned status or evidence is reconciled.
+   project-owned status or evidence is reconciled. Every improvement case must be a
+   reviewed local resolution or producer completion awaiting separately authorized
+   immutable release. A shared consumer case remains incomplete until released
+   reproduction validates.
 4. Run processctl change finish. Treat any stale artifact, source change, missing
    profile, or identity mismatch as a blocker that returns to the owning phase.
 5. Report completion separately from publication, merge, release, or deployment.
@@ -28,6 +31,8 @@ or deploying implicitly.
 - Do not finish a changes-requested, merely verified, or review-pending change.
 - Do not reuse approval after the source checkpoint or workspace changes.
 - Do not infer release or deployment authorization from process completion.
+- Do not finish in `improvement-required` or `improvement-pending`, or through any
+  classification, disposition, resolution, reproduction, or input blocker.
 
 ## Output
 

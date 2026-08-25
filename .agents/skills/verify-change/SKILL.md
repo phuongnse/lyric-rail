@@ -21,11 +21,15 @@ change while avoiding unrelated broad verification.
    for exploratory or focused evidence that is not intended to advance the lifecycle.
    Do not substitute a different command, runtime, trust boundary, or environment
    when a required check is blocked.
-4. Bind evidence to the current repository checkpoint and workspace fingerprint.
+4. Treat a process-owned command as successful only when its execution boundary
+   passes and its complete admitted stdout and stderr contain no classified warning
+   or error diagnostic. Exit zero does not override diagnostic failure. Correct the
+   output at its owning boundary; do not suppress it or replace the canonical command.
+5. Bind evidence to the current repository checkpoint and workspace fingerprint.
    Any relevant edit or source mutation during verification invalidates the evidence.
    Require bounded correlation and output metadata without copying raw secrets into
    lifecycle artifacts; exercise cleanup and resource limits affected by the change.
-5. Report failed, timed-out, missing, and blocked checks exactly; never convert them
+6. Report failed, timed-out, missing, and blocked checks exactly; never convert them
    into a pass or an implicit deferral.
 
 ## Hard gates
