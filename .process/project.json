@@ -146,14 +146,8 @@
       {
         "id": "package-fuzz-smoke",
         "run": [
-          "cargo",
-          "+nightly-2026-07-01",
-          "fuzz",
-          "run",
-          "package_open",
-          "--",
-          "-runs=1000",
-          "-max_len=512"
+          "python",
+          "scripts/run_package_fuzz_smoke.py"
         ],
         "timeoutSeconds": 1800
       }
