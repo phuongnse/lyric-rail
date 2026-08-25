@@ -61,6 +61,12 @@ def test_process_adoption_is_owned_by_the_completed_lifecycle_host() -> None:
         for command in project["profiles"]["security"]
         if command["id"] == "package-fuzz-smoke"
     )
+    audit_command = next(
+        command
+        for command in project["profiles"]["security"]
+        if command["id"] == "rust-dependency-audit"
+    )
+    assert audit_command["run"] == ["python", "scripts/run_cargo_audit.py"]
     assert fuzz_command["run"] == ["python", "scripts/run_package_fuzz_smoke.py"]
 
 

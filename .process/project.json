@@ -138,8 +138,8 @@
       {
         "id": "rust-dependency-audit",
         "run": [
-          "cargo",
-          "audit"
+          "python",
+          "scripts/run_cargo_audit.py"
         ],
         "timeoutSeconds": 900
       },
