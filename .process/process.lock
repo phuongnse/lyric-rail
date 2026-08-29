@@ -1,14 +1,15 @@
 {
   "schemaVersion": 1,
   "process": {
-    "version": "0.4.0",
-    "digest": "sha256:903336ab72ad396bbf655c897672d7f67dd471e0cb0950565b8558f2d8cf67cf"
+    "version": "0.5.1",
+    "digest": "sha256:61452f6d1b8c9cc40a1c624bc6628bd3b2d826b1d030b9f57847f07fca55d691"
   },
   "skills": [
     "assess-design",
     "build-frontend",
     "build-frontend-foundation",
     "change-api",
+    "cross-repo-change",
     "define-change-contract",
     "design-module",
     "evolve-process",

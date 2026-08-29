@@ -18,6 +18,8 @@ specific checkpoint without changing the reviewed source.
    conversation. Use the host's isolated-review mechanism or a separate human
    reviewer; if separation cannot be attested, report blocked. A stable reviewer
    actor or role may be reused, but renaming a retained context is not isolation.
+   The consumer host chooses the agent, model, person, and spawn mechanism; portable
+   process owns only the isolation, attestation, assignment, report, and evidence contract.
 2. Register the assignment with processctl change review start. Confirm its
    checkpoint, comparison base, contract, plan, and required verification reports
    refer to the same immutable source.
@@ -36,6 +38,13 @@ specific checkpoint without changing the reviewed source.
    Treat owner mismatch, consumer workaround for a shared defect, evidence-free rerun,
    missing valid/fail-closed regression proof, or missing affected-consumer proof for
    a shared correction as required completion-blocking findings.
+   Also treat an implementation that silently selected an unresolved project-owner
+   decision about scope, authority, trust boundary, compatibility, rollout, or
+   lifecycle order as completion-blocking, even when its tests pass.
+   Confirm every observed failure and carried finding has the correct improvement
+   owner, reusable class, invariant id, disposition, recurrence state, and required
+   local or federated proof. A repeated resolved invariant closed as another narrow
+   incident, or a shared case without signal-chain ownership, is required.
 5. Request changes when any required finding remains open or deferred. Approve only
    when required outcomes and evidence are complete for the reviewed checkpoint.
 6. Validate the report with processctl contract validate --kind review, then submit
@@ -51,6 +60,10 @@ specific checkpoint without changing the reviewed source.
 - Do not approve stale, indirect, missing, or blocked evidence.
 - Do not treat review prose as more authoritative than project contracts.
 - A reviewer must not intentionally mutate the checkpoint under review.
+- Do not approve an unclassified improvement case or an artifact chain whose next
+  owner contradicts the owning contract.
+- Static lint, policy, secret, pin, configuration, or CI checks are supplemental
+  verification and cannot issue a semantic review verdict.
 - The reviewer actor id and context id must both be independent from every
   implementation actor and context recorded for the current cycle.
 - The reviewer context id must be unique across review assignments for the project,

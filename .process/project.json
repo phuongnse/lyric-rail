@@ -138,22 +138,16 @@
       {
         "id": "rust-dependency-audit",
         "run": [
-          "cargo",
-          "audit"
+          "python",
+          "scripts/run_cargo_audit.py"
         ],
         "timeoutSeconds": 900
       },
       {
         "id": "package-fuzz-smoke",
         "run": [
-          "cargo",
-          "+nightly-2026-07-01",
-          "fuzz",
-          "run",
-          "package_open",
-          "--",
-          "-runs=1000",
-          "-max_len=512"
+          "python",
+          "scripts/run_package_fuzz_smoke.py"
         ],
         "timeoutSeconds": 1800
       }
@@ -206,9 +200,9 @@
           "timeoutSeconds": 30,
           "readOnly": true,
           "outputStream": "stdout",
-          "outputRegex": "^cargo-audit 0\\."
+          "outputRegex": "^cargo-audit-audit 0\\.22\\.2"
         },
-        "remediation": "Install cargo-audit with `cargo install cargo-audit --locked`, then rerun doctor."
+        "remediation": "Install cargo-audit 0.22.2 with `cargo install cargo-audit --version 0.22.2 --locked`, then rerun doctor."
       },
       {
         "id": "cargo-fuzz-runtime",

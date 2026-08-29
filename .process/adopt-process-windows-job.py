@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+import json
 import ntpath
 import os
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, BinaryIO
 
 
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -26,6 +27,7 @@ JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS = 1
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D
+PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 STARTF_USESTDHANDLES = 0x00000100
 STD_INPUT_HANDLE = wintypes.DWORD(-10).value
 STD_OUTPUT_HANDLE = wintypes.DWORD(-11).value
@@ -34,7 +36,52 @@ WAIT_FAILED = 0xFFFFFFFF
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 CLEANUP_GRACE_MILLISECONDS = 5_000
-NATURAL_DRAIN_GRACE_MILLISECONDS = 250
+NATURAL_DRAIN_GRACE_MILLISECONDS = 5_000
+MAX_STATUS_BYTES = 4096
+MAX_STATUS_ERROR_CHARACTERS = 1024
+
+
+class DescendantsFoundError(OSError):
+    """The target exited but live descendants required Job Object termination."""
+
+    def __init__(self, message: str, *, target_exit_code: int) -> None:
+        super().__init__(message)
+        self.target_exit_code = target_exit_code
+
+
+def _status_bytes(*, descendants_found: bool, cleanup_error: str | None) -> bytes:
+    if cleanup_error is not None:
+        cleanup_error = cleanup_error.strip()[:MAX_STATUS_ERROR_CHARACTERS]
+        if not cleanup_error:
+            cleanup_error = "unspecified Windows Job Object failure"
+    content = (
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "descendantsFound": descendants_found,
+                "cleanupError": cleanup_error,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    if len(content) > MAX_STATUS_BYTES:
+        raise OSError("Windows Job Object status exceeds its byte limit")
+    return content
+
+
+def _write_status(
+    stream: BinaryIO, *, descendants_found: bool, cleanup_error: str | None
+) -> None:
+    content = _status_bytes(
+        descendants_found=descendants_found,
+        cleanup_error=cleanup_error,
+    )
+    written = stream.write(content)
+    if written != len(content):
+        raise OSError("Windows Job Object status pipe accepted a partial record")
+    stream.flush()
 
 
 class IO_COUNTERS(ctypes.Structure):
@@ -316,14 +363,14 @@ def _run(
 
         attribute_list_size = ctypes.c_size_t()
         kernel32.InitializeProcThreadAttributeList(
-            None, 1, 0, ctypes.byref(attribute_list_size)
+            None, 2, 0, ctypes.byref(attribute_list_size)
         )
         if attribute_list_size.value == 0:
             raise _last_error("InitializeProcThreadAttributeList(size)")
         attribute_list_buffer = ctypes.create_string_buffer(attribute_list_size.value)
         attribute_list = ctypes.cast(attribute_list_buffer, ctypes.c_void_p)
         if not kernel32.InitializeProcThreadAttributeList(
-            attribute_list, 1, 0, ctypes.byref(attribute_list_size)
+            attribute_list, 2, 0, ctypes.byref(attribute_list_size)
         ):
             raise _last_error("InitializeProcThreadAttributeList")
         attribute_list_initialized = True
@@ -339,12 +386,28 @@ def _run(
         ):
             raise _last_error("UpdateProcThreadAttribute(JOB_LIST)")
 
+        standard_handles = (wintypes.HANDLE * 3)(
+            kernel32.GetStdHandle(STD_INPUT_HANDLE),
+            kernel32.GetStdHandle(STD_OUTPUT_HANDLE),
+            kernel32.GetStdHandle(STD_ERROR_HANDLE),
+        )
+        if not kernel32.UpdateProcThreadAttribute(
+            attribute_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            ctypes.cast(standard_handles, ctypes.c_void_p),
+            ctypes.sizeof(standard_handles),
+            None,
+            None,
+        ):
+            raise _last_error("UpdateProcThreadAttribute(HANDLE_LIST)")
+
         startup = STARTUPINFOEXW()
         startup.StartupInfo.cb = ctypes.sizeof(startup)
         startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
-        startup.StartupInfo.hStdInput = kernel32.GetStdHandle(STD_INPUT_HANDLE)
-        startup.StartupInfo.hStdOutput = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
-        startup.StartupInfo.hStdError = kernel32.GetStdHandle(STD_ERROR_HANDLE)
+        startup.StartupInfo.hStdInput = standard_handles[0]
+        startup.StartupInfo.hStdOutput = standard_handles[1]
+        startup.StartupInfo.hStdError = standard_handles[2]
         startup.lpAttributeList = attribute_list
         command_line = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
         if not kernel32.CreateProcessW(
@@ -405,9 +468,12 @@ def _run(
             "Windows Job Object cleanup failed: "
             + "; ".join(str(error) for error in cleanup_errors)
         )
-    if active_processes_before_cleanup:
-        raise OSError("target command left descendant processes; they were terminated")
     assert exit_code is not None
+    if active_processes_before_cleanup:
+        raise DescendantsFoundError(
+            "target command left descendant processes; they were terminated",
+            target_exit_code=exit_code,
+        )
     return exit_code
 
 
@@ -416,22 +482,69 @@ def main() -> int:
         print("Windows Job Object runner is only available on Windows", file=sys.stderr)
         return 125
     arguments = sys.argv[1:]
-    if len(arguments) < 4 or arguments[0] != "--application" or arguments[2] != "--":
+    if (
+        len(arguments) < 6
+        or arguments[0] != "--status-handle"
+        or arguments[2] != "--application"
+        or arguments[4] != "--"
+    ):
         print(
-            "Windows Job Object runner requires --application ABSOLUTE.exe -- COMMAND",
+            "Windows Job Object runner requires --status-handle HANDLE "
+            "--application ABSOLUTE.exe -- COMMAND",
             file=sys.stderr,
         )
         return 125
-    application = arguments[1]
-    arguments = arguments[3:]
+    try:
+        status_handle = int(arguments[1])
+    except ValueError:
+        status_handle = 0
+    if status_handle < 1 or status_handle > (1 << 64) - 1:
+        print("Windows Job Object status handle is invalid", file=sys.stderr)
+        return 125
+    application = arguments[3]
+    arguments = arguments[5:]
     if not arguments:
         print("Windows Job Object runner requires a command", file=sys.stderr)
         return 125
     try:
-        return _run(application, arguments)
-    except OSError as error:
-        print(f"Windows Job Object setup failed: {error}", file=sys.stderr)
+        import msvcrt
+
+        status_fd = msvcrt.open_osfhandle(
+            status_handle,
+            os.O_WRONLY | getattr(os, "O_BINARY", 0),
+        )
+        status_stream = os.fdopen(status_fd, "wb", buffering=0)
+    except (OSError, ValueError) as error:
+        print(f"Windows Job Object status pipe failed: {error}", file=sys.stderr)
         return 125
+    exit_code = 125
+    descendants_found = False
+    cleanup_error: str | None = None
+    display_error: OSError | None = None
+    try:
+        try:
+            exit_code = _run(application, arguments)
+        except DescendantsFoundError as error:
+            exit_code = error.target_exit_code
+            descendants_found = True
+            display_error = error
+        except OSError as error:
+            cleanup_error = str(error)
+            display_error = error
+        try:
+            _write_status(
+                status_stream,
+                descendants_found=descendants_found,
+                cleanup_error=cleanup_error,
+            )
+        except OSError as error:
+            print(f"Windows Job Object status pipe failed: {error}", file=sys.stderr)
+            return 125
+        if display_error is not None:
+            print(f"Windows Job Object setup failed: {display_error}", file=sys.stderr)
+        return exit_code
+    finally:
+        status_stream.close()
 
 
 if __name__ == "__main__":

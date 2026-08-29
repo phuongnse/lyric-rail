@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "kind": "engineering-process-standing-automation-policy",
+  "enabled": true,
+  "confirmationMode": "exceptions-only",
+  "actions": [
+    "adopt",
+    "commit",
+    "deploy",
+    "ephemeral-cleanup",
+    "merge",
+    "publish",
+    "push",
+    "release",
+    "review-object"
+  ],
+  "merge": {
+    "method": "squash",
+    "requireCompletedLifecycle": true,
+    "requireCurrentBase": true,
+    "requireExactHead": true,
+    "requireIndependentReview": true,
+    "requireRequiredChecks": true
+  },
+  "escalationReasons": [
+    "bounded-recovery-exhausted",
+    "capability-unavailable",
+    "decision-required"
+  ]
+}
