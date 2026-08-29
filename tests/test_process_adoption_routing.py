@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-POLICY_REVISION = "2152dab51edd6c84163a71b48f50e6ad042eb331"
+POLICY_REVISION = "1e3d0d333b62ec92c94ea5c355bbb0cd73024b78"
 PROCESS_REVISION = "dd16e711d7c95a71173add8f31fac163cbc85e3f"
 EXPECTED_POLICY_JOB = (
     "  policy-verification:\n"
@@ -117,7 +117,7 @@ def test_policy_job_rejects_trust_root_and_permission_mutations() -> None:
         ),
         "revision": workflow.replace(
             POLICY_REVISION,
-            "2152dab51edd6c84163a71b48f50e6ad042eb330",
+            "1e3d0d333b62ec92c94ea5c355bbb0cd73024b79",
             1,
         ),
         "write": workflow.replace(
