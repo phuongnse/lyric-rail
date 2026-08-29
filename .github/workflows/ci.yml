@@ -123,9 +123,17 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - run: rustup default stable
       - name: Run governed Rust profile
+        if: runner.os != 'Windows'
         run: |
           processctl doctor --project-root . --profile rust
           processctl verify --project-root . --profile rust
+      - name: Run exact Windows Rust checks (process 0.5.1 containment bridge)
+        if: runner.os == 'Windows'
+        run: |
+          processctl doctor --project-root . --profile rust
+          cargo fmt --all --check
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
 
   security:
     name: Dependency and fuzz gates

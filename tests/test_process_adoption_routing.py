@@ -54,6 +54,15 @@ def test_process_adoption_is_owned_by_the_completed_lifecycle_host() -> None:
     assert workflow.count(process_action) == 4
     assert "# v0.5.0" not in workflow
     assert "cargo install cargo-audit --version 0.22.2 --locked" in workflow
+    assert "Run exact Windows Rust checks (process 0.5.1 containment bridge)" in workflow
+    assert "if: runner.os != 'Windows'" in workflow
+    assert "if: runner.os == 'Windows'" in workflow
+    for command in (
+        "cargo fmt --all --check",
+        "cargo test --workspace --locked",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    ):
+        assert workflow.count(command) == 1
 
     windows_helper = (
         ROOT / ".process" / "adopt-process-windows-job.py"
