@@ -127,13 +127,18 @@ jobs:
         run: |
           processctl doctor --project-root . --profile rust
           processctl verify --project-root . --profile rust
-      - name: Run exact Windows Rust checks (process 0.5.1 containment bridge)
+      - name: Validate Windows Rust environment (process 0.5.1 containment bridge)
         if: runner.os == 'Windows'
-        run: |
-          processctl doctor --project-root . --profile rust
-          cargo fmt --all --check
-          cargo test --workspace --locked
-          cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: processctl doctor --project-root . --profile rust
+      - name: Run Windows Rust formatting gate
+        if: runner.os == 'Windows'
+        run: cargo fmt --all --check
+      - name: Run Windows Rust test gate
+        if: runner.os == 'Windows'
+        run: cargo test --workspace --locked
+      - name: Run Windows Rust lint gate
+        if: runner.os == 'Windows'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   security:
     name: Dependency and fuzz gates
