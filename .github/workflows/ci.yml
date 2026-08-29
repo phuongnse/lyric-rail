@@ -12,6 +12,14 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
+  policy-verification:
+    name: policy-verification
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: phuongnse/renovate-ops/.github/workflows/policy-verification.yml@1e3d0d333b62ec92c94ea5c355bbb0cd73024b78
+
   python:
     name: Python 3.12 / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
