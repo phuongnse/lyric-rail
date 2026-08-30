@@ -21,7 +21,7 @@
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "constraints": {
-    "python": "==3.14"
+    "python": "==3.12"
   },
   "pip-compile": {
     "managerFilePatterns": [
