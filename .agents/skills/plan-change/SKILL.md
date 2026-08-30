@@ -1,42 +1,20 @@
 ---
 name: plan-change
-description: Build and register an executable implementation plan from a specified change contract. Use after change specification and required sign-off, before editing implementation files for any non-trivial engineering change.
+description: Produce the smallest implementation plan that covers every accepted outcome and its verification boundary.
 ---
 
-# Plan a Change
+# Plan a change
 
-## Goal
+Read the registered contract and inspect the affected code. Describe one coherent
+approach, bounded work items with owned paths, and concrete risks with mitigations.
+The plan must bind the exact contract digest and must not add behavior that the
+contract did not accept.
 
-Convert accepted outcomes and project policy into one bounded, reviewable execution
-plan without changing implementation source.
+Validate and register it:
 
-## Workflow
+    processctl contract validate --kind plan plan.json
+    processctl change plan --change-id ID --actor ACTOR --context CONTEXT --plan plan.json
 
-1. Read lifecycle status, the registered change contract, nearest AGENTS.md, and only
-   the project owners needed for the affected surface.
-2. Trace callers, consumers, trust boundaries, tests, migrations, generated outputs,
-   documentation, and retirement work far enough to define complete work items.
-3. Record ordered work items with owned paths and verification profiles. Map every
-   acceptance criterion and applicable production-quality dimension to at least one
-   work item and project-owned profile.
-4. Record concrete risks and mitigations. Leave behavior-changing ambiguity as an
-   open decision; do not plan around it.
-   When new evidence creates multiple valid boundary choices, present them with an
-   evidence-backed recommendation and wait for the project owner before registration.
-5. Validate the plan with processctl contract validate --kind plan, then register it
-   with processctl change plan. Implementation remains blocked while required
-   sign-off or open decisions remain.
-
-## Hard gates
-
-- Do not edit implementation files during planning.
-- Do not omit required security, compatibility, data, accessibility, rollout, or
-  rollback work merely to reduce scope.
-- Do not invent project commands; select profiles from .process/project.json.
-- Do not register a preferred architecture, authority, compatibility, rollout, or
-  lifecycle route while the owning decision remains unresolved.
-
-## Output
-
-Return change id, lifecycle phase, ordered work items, acceptance mapping, risks,
-open decisions, required profiles, and next owner.
+Escalate genuinely missing product or architecture decisions to the project owner.
+There is no synthetic pre-implementation review gate; independent review happens on
+the implemented, verified snapshot.

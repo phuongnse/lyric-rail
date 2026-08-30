@@ -1,27 +1,21 @@
 <!-- engineering-process:pr-description:start -->
 ## Summary
 
-<!-- State what changed and why. Use project language; do not list commits or CI jobs. -->
+<!-- What changed and which accepted request or consumer incident requires it? -->
 
-## Contract and scope
+## Contract and risk
 
-<!-- Link the owning spec, change contract, issue, or decision. State explicit N/A with a reason. -->
-
-## Impact and risk
-
-<!-- Describe user/developer impact, compatibility, migrations, rollout, and residual risk. -->
+<!-- Link the change contract. State compatibility and migration impact. -->
 
 ## Verification
 
-<!-- List exact current commands/evidence and any blocked or intentionally omitted boundary. -->
+<!-- List the exact profiles and current snapshot evidence. -->
 
 ## Independent review
 
-<!-- Record reviewer separation, reviewed checkpoint, verdict, and required-finding status. -->
+<!-- Record the independent reviewer, verdict, and blocking-finding status. -->
 
-## Requirements and rules followed
-
-- [ ] **Scope and contract** — accepted scope is implemented without unapproved expansion. [status: pending]
-- [ ] **Verification evidence** — required current profiles pass on the published checkpoint. [status: pending]
-- [ ] **Independent review** — a separate reviewer approved the published checkpoint with no open required finding. [status: pending]
+- [ ] Accepted scope is implemented without silent expansion.
+- [ ] Required profiles pass on the current snapshot.
+- [ ] An independent reviewer approved with no blocking finding.
 <!-- engineering-process:pr-description:end -->

@@ -23,17 +23,13 @@ LyricRail is a private cross-platform karaoke production and playback system.
 <!-- engineering-process:start -->
 ## Engineering process
 
-Use the portable skills pinned by `.process/process.lock` for every non-trivial
-change. Enter through `run-change` and use `processctl change ...` for specification,
-planning, implementation registration, checkpoint verification, independent review,
-finding resolution, and completion.
+For non-trivial delivery work, enter through the managed run-change skill and follow
+the processctl lifecycle: start, plan, implement, verify, independent review, finish.
 
-The project owns product decisions, domain contracts, exact verification commands,
-and publication authority. The process distribution owns lifecycle semantics and
-managed skills. Do not edit managed skills in this repository; update the pinned
-distribution and synchronize them instead.
+This repository owns product decisions, domain rules, exact argument-array commands,
+merge policy, and release authority. The process owns only lifecycle transitions,
+managed skills, evidence freshness, and rejection of self-review.
 
-Independent review requires an attested read-only actor and context that did not
-implement the current cycle. No particular agent host is required. Missing or stale
-evidence, self-review, and publication without separate authorization are blocking.
+Do not edit .agents/skills or .process/adopt-process.py by hand. They are replaced by
+the hash-locked engineering-process adoption in a dependency pull request.
 <!-- engineering-process:end -->

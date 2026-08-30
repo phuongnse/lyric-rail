@@ -1,70 +1,31 @@
 ---
 name: run-change
-description: Orchestrate a non-trivial engineering change through specification, planning, implementation, checkpoint verification, independent review, finding resolution, and completion. Use as the default entry skill whenever a project change must be delivered rather than merely explained or diagnosed.
+description: Route a non-trivial repository change through the complete engineering process from an accepted contract to independently reviewed completion.
 ---
 
-# Run a Change
+# Run a change
 
-## Goal
+Use this as the only entry point for delivery work. Inspect processctl change status
+when a change already exists, then route exactly one current phase:
 
-Drive one canonical lifecycle from request to auditable completion while project
-owners retain product decisions, domain policy, commands, and publication authority.
+1. No run: use **start-change**.
+2. specified: use **plan-change**.
+3. planned or changes-requested: use **implement-change**.
+4. implementing: use **verify-change**.
+5. verified or review-pending: use **review-change**; if the repository changed after
+   evidence was recorded, use **implement-change** to open a new cycle.
+6. approved: use **finish-change**; a later repository change also reopens through
+   **implement-change**.
+7. blocked: stop. The current contract cannot merge; the owner may narrow or
+   supersede it, but no correction-limit stop can waive independent review.
 
-## Required reference
+When changing this process itself, first use **improve-process** to prove the request
+came from a real consumer incident or need; the change still follows the same six
+phases afterward.
 
-Read [references/execution.md](references/execution.md) completely before starting or
-resuming a change. It defines universal execution, blocker, evidence, and delegation
-semantics shared by every project.
+The project's nearest AGENTS.md owns product decisions and .process/project.json owns
+exact argument-array commands. Skills guide the work; only processctl advances
+lifecycle state. Never replace missing, stale, failed, or self-authored evidence with
+a prose claim.
 
-## Lifecycle
-
-1. Run processctl doctor and inspect processctl change status when a change id exists.
-2. Route the current phase without creating a parallel plan or checklist:
-   - no registered change: use define-change-contract;
-   - specified: use plan-change;
-   - planned or changes-requested: use implement-change;
-   - implementing: use verify-change after a clean immutable checkpoint exists;
-   - improvement-required: use evolve-process and classify before corrective work;
-   - improvement-pending: use cross-repo-change and wait for the required artifact chain;
-   - verified: obtain a separate reviewer through review-change;
-   - review-pending: wait for the assigned reviewer; do not self-review;
-   - approved: use finish-change;
-   - completed: use publish-change when standing project policy authorizes automatic
-     publication and continue through exact-head merge, release, deployment, adoption,
-     and cleanup gates until the authorized operation is terminal;
-3. Apply the nearest AGENTS.md and domain skill inside each phase. Project policy may
-   add stronger gates but cannot remove lifecycle phases, baseline profiles,
-   independent review, evidence freshness, or finding closure.
-4. When a command, gate, release, adoption, or external integration fails, apply the
-   failure-to-invariant protocol in the required execution reference before any
-   corrective mutation. The lifecycle enters `improvement-required`; keep dependent
-   candidates blocked until owner, reusable class, invariant, disposition, and local
-   or federated proof are explicit.
-5. When new evidence exposes a material owner decision or multiple valid boundary
-   choices, apply the owner-decision escalation protocol in the execution reference;
-   do not choose a new scope, authority, architecture, or lifecycle route implicitly.
-6. After a valid finding, preserve the reviewed checkpoint, begin the next
-   implementation cycle, resolve the finding, and repeat every invalidated profile
-   and independent review.
-7. Report the processctl phase, cycle, current evidence, blockers, and next owner.
-   Never call a task complete from prose alone.
-
-## Hard gates
-
-- Do not edit implementation before specification, required sign-off, and planning.
-- Do not review work produced by the same actor or context.
-- Do not convert missing, stale, failed, timed-out, or blocked evidence into a pass.
-- Do not continue verification, completion, or publication through
-  `improvement-required` or `improvement-pending`.
-- Do not publish before completion. Standing project policy may authorize automatic
-  commit, push, branch/PR creation, and exact-head merge after completion.
-- Treat a valid standing policy as authorization for its declared release,
-  deployment, adoption, and ephemeral-cleanup operations;
-  do not request redundant per-action confirmation.
-- Escalate only when a required capability or authority is unavailable, bounded
-  recovery is exhausted, or a material product/security decision is missing.
-
-## Output
-
-Return change id, phase, cycle, decisions, current evidence, gaps, blockers, next
-owner, and completion record when finished.
+Report the change id, phase, cycle, current evidence, blocker, and next command.

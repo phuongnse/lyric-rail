@@ -1,40 +1,15 @@
 ---
 name: finish-change
-description: Complete an independently approved engineering change only when its checkpoint, verification, review, findings, and workspace remain current. Use after review approval and before any completion, merge-readiness, release-readiness, or delivery claim.
+description: Complete an approved change only while its verification and independent review still match the current repository snapshot.
 ---
 
-# Finish a Change
+# Finish a change
 
-## Goal
+Confirm the lifecycle is approved, every required profile passed, every blocking
+finding is closed, and the repository still matches the reviewed snapshot. Then run:
 
-Close the lifecycle with an auditable completion record without publishing, merging,
-or deploying implicitly.
+    processctl change finish --change-id ID --actor ACTOR --context CONTEXT
 
-## Workflow
-
-1. Read processctl change status and require the approved phase.
-2. Confirm the current clean checkpoint and workspace fingerprint match the approved
-   review and every required verification report.
-3. Confirm every acceptance criterion and applicable quality dimension is covered,
-   every required finding is resolved, required sign-off is current, and
-   project-owned status or evidence is reconciled. Every improvement case must be a
-   reviewed local resolution or producer completion awaiting separately authorized
-   immutable release. A shared consumer case remains incomplete until released
-   reproduction validates.
-4. Run processctl change finish. Treat any stale artifact, source change, missing
-   profile, or identity mismatch as a blocker that returns to the owning phase.
-5. Report completion separately from publication, merge, release, or deployment.
-   Perform those operations only through an explicitly authorized project workflow.
-
-## Hard gates
-
-- Do not finish a changes-requested, merely verified, or review-pending change.
-- Do not reuse approval after the source checkpoint or workspace changes.
-- Do not infer release or deployment authorization from process completion.
-- Do not finish in `improvement-required` or `improvement-pending`, or through any
-  classification, disposition, resolution, reproduction, or input blocker.
-
-## Output
-
-Return change id, completed checkpoint, comparison base, verification reports,
-independent-review report, completion record, and any separate publication owner.
+The command writes one bounded completion receipt and marks the run completed.
+Completion does not itself grant merge, deployment, or release authority; those
+remain project-owned operations. Never report completion from prose alone.
