@@ -38,10 +38,14 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install published engineering-process authority
-        uses: phuongnse/engineering-process@dd16e711d7c95a71173add8f31fac163cbc85e3f # v0.5.1
-        with:
-          project-root: .
-          requirements-lock: requirements/process.txt
+        run: >-
+          python -m pip install
+          --isolated
+          --disable-pip-version-check
+          --no-input
+          --require-hashes
+          --only-binary :all:
+          -r requirements/process.txt
       - name: Install FFmpeg on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -58,14 +62,14 @@ jobs:
         if: >-
           runner.os == 'Linux' &&
           github.event_name == 'pull_request' &&
-          startsWith(github.head_ref, 'automation/process/engineering-process')
+          startsWith(github.head_ref, 'automation/renovate/engineering-process')
         run: >-
           processctl adoption check
           --project-root .
           --requirements-lock requirements/process.txt
       - name: Validate managed process distribution
         if: runner.os == 'Linux'
-        run: processctl sync --project-root . --check
+        run: processctl adoption check --project-root . --requirements-lock requirements/process.txt
       - name: Run governed Python profile
         run: |
           processctl doctor --project-root . --profile python
@@ -87,10 +91,14 @@ jobs:
           node-version: "24"
           cache: npm
       - name: Install published engineering-process authority
-        uses: phuongnse/engineering-process@dd16e711d7c95a71173add8f31fac163cbc85e3f # v0.5.1
-        with:
-          project-root: .
-          requirements-lock: requirements/process.txt
+        run: >-
+          python -m pip install
+          --isolated
+          --disable-pip-version-check
+          --no-input
+          --require-hashes
+          --only-binary :all:
+          -r requirements/process.txt
       - run: npm ci
       - name: Run governed frontend profile
         run: |
@@ -113,10 +121,14 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install published engineering-process authority
-        uses: phuongnse/engineering-process@dd16e711d7c95a71173add8f31fac163cbc85e3f # v0.5.1
-        with:
-          project-root: .
-          requirements-lock: requirements/process.txt
+        run: >-
+          python -m pip install
+          --isolated
+          --disable-pip-version-check
+          --no-input
+          --require-hashes
+          --only-binary :all:
+          -r requirements/process.txt
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -153,10 +165,14 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install published engineering-process authority
-        uses: phuongnse/engineering-process@dd16e711d7c95a71173add8f31fac163cbc85e3f # v0.5.1
-        with:
-          project-root: .
-          requirements-lock: requirements/process.txt
+        run: >-
+          python -m pip install
+          --isolated
+          --disable-pip-version-check
+          --no-input
+          --require-hashes
+          --only-binary :all:
+          -r requirements/process.txt
       - name: Install Python audit environment
         run: python -m pip install --upgrade pip && python -m pip install -c requirements/constraints-tested.txt -e ".[dev]" pip-audit
       - name: Install Rust security toolchain

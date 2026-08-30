@@ -16,7 +16,7 @@ environment, then validate the toolchain profile needed by the change:
 
 ```text
 python -m pip install --require-hashes -r requirements/process.txt
-processctl sync --project-root . --check
+processctl adoption check --project-root . --requirements-lock requirements/process.txt
 processctl doctor --project-root . --profile python
 ```
 
