@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: phuongnse/renovate-ops/.github/workflows/policy-verification.yml@1e3d0d333b62ec92c94ea5c355bbb0cd73024b78
+    uses: phuongnse/renovate-ops/.github/workflows/policy-verification.yml@5fb53c2295c0f62c29d34c8141121b71198769f4
 
   python:
     name: Python 3.12 / ${{ matrix.os }}

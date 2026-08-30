@@ -6,7 +6,6 @@
   ],
   "enabled": true,
   "configMigration": true,
-  "automerge": false,
   "branchPrefix": "automation/renovate/",
   "dependencyDashboard": true,
   "draftPR": true,
@@ -31,7 +30,7 @@
   "pip_requirements": {
     "enabled": false
   },
-  "prBodyTemplate": "<!-- engineering-process:pr-description:start -->\n## Summary\n\nRenovate proposes one normal locked dependency update for LyricRail.\n\n{{{table}}}\n\n## Contract and scope\n\nDependency automation follows repository-owned manifests; engineering-process updates include the complete managed adoption transaction.\n\n## Impact and risk\n\nThe dependency proposal remains draft and non-automerge until project verification and review complete.\n\n## Verification\n\nProject checks validate the exact published dependency checkpoint.\n\n## Independent review\n\nA separate reviewer approves the complete verified adoption checkpoint before merge.\n\n## Requirements and rules followed\n\n- [ ] **Scope and contract** — accepted scope is implemented without unapproved expansion. [status: pending]\n- [ ] **Verification evidence** — required current profiles pass on the published checkpoint. [status: pending]\n- [ ] **Independent review** — a separate reviewer approved the published checkpoint with no open required finding. [status: pending]\n<!-- engineering-process:pr-description:end -->",
+  "prBodyTemplate": "<!-- engineering-process:pr-description:start -->\n## Summary\n\nRenovate proposes one normal locked dependency update for LyricRail.\n\n{{{table}}}\n\n## Contract and scope\n\nDependency automation follows repository-owned manifests; engineering-process updates include the complete managed adoption transaction.\n\n## Impact and risk\n\nThe dependency proposal remains a draft until project verification, independent review, and owner authorization complete.\n\n## Verification\n\nProject checks validate the exact published dependency checkpoint.\n\n## Independent review\n\nA separate reviewer approves the complete verified adoption checkpoint before merge.\n\n## Requirements and rules followed\n\n- [ ] **Scope and contract** — accepted scope is implemented without unapproved expansion. [status: pending]\n- [ ] **Verification evidence** — required current profiles pass on the published checkpoint. [status: pending]\n- [ ] **Independent review** — a separate reviewer approved the published checkpoint with no open required finding. [status: pending]\n<!-- engineering-process:pr-description:end -->",
   "packageRules": [
     {
       "description": "Adopt each published engineering-process release as a complete managed pull request.",
@@ -43,7 +42,7 @@
         "engineering-process"
       ],
       "enabled": true,
-      "automerge": false,
+      "draftPR": true,
       "groupName": "engineering-process",
       "groupSlug": "engineering-process",
       "schedule": [

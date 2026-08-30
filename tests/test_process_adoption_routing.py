@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-POLICY_REVISION = "1e3d0d333b62ec92c94ea5c355bbb0cd73024b78"
+POLICY_REVISION = "5fb53c2295c0f62c29d34c8141121b71198769f4"
 EXPECTED_POLICY_JOB = (
     "  policy-verification:\n"
     "    name: policy-verification\n"
@@ -31,7 +31,7 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
         (ROOT / ".github" / "renovate.json").read_text(encoding="utf-8")
     )
     assert renovate["enabled"] is True
-    assert renovate["automerge"] is False
+    assert renovate["draftPR"] is True
     assert renovate["constraints"]["python"] == "==3.12"
     assert "postUpgradeTasks" not in renovate
     authority_rule = next(
@@ -40,7 +40,7 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
         if "engineering-process" in rule.get("matchPackageNames", [])
     )
     assert authority_rule["enabled"] is True
-    assert authority_rule["automerge"] is False
+    assert authority_rule["draftPR"] is True
     assert authority_rule["postUpgradeTasks"]["commands"] == [
         "python .process/adopt-process.py --project-root . "
         "--requirements-lock requirements/process.txt"
