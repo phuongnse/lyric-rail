@@ -1,0 +1,97 @@
+{
+  "target": "production",
+  "stage": "building",
+  "packs": [
+    {
+      "id": "desktop-media",
+      "version": 1
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "application-correctness",
+      "state": "enforced",
+      "evidenceProfiles": ["frontend", "python", "rust"]
+    },
+    {
+      "id": "authoritative-input-integrity",
+      "state": "enforced",
+      "evidenceProfiles": ["python"]
+    },
+    {
+      "id": "cross-platform-portability",
+      "state": "enforced",
+      "evidenceProfiles": ["frontend", "python", "rust"]
+    },
+    {
+      "id": "dependency-audit",
+      "state": "enforced",
+      "evidenceProfiles": ["frontend", "security"]
+    },
+    {
+      "id": "media-pipeline-integrity",
+      "state": "enforced",
+      "evidenceProfiles": ["python"]
+    },
+    {
+      "id": "package-security",
+      "state": "enforced",
+      "evidenceProfiles": ["rust", "security"]
+    },
+    {
+      "id": "recovery-mechanism-integrity",
+      "state": "enforced",
+      "evidenceProfiles": ["python", "rust"]
+    },
+    {
+      "id": "dependency-security",
+      "state": "planned",
+      "gap": "Linux GTK/glib advisories and audit coverage exclusions remain stable-release blockers."
+    },
+    {
+      "id": "incident-recovery",
+      "state": "planned",
+      "gap": "Signing-key compromise and destructive recovery drills remain open."
+    },
+    {
+      "id": "independent-security-review",
+      "state": "planned",
+      "gap": "The format, key lifecycle, parser, player, runtime, broker, and update chain still require independent assessment."
+    },
+    {
+      "id": "key-custody",
+      "state": "planned",
+      "gap": "The release signing seed still needs documented offline or hardware-backed custody."
+    },
+    {
+      "id": "linux-release-security",
+      "state": "planned",
+      "gap": "The Tauri GTK3/glib unsoundness and unmaintained dependency chain remains unresolved."
+    },
+    {
+      "id": "recovery-integrity",
+      "state": "planned",
+      "gap": "Recovery must be verified before the last clear master can be removed."
+    },
+    {
+      "id": "release-integrity",
+      "state": "planned",
+      "gap": "Signed installers and clean-host platform release evidence remain open."
+    },
+    {
+      "id": "runtime-delivery-integrity",
+      "state": "planned",
+      "gap": "Runtime delivery and model/checkpoint redistribution licensing remain unresolved."
+    },
+    {
+      "id": "update-integrity",
+      "state": "planned",
+      "gap": "A signed updater and rollback policy remain open."
+    },
+    {
+      "id": "workspace-security",
+      "state": "planned",
+      "gap": "Credential storage and encrypted-workspace adapters still need real-host evidence."
+    }
+  ]
+}

@@ -5,6 +5,26 @@ input can be processed successfully. A job may either produce a fully accepted
 artifact or stop with evidence. It must never render a guessed role, guessed word,
 failed residual-vocal audit, or unpinned model.
 
+## Process readiness path
+
+`.process/readiness.json` selects immutable `desktop-media@1` with production as the
+direction and `building` as the current stage. It is a routing map, not a second
+acceptance checklist and not a production certificate:
+
+- enforced correctness, authoritative-input, source-portability, dependency-audit,
+  media-pipeline, package-security, and recovery-mechanism capabilities resolve to
+  the existing frontend, Python, Rust, and conditional security profiles;
+- planned capabilities retain the open stable-release work already owned by
+  `SECURITY_ACCEPTANCE.md`, `SECURITY_EXCEPTIONS.md`, `RELEASE_STATUS.md`, and the
+  threat model;
+- ordinary development may continue while planned gaps remain, but enforced evidence
+  may not regress and no release may claim production security until the normative
+  gates for its claimed platform are complete.
+
+Process adoption never upgrades the selected pack version. Moving to a later
+`desktop-media` version is a separate owner-authorized consumer change, so a process
+release cannot make this early-stage repository impossible to adopt or develop.
+
 ## Immutable input and model gates
 
 - Lyric text comes only from the required UTF-8 `--lyrics` file. Caption, web lyric,

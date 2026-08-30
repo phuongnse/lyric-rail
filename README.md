@@ -118,7 +118,7 @@ different current key. The format is documented in
 
 ## Verification
 
-LyricRail pins `engineering-process` v0.4.0 with a complete hash lock. Non-trivial
+LyricRail pins `engineering-process` v1.0.1 with a complete hash lock. Non-trivial
 changes use the managed lifecycle in `AGENTS.md`: define the contract, plan the
 work, implement, verify the immutable checkpoint, obtain independent review, and
 resolve every required finding before completion. Install and inspect the authority
@@ -133,6 +133,12 @@ processctl doctor --project-root . --profile python
 The required profiles are `python`, `frontend`, and `rust`; security-sensitive
 changes also require `security`. CI invokes the same profile definitions on Linux,
 macOS, and Windows where applicable.
+
+The versioned `desktop-media@1` readiness path currently reports `building`, not
+production. Existing source-quality evidence is enforced while the stable signing,
+real-host, dependency, recovery, runtime delivery, updater, incident, and independent
+security-review gaps remain planned in the consumer-owned readiness sidecar and
+normative acceptance documents.
 
 ```text
 python -m pytest -q
