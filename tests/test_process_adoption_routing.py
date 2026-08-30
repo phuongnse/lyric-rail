@@ -31,7 +31,7 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
         (ROOT / ".github" / "renovate.json").read_text(encoding="utf-8")
     )
     assert renovate["enabled"] is True
-    assert renovate["automerge"] is False
+    assert renovate["draftPR"] is True
     assert renovate["constraints"]["python"] == "==3.12"
     assert "postUpgradeTasks" not in renovate
     authority_rule = next(
@@ -40,7 +40,7 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
         if "engineering-process" in rule.get("matchPackageNames", [])
     )
     assert authority_rule["enabled"] is True
-    assert authority_rule["automerge"] is False
+    assert authority_rule["draftPR"] is True
     assert authority_rule["postUpgradeTasks"]["commands"] == [
         "python .process/adopt-process.py --project-root . "
         "--requirements-lock requirements/process.txt"
