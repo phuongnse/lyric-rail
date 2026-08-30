@@ -4,7 +4,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 POLICY_REVISION = "1e3d0d333b62ec92c94ea5c355bbb0cd73024b78"
-PROCESS_REVISION = "dd16e711d7c95a71173add8f31fac163cbc85e3f"
 EXPECTED_POLICY_JOB = (
     "  policy-verification:\n"
     "    name: policy-verification\n"
@@ -27,7 +26,7 @@ def extract_policy_job(workflow: str) -> str | None:
     )[0]
 
 
-def test_process_adoption_is_owned_by_the_completed_lifecycle_host() -> None:
+def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
     renovate = json.loads(
         (ROOT / ".github" / "renovate.json").read_text(encoding="utf-8")
     )
@@ -39,20 +38,24 @@ def test_process_adoption_is_owned_by_the_completed_lifecycle_host() -> None:
         for rule in renovate["packageRules"]
         if "engineering-process" in rule.get("matchPackageNames", [])
     )
-    assert authority_rule["enabled"] is False
+    assert authority_rule["enabled"] is True
     assert authority_rule["automerge"] is False
+    assert authority_rule["postUpgradeTasks"]["commands"] == [
+        "python .process/adopt-process.py --project-root . "
+        "--requirements-lock requirements/process.txt"
+    ]
+    assert authority_rule["postUpgradeTasks"]["executionMode"] == "update"
+    assert ".agents/skills/**" in authority_rule["postUpgradeTasks"]["fileFilters"]
 
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
-    assert "automation/process/engineering-process" in workflow
-    assert "automation/renovate/engineering-process" not in workflow
+    assert "automation/renovate/engineering-process" in workflow
     assert "processctl adoption check" in workflow
     assert extract_policy_job(workflow) == EXPECTED_POLICY_JOB
 
-    process_action = f"phuongnse/engineering-process@{PROCESS_REVISION} # v0.5.1"
-    assert workflow.count(process_action) == 4
-    assert "# v0.5.0" not in workflow
+    assert workflow.count("Install published engineering-process authority") == 4
+    assert workflow.count("--require-hashes") == 4
     assert "cargo install cargo-audit --version 0.22.2 --locked" in workflow
     assert "if: runner.os != 'Windows'" in workflow
     windows_gates = {
@@ -76,10 +79,7 @@ def test_process_adoption_is_owned_by_the_completed_lifecycle_host() -> None:
         assert exact_step in workflow
         assert workflow.count(command) == expected_count
 
-    windows_helper = (
-        ROOT / ".process" / "adopt-process-windows-job.py"
-    ).read_text(encoding="utf-8")
-    assert "NATURAL_DRAIN_GRACE_MILLISECONDS = 5_000" in windows_helper
+    assert (ROOT / ".process" / "adopt-process.py").is_file()
 
     project = json.loads((ROOT / ".process" / "project.json").read_text())
     fuzz_command = next(
@@ -94,41 +94,6 @@ def test_process_adoption_is_owned_by_the_completed_lifecycle_host() -> None:
     )
     assert audit_command["run"] == ["python", "scripts/run_cargo_audit.py"]
     assert fuzz_command["run"] == ["python", "scripts/run_package_fuzz_smoke.py"]
-
-    automation = json.loads(
-        (ROOT / ".process" / "automation.json").read_text(encoding="utf-8")
-    )
-    assert automation == {
-        "schemaVersion": 1,
-        "kind": "engineering-process-standing-automation-policy",
-        "enabled": True,
-        "confirmationMode": "exceptions-only",
-        "actions": [
-            "adopt",
-            "commit",
-            "deploy",
-            "ephemeral-cleanup",
-            "merge",
-            "publish",
-            "push",
-            "release",
-            "review-object",
-        ],
-        "merge": {
-            "method": "squash",
-            "requireCompletedLifecycle": True,
-            "requireCurrentBase": True,
-            "requireExactHead": True,
-            "requireIndependentReview": True,
-            "requireRequiredChecks": True,
-        },
-        "escalationReasons": [
-            "bounded-recovery-exhausted",
-            "capability-unavailable",
-            "decision-required",
-        ],
-    }
-
 
 def test_policy_job_rejects_trust_root_and_permission_mutations() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()

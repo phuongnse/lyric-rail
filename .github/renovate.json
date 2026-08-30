@@ -31,28 +31,46 @@
   "pip_requirements": {
     "enabled": false
   },
-  "prBodyTemplate": "<!-- engineering-process:pr-description:start -->\n## Summary\n\nRenovate proposes one normal locked dependency update for LyricRail.\n\n{{{table}}}\n\n## Contract and scope\n\nDependency automation follows repository-owned manifests; engineering-process authority adoption is excluded from this path.\n\n## Impact and risk\n\nThe dependency proposal remains draft and non-automerge until project verification and review complete.\n\n## Verification\n\nProject checks validate the exact published dependency checkpoint.\n\n## Independent review\n\nProcess-authority changes are published only by the completed lifecycle host.\n\n## Requirements and rules followed\n\n- [ ] **Scope and contract** — accepted scope is implemented without unapproved expansion. [status: pending]\n- [ ] **Verification evidence** — required current profiles pass on the published checkpoint. [status: pending]\n- [ ] **Independent review** — a separate reviewer approved the published checkpoint with no open required finding. [status: pending]\n<!-- engineering-process:pr-description:end -->",
+  "prBodyTemplate": "<!-- engineering-process:pr-description:start -->\n## Summary\n\nRenovate proposes one normal locked dependency update for LyricRail.\n\n{{{table}}}\n\n## Contract and scope\n\nDependency automation follows repository-owned manifests; engineering-process updates include the complete managed adoption transaction.\n\n## Impact and risk\n\nThe dependency proposal remains draft and non-automerge until project verification and review complete.\n\n## Verification\n\nProject checks validate the exact published dependency checkpoint.\n\n## Independent review\n\nA separate reviewer approves the complete verified adoption checkpoint before merge.\n\n## Requirements and rules followed\n\n- [ ] **Scope and contract** — accepted scope is implemented without unapproved expansion. [status: pending]\n- [ ] **Verification evidence** — required current profiles pass on the published checkpoint. [status: pending]\n- [ ] **Independent review** — a separate reviewer approved the published checkpoint with no open required finding. [status: pending]\n<!-- engineering-process:pr-description:end -->",
   "packageRules": [
     {
-      "description": "Reserve engineering-process adoption for the lifecycle host.",
+      "description": "Adopt each published engineering-process release as a complete managed pull request.",
       "matchFileNames": [
-        ".github/workflows/ci.yml",
         "requirements/process.in",
         "requirements/process.txt"
       ],
       "matchPackageNames": [
-        "engineering-process",
-        "phuongnse/engineering-process"
+        "engineering-process"
       ],
-      "enabled": false,
+      "enabled": true,
       "automerge": false,
-      "groupName": "engineering-process authority",
-      "groupSlug": "engineering-process-authority",
+      "groupName": "engineering-process",
+      "groupSlug": "engineering-process",
       "schedule": [
         "at any time"
       ],
       "prPriority": 100,
-      "commitMessageTopic": "engineering-process authority"
+      "commitMessageTopic": "engineering-process",
+      "postUpgradeTasks": {
+        "commands": [
+          "python .process/adopt-process.py --project-root . --requirements-lock requirements/process.txt"
+        ],
+        "fileFilters": [
+          ".agents/skills/**",
+          ".github/PULL_REQUEST_TEMPLATE.md",
+          ".process/adopt-process.py",
+          ".process/automation.json",
+          ".process/adopt-process-windows-job.py",
+          ".process/adoption-migrations/**",
+          ".process/process.lock",
+          ".process/project.json",
+          "AGENTS.md"
+        ],
+        "executionMode": "update",
+        "installTools": {
+          "python": {}
+        }
+      }
     }
   ]
 }
