@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-POLICY_REVISION = "1e3d0d333b62ec92c94ea5c355bbb0cd73024b78"
+POLICY_REVISION = "5fb53c2295c0f62c29d34c8141121b71198769f4"
 EXPECTED_POLICY_JOB = (
     "  policy-verification:\n"
     "    name: policy-verification\n"
