@@ -23,6 +23,10 @@ specific checkpoint without changing the reviewed source.
 2. Register the assignment with processctl change review start. Confirm its
    checkpoint, comparison base, contract, plan, and required verification reports
    refer to the same immutable source.
+   For an authority transition, use the candidate root named by the coordinator and
+   require review schema 4 to carry the exact registered request and candidate
+   evidence references. Review the candidate diff while treating target-generated
+   claims as untrusted; the N-1 control lifecycle remains the assignment owner.
 3. Read the diff and only the project-owned contracts needed to evaluate affected
    behavior and trust boundaries. Reconcile every `production-v1` assessment,
    including security, privacy, reliability, performance, observability, operability,
@@ -45,6 +49,14 @@ specific checkpoint without changing the reviewed source.
    owner, reusable class, invariant id, disposition, recurrence state, and required
    local or federated proof. A repeated resolved invariant closed as another narrow
    incident, or a shared case without signal-chain ownership, is required.
+   For a finite-boundary change, classify every new finding exactly once as
+   `covered` or `contract-gap`. A covered finding binds one declared fault row, its
+   derived trust boundary, and the row's complete criterion set. A contract gap binds
+   no row, stays open, and immediately requires owner decision and a superseding
+   contract; review must not extend the contract in prose. Carry these binding fields
+   immutably in later cycles. Review only the accepted diff, carried findings and
+   declared affected trust boundaries; do not continue instruction-by-instruction
+   fault invention outside the closed rows.
 5. Request changes when any required finding remains open or deferred. Approve only
    when required outcomes and evidence are complete for the reviewed checkpoint.
 6. Validate the report with processctl contract validate --kind review, then submit
@@ -54,6 +66,10 @@ specific checkpoint without changing the reviewed source.
    carried findings, assignment mismatches, and checkpoint mismatches.
 7. Return findings to the implementation owner. Review never silently edits,
    publishes, or expands the accepted scope.
+   Lifecycle core counts each distinct changes-requested review cycle independently
+   of finding names. The third cycle in one decision window stops another autonomous
+   implementation cycle and requires the existing reviewed recommendation plus owner
+   resolution. This stop never approves or resolves findings.
 
 ## Hard gates
 

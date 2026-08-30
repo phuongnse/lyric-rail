@@ -25,15 +25,31 @@ product behavior or reopening foundational choices.
 6. Define implementation units, stop conditions, focused evidence, review evidence,
    and required human decisions. Record durable decisions in their project owner.
 7. If evidence supports multiple materially different owners, trust boundaries,
-   compatibility choices, rollout paths, or lifecycle sequences, present the options,
-   trade-offs, and recommendation to the project owner. Do not select one implicitly.
-8. Return ready only when blocking decisions and required approvals are resolved.
+   compatibility choices, rollout paths, or lifecycle sequences, enumerate the hard
+   invariants and assumptions before comparing options. Create a recommendation
+   artifact whose classifications and complete valid set are derived by processctl;
+   apply cost or minimal-change optimization only within that valid set.
+8. Run `processctl recommendation review start` to reserve an unused project-global
+   context and bind the exact reviewer assignment before an independent adversarial
+   review begins. Present a high-risk recommendation only after `processctl
+   recommendation validate-chain` approves the exact assignment-bound chain. If no
+   valid option exists, report the missing evidence or authority instead of
+   recommending an invalid or unproven compromise.
+9. Record the owner's selected valid option in a recommendation resolution. Treat the
+   resolution as decision evidence, never as lifecycle, merge, release, deployment,
+   or adoption authority.
+10. Return ready only when blocking decisions and required approvals are resolved.
+    Treat every unreviewed design paragraph, generated summary, or conversational
+    preference as candidate-only; prose becomes decision authority only through its
+    governing reviewed artifact and owner resolution.
 
 ## Hard gates
 
 - Do not edit implementation before a required design decision or approval.
 - Do not replace a required owner, trust boundary, invariant, or evidence boundary
   merely to bypass a failure.
+- Do not rank cost, convenience, minimal change, or rollout speed before hard
+  invariant validity, or present an unreviewed high-risk recommendation.
 - Do not preserve obsolete compatibility paths without a supported requirement.
 - Do not turn an unresolved project-owner decision into an implementation assumption.
 

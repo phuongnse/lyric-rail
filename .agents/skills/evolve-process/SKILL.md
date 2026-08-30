@@ -25,6 +25,17 @@ incident history into permanent ceremony.
    If root-cause evidence leaves multiple valid owner, trust, compatibility, rollout,
    or lifecycle corrections, stop and use the run-change owner-decision escalation
    protocol; do not try alternate process architectures until one is accepted.
+   Before adding custom standard-format or protocol logic, assess maintained
+   dependencies and existing supported tools. Reuse a suitable dependency through the
+   managed lock flow; require evidence before owning a custom parser or equivalent
+   implementation.
+   Treat three changes-requested final-review cycles in one decision window as
+   validated repeated friction regardless of renamed or split findings. Do not mint a
+   sequence of narrower invariant ids to keep local mutation moving. Let lifecycle
+   stop, preserve the complete finding chain, and use the existing owner-decision
+   protocol before another correction window. A finding outside a schema-4 finite
+   fault row is a contract gap and requires a superseding contract, never an in-place
+   local-fix classification.
 4. Add regression cases at the lowest reliable owner boundary for both valid behavior
    and the fail-closed class. A shared fix also requires producer profiles and a real
    affected-consumer reproduction before release authorization. For skill behavior,
@@ -44,8 +55,12 @@ incident history into permanent ceremony.
 9. For a self-hosted authority rotation, let the old immutable authority govern the
    new authority's introduction, publish the new identity before any consumer pin,
    prove cutover without a control gap, and retire the old authority only after the
-   new boundary is active. Use separate lifecycle changes when provider mechanics
-   make introduction and cutover separately publishable.
+   new boundary is active. Keep a clean N-1 control workspace separate from the N+1
+   candidate, pre-register the transition, treat target evidence as untrusted, and
+   make protected merge the sole activation event. If N-1 predates this route, use
+   only the exact source-owned, policy-bound, single-use bootstrap contract. Use
+   separate lifecycle changes when provider mechanics make introduction and cutover
+   separately publishable.
 10. Own the mandatory `improvement-required` phase. For a shared consumer case, export
    one bounded untrusted signal and keep dependent work in `improvement-pending`.
    Producer disposition assigns the canonical catalog invariant and linked lifecycle;
@@ -54,6 +69,8 @@ incident history into permanent ceremony.
 ## Hard gates
 
 - Do not promote an agent-host quirk into the portable core.
+- Do not reinvent a mature parser, protocol, serializer, cryptographic primitive, or
+  platform adapter when a maintained dependency satisfies the accepted contract.
 - Do not add a gate without an owner, failure message, and regression proof.
 - Do not break a released schema within its major version.
 - Do not respond to a rejected process direction by autonomously trying another

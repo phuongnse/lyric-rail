@@ -23,9 +23,19 @@ plan without changing implementation source.
    open decision; do not plan around it.
    When new evidence creates multiple valid boundary choices, present them with an
    evidence-backed recommendation and wait for the project owner before registration.
-5. Validate the plan with processctl contract validate --kind plan, then register it
-   with processctl change plan. Implementation remains blocked while required
-   sign-off or open decisions remain.
+5. Under an adopted `provenance-gated-authored-review` policy, emit bounded plan
+   schema 3 provenance. Record the registering actor and immutable authority for an
+   authored plan. Use `process-generated` only when the installed core recognizes
+   the generator and can exactly recompute the complete plan from its bound
+   source-owned inputs; a claimed label or partial comparison grants no bypass.
+6. Validate the plan with processctl contract validate --kind plan, then register it
+   with processctl change plan. For an authored nontrivial plan under the adopted
+   policy, run `processctl change decision start` before a genuinely fresh read-only
+   reviewer assesses every canonical material category, then register the assessment
+   with `processctl change decision submit`. A `decision-required` assessment remains
+   blocked until `processctl change decision resolve` binds the exact approved
+   recommendation and explicit owner resolution. Implementation remains blocked
+   while sign-off, open decisions, or required plan-decision evidence is missing.
 
 ## Hard gates
 
@@ -35,6 +45,8 @@ plan without changing implementation source.
 - Do not invent project commands; select profiles from .process/project.json.
 - Do not register a preferred architecture, authority, compatibility, rollout, or
   lifecycle route while the owning decision remains unresolved.
+- Do not use risk labels, author self-classification, prose heuristics, or a generator
+  claim as implementation authority. Unreviewed prose is candidate-only.
 
 ## Output
 

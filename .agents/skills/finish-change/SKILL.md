@@ -23,6 +23,10 @@ or deploying implicitly.
    reproduction validates.
 4. Run processctl change finish. Treat any stale artifact, source change, missing
    profile, or identity mismatch as a blocker that returns to the owning phase.
+   For an authority transition, finish from the N-1 control workspace with the same
+   explicit candidate root. Require completion schema 2 and receipt schema 2 to bind
+   both authority identities, the request, candidate evidence, exact candidate
+   checkpoint, and workspace fingerprint.
 5. Report completion separately from publication, merge, release, or deployment.
    Perform those operations only through an explicitly authorized project workflow.
 

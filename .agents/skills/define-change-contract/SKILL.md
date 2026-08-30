@@ -24,6 +24,13 @@ inventing product behavior or duplicating the owning specification.
    rationale and no criteria for a dimension that is genuinely not applicable.
 5. Classify risk as low, medium, or high using project policy. When policy requires
    sign-off, stop implementation until approval evidence exists.
+   Under an authority that supports change schema 4, define one finite review
+   boundary before high-risk or trust-boundary implementation. Enumerate each owned
+   trust boundary and closed fault row with its trigger or injection boundary,
+   expected outcome, mapped criteria, exact proof, and stop condition. State that an
+   observation outside those rows is a contract gap owned by owner decision and a
+   superseding change; do not use an open-ended phrase such as "all failures" or
+   "every interruption" as a substitute for finite rows.
 6. Validate the document with processctl contract validate --kind change, then
    register it with processctl change start. Registration completes specification;
    it does not authorize implementation.
