@@ -32,6 +32,7 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
     )
     assert renovate["enabled"] is True
     assert renovate["automerge"] is False
+    assert renovate["constraints"]["python"] == "==3.12"
     assert "postUpgradeTasks" not in renovate
     authority_rule = next(
         rule
