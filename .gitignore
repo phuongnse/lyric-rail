@@ -69,3 +69,4 @@ Desktop.ini
 !Cargo.lock
 !/.process/process.lock
 /.process/runs/
+/.process/receipts/
