@@ -2,4 +2,4 @@
 
 # Renovate changes only this public authority pin. The pip-compile manager
 # regenerates requirements/process.txt, including the complete hash-locked graph.
-engineering-process==1.0.1
+engineering-process==1.1.1

@@ -15,5 +15,11 @@ or narrower check when a required command fails. A command failure, timeout,
 surviving descendant, or tracked repository mutation is a failure and leaves the
 change in implementing.
 
+The contract must already include conditional profiles required by affected enforced
+capabilities. Run those profiles exactly; do not run every planned production gate for
+an unrelated change, and do not treat a passing baseline profile as evidence for a
+planned capability whose gap remains open. A readiness promotion is valid only when
+all evidence named by that capability passes on this same snapshot.
+
 When all required profiles pass on the same snapshot, the lifecycle becomes verified;
 route to **review-change**.

@@ -10,6 +10,12 @@ approach, bounded work items with owned paths, and concrete risks with mitigatio
 The plan must bind the exact contract digest and must not add behavior that the
 contract did not accept.
 
+For each affected readiness capability, make the protecting or advancing work visible
+in an existing work-item outcome and verification boundary. Preserve every enforced
+capability; do not add unrelated planned gaps as hardening scope. If the contract aims
+to promote a planned capability, plan the consumer-owned readiness diff and the exact
+evidence that would justify `enforced`; a checklist edit alone is not evidence.
+
 Validate and register it:
 
     processctl contract validate --kind plan plan.json

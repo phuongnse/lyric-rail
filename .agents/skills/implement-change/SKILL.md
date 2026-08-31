@@ -17,6 +17,12 @@ Implement only the current plan. Add focused regression coverage for determinist
 defects and keep consumer-owned policy in the consumer. If review requested changes,
 resolve every blocking finding in the next cycle without renaming or dropping it.
 
+Do not weaken an affected enforced readiness capability or silently change its pack,
+version, profile mapping, state, or gap. A planned-to-enforced transition must be an
+explicit implementation diff backed by the planned checks. Never auto-promote a
+capability because implementation appears complete, and do not work unrelated planned
+gaps merely because they are listed.
+
 When evidence exposes a contract gap, stop and ask the project owner to supersede the
 contract. Do not make review prose into new scope. When implementation is ready,
 route to **verify-change**.

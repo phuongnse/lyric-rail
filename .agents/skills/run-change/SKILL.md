@@ -5,8 +5,14 @@ description: Route a non-trivial repository change through the complete engineer
 
 # Run a change
 
-Use this as the only entry point for delivery work. Inspect processctl change status
-when a change already exists, then route exactly one current phase:
+Use this as the only entry point for delivery work. Run `processctl project validate
+--json` first. When readiness is present, report its stage, immutable pack versions,
+enforced floor, and planned gaps. Planned gaps guide future work but do not become the
+scope of the current change unless the accepted request selects one; never choose the
+product roadmap autonomously.
+
+Inspect processctl change status when a change already exists, then route exactly one
+current phase:
 
 1. No run: use **start-change**.
 2. specified: use **plan-change**.
@@ -29,3 +35,5 @@ lifecycle state. Never replace missing, stale, failed, or self-authored evidence
 a prose claim.
 
 Report the change id, phase, cycle, current evidence, blocker, and next command.
+Also report readiness capabilities affected or intentionally advanced by this change;
+do not describe `building` as production or infer promotion from prose.
