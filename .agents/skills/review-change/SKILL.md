@@ -18,6 +18,13 @@ non-blocking observations but no blocking finding; changes-requested requires at
 one blocking finding. Write the report to the reportPath returned by review
 start; that path is process state and does not mutate the reviewed snapshot.
 
+Read the consumer readiness result and repository rules. Check the complete diff for
+an affected enforced capability omitted from the contract, weakened evidence, a pack
+version changed implicitly, or a planned gap made blocking without accepted scope.
+For a planned-to-enforced transition, require the explicit readiness diff and current
+consumer-owned evidence; reject promotion by prose, stale evidence, or renamed gap.
+Do not block the change merely because unrelated planned capabilities still exist.
+
 Validate and submit the report:
 
     processctl contract validate --kind review REPORT_PATH
