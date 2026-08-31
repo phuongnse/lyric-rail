@@ -11,7 +11,7 @@ failed residual-vocal audit, or unpinned model.
 direction and `building` as the current stage. It is a routing map, not a second
 acceptance checklist and not a production certificate:
 
-- enforced correctness, authoritative-input, source-portability, dependency-audit,
+- enforced correctness, authoritative-input, cross-platform portability, dependency-audit,
   media-pipeline, package-security, and recovery-mechanism capabilities resolve to
   the existing frontend, Python, Rust, and conditional security profiles;
 - planned capabilities retain the open stable-release work already owned by

@@ -118,10 +118,11 @@ different current key. The format is documented in
 
 ## Verification
 
-LyricRail pins `engineering-process` v1.0.1 with a complete hash lock. Non-trivial
-changes use the managed lifecycle in `AGENTS.md`: define the contract, plan the
-work, implement, verify the immutable checkpoint, obtain independent review, and
-resolve every required finding before completion. Install and inspect the authority
+LyricRail pins the `engineering-process` version declared in
+`requirements/process.in` with a complete hash lock. Non-trivial changes use the
+managed lifecycle in `AGENTS.md`: define the contract, plan the work, implement,
+verify the immutable checkpoint, obtain independent review, and resolve every
+required finding before completion. Install and inspect the authority
 with:
 
 ```text
