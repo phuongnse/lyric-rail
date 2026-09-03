@@ -1,4 +1,4 @@
-//! Signed, exhaustive runtime-pack manifests used by LyricRail Studio.
+//! Signed, exhaustive runtime-pack manifests used by the LyricRail local core.
 
 use std::{
     collections::HashSet,
@@ -498,7 +498,7 @@ pub fn verify_runtime_pack(
     let public_bytes = decode_hex_array::<32>(public_key_hex, "public key")?;
     ensure!(
         envelope.key_id == key_id(&public_bytes),
-        "runtime signature key ID does not match Studio"
+        "runtime signature key ID does not match LyricRail"
     );
     let observed_manifest_hash = hex::encode(Sha256::digest(&manifest_bytes));
     ensure!(
@@ -517,7 +517,7 @@ pub fn verify_runtime_pack(
     let executable_paths = validate_manifest(&manifest)?;
     ensure!(
         manifest.runtime_version == expected_version,
-        "runtime version {} does not match Studio {}",
+        "runtime version {} does not match LyricRail {}",
         manifest.runtime_version,
         expected_version
     );
@@ -565,12 +565,18 @@ mod tests {
         let keys = temporary.path().join("keys");
         fs::create_dir_all(root.join("runtime")).unwrap();
         fs::create_dir_all(root.join("config")).unwrap();
+        fs::create_dir_all(root.join("models/audio-separator")).unwrap();
         fs::create_dir_all(&keys).unwrap();
         fs::write(root.join("runtime/python.exe"), b"python-runtime").unwrap();
         fs::write(root.join("runtime/ffmpeg.exe"), b"ffmpeg-runtime").unwrap();
         fs::write(root.join("runtime/ffprobe.exe"), b"ffprobe-runtime").unwrap();
         fs::write(root.join("runtime/lrail.exe"), b"lrail-runtime").unwrap();
         fs::write(root.join("config/pipeline.json"), b"{}\n").unwrap();
+        fs::write(
+            root.join("models/audio-separator/model.ckpt"),
+            b"pinned-model",
+        )
+        .unwrap();
         let private = keys.join("runtime-private.key");
         let public = keys.join("runtime-public.key");
         generate_runtime_keypair(&private, &public).unwrap();
@@ -602,17 +608,25 @@ mod tests {
         let (_temporary, root, public_hex) = signed_pack();
         let verified =
             verify_runtime_pack(&root, &public_hex, "0.8.0", &runtime_platform()).unwrap();
-        assert_eq!(verified.file_count, 5);
+        assert_eq!(verified.file_count, 6);
         assert!(verified.python_executable.ends_with("runtime/python.exe"));
 
-        fs::write(root.join("config/pipeline.json"), b"tampered\n").unwrap();
+        fs::write(
+            root.join("models/audio-separator/model.ckpt"),
+            b"tampered-model",
+        )
+        .unwrap();
         assert!(
             verify_runtime_pack(&root, &public_hex, "0.8.0", &runtime_platform())
                 .unwrap_err()
                 .to_string()
                 .contains("contents do not match")
         );
-        fs::write(root.join("config/pipeline.json"), b"{}\n").unwrap();
+        fs::write(
+            root.join("models/audio-separator/model.ckpt"),
+            b"pinned-model",
+        )
+        .unwrap();
         fs::write(root.join("unlisted.py"), b"print('unsafe')\n").unwrap();
         assert!(
             verify_runtime_pack(&root, &public_hex, "0.8.0", &runtime_platform())
@@ -623,11 +637,15 @@ mod tests {
     }
 
     #[test]
-    fn signed_runtime_is_bound_to_studio_version_platform_and_key() {
+    fn signed_runtime_is_bound_to_lyricrail_version_platform_and_key() {
         let (temporary, root, public_hex) = signed_pack();
         let version_error =
             verify_runtime_pack(&root, &public_hex, "0.9.0", &runtime_platform()).unwrap_err();
-        assert!(version_error.to_string().contains("does not match Studio"));
+        assert!(
+            version_error
+                .to_string()
+                .contains("does not match LyricRail")
+        );
         let platform_error =
             verify_runtime_pack(&root, &public_hex, "0.8.0", "other-platform").unwrap_err();
         assert!(platform_error.to_string().contains("does not match"));

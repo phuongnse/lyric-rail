@@ -22,15 +22,16 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-youtube = [
-  "google-api-python-client>=2.0",
-  "google-auth-oauthlib>=1.0",
-  "google-auth-httplib2>=0.2",
-  "Pillow>=12.3,<13",
-]
-media = [
-  "yt-dlp>=2026.7.4",
-  "curl-cffi>=0.11,<0.16",
+bootstrap-common = [
+  "audioread>=3.0.1",
+  "librosa>=0.11,<1",
+  "numpy>=1.26",
+  "pillow>=12.3",
+  "PyNaCl==1.6.2",
+  "pytest>=8.0",
+  "soundfile>=0.13",
+  "transformers>=5.5,<6",
+  "underthesea==9.5.0",
 ]
 alignment = [
   "onnxruntime>=1.19.2,<2",
@@ -38,7 +39,6 @@ alignment = [
   "torchaudio>=2.7",
   "soundfile>=0.13",
   "underthesea==9.5.0",
-  "stanza==1.14.0",
 ]
 separation-gpu = [
   "audio-separator[gpu]>=0.44.5",
@@ -54,6 +54,7 @@ dev = [
   "librosa>=0.11,<1",
   "numpy>=1.26",
   "onnxruntime>=1.19.2,<2",
+  "pillow>=12.3",
   "PyNaCl==1.6.2",
   "pytest>=8.0",
   "soundfile>=0.13",

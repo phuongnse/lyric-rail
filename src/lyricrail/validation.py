@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import load_project_config, resolve_data_root, resolve_environment_path
+from .config import load_project_config, resolve_data_root
 from .model_provenance import verify_model_provenance
 
 
@@ -57,8 +57,6 @@ def validate_project(root: Path) -> dict[str, Any]:
         return _report(root, issues)
 
     pipeline = config["pipeline"]
-    channel = config["channel"]
-    metadata = config["metadata"]
 
     if pipeline.get("pipelineVersion") != 1:
         _issue(
@@ -91,16 +89,6 @@ def validate_project(root: Path) -> dict[str, Any]:
                 "config/pipeline.json:quality.mode",
                 "Valid values: maximum or balanced.",
             )
-        master = quality.get("youtubeUpload", {})
-        for field in ("container", "videoCodec", "pixelFormat", "audioCodec"):
-            if not str(master.get(field, "")).strip():
-                _issue(
-                    issues,
-                    "error",
-                    "YOUTUBE_UPLOAD_FIELD",
-                    f"config/pipeline.json:quality.youtubeUpload.{field}",
-                    "This value must not be empty.",
-                )
         playback = quality.get("appPlayback", {})
         for field in (
             "layout",
@@ -246,57 +234,6 @@ def validate_project(root: Path) -> dict[str, Any]:
             str(exc),
         )
 
-    privacy = channel.get("defaultPrivacy", "private")
-    if privacy not in {"private", "unlisted", "public"}:
-        _issue(
-            issues,
-            "error",
-            "PRIVACY_VALUE",
-            "config/channel.json:defaultPrivacy",
-            "Valid values: private, unlisted, public.",
-        )
-    for field in ("madeForKids", "containsSyntheticMedia", "embeddable"):
-        if field in channel:
-            _require_type(issues, channel[field], bool, f"config/channel.json:{field}")
-
-    youtube_enabled = bool(pipeline.get("youtube", {}).get("enabled", False))
-    if youtube_enabled:
-        if not str(channel.get("channelDisplayName", "")).strip():
-            _issue(
-                issues,
-                "warning",
-                "CHANNEL_NAME_EMPTY",
-                "config/channel.json:channelDisplayName",
-                "Channel display name is not set.",
-            )
-        if not str(channel.get("expectedChannelId", "")).strip():
-            _issue(
-                issues,
-                "warning",
-                "CHANNEL_ID_EMPTY",
-                "config/channel.json:expectedChannelId",
-                "OAuth is not pinned to an expected Channel ID.",
-                "Set the Channel ID before enabling upload.",
-            )
-
-    required_metadata = (
-        "titleTemplate",
-        "titleTemplateWithoutArtist",
-        "descriptionTemplate",
-        "descriptionTemplateWithoutArtist",
-        "categoryId",
-        "defaultLanguage",
-    )
-    for field in required_metadata:
-        if not str(metadata.get(field, "")).strip():
-            _issue(
-                issues,
-                "error",
-                "METADATA_FIELD",
-                f"config/metadata_rules.json:{field}",
-                "This value must not be empty.",
-            )
-
     try:
         template = json.loads(template_path.read_text(encoding="utf-8"))
         colors = template.get("sung", {}).get("colors", {})
@@ -438,30 +375,6 @@ def validate_project(root: Path) -> dict[str, Any]:
             )
     except (OSError, ValueError, AttributeError) as exc:
         _issue(issues, "error", "TEMPLATE_INVALID", template_value, str(exc))
-
-    youtube = pipeline.get("youtube", {})
-    if youtube_enabled:
-        secret = resolve_environment_path(
-            "YOUTUBE_CLIENT_SECRET_PATH", root, "credentials/client_secret.json"
-        )
-        if not secret.is_file():
-            _issue(
-                issues,
-                "error",
-                "YOUTUBE_OAUTH_MISSING",
-                "YOUTUBE_CLIENT_SECRET_PATH",
-                f"OAuth client not found: {secret}",
-            )
-        if privacy == "public" and bool(
-            youtube.get("requireVerifiedApiProjectForPublic", True)
-        ):
-            _issue(
-                issues,
-                "warning",
-                "YOUTUBE_AUDIT_REQUIRED",
-                "config/channel.json:defaultPrivacy",
-                "Public API uploads require a Google-audited API project.",
-            )
 
     data_root = resolve_data_root(root)
     for directory, directory_root in (

@@ -86,7 +86,7 @@ def main() -> int:
     parser.add_argument(
         "--extras",
         default="",
-        help="Optional dependency group, e.g. youtube or dev",
+        help="Optional dependency group, e.g. alignment or dev",
     )
     parser.add_argument(
         "--add-to-path",

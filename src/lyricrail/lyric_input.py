@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,16 +21,15 @@ class AuthoritativeLyrics:
 
 
 def normalize_authoritative_lyrics(text: str) -> tuple[str, tuple[str, ...]]:
-    """Validate user-supplied lyrics without changing their words or punctuation."""
+    """Validate user text while keeping the authoritative UTF-8 string unchanged."""
     if "\x00" in text:
         raise ValueError("Lyrics must not contain NUL characters.")
-    normalized = unicodedata.normalize("NFC", text.replace("\r\n", "\n").replace("\r", "\n"))
-    lines = tuple(" ".join(line.split()) for line in normalized.split("\n") if line.strip())
+    lines = tuple(line for line in text.splitlines() if line.strip())
     if not lines:
         raise ValueError("Lyrics file contains no lyric lines.")
     if not any(any(character.isalpha() for character in token) for line in lines for token in line.split()):
         raise ValueError("Lyrics must contain sung words.")
-    return "\n".join(lines) + "\n", lines
+    return text, lines
 
 
 def load_authoritative_lyrics(path: Path) -> AuthoritativeLyrics:
@@ -43,7 +41,7 @@ def load_authoritative_lyrics(path: Path) -> AuthoritativeLyrics:
             f"Lyrics file exceeds the {MAXIMUM_LYRIC_BYTES}-byte safety limit: {source}"
         )
     try:
-        raw = source.read_text(encoding="utf-8-sig")
+        raw = source.read_bytes().decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ValueError(f"Lyrics file must be UTF-8: {source}") from exc
     text, lines = normalize_authoritative_lyrics(raw)

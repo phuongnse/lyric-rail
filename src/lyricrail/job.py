@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import errno
+import math
 import os
 import platform
 import re
@@ -13,6 +15,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -20,6 +23,14 @@ from . import __version__
 
 
 JOB_SCHEMA_VERSION = 1
+MAX_LOG_LINE_BYTES = 16 * 1024
+MAX_PIPELINE_LOG_BYTES = 8 * 1024 * 1024
+MAX_STAGE_LOG_BYTES = 2 * 1024 * 1024
+MAX_DIAGNOSTIC_JSON_DEPTH = 16
+MAX_DIAGNOSTIC_JSON_ITEMS = 256
+MAX_DIAGNOSTIC_JSON_NODES = 2_048
+MAX_DIAGNOSTIC_JSON_BYTES = 512 * 1024
+MAX_DIAGNOSTIC_TEXT_BYTES = 448 * 1024
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "blocked", "cancelled"}
 ACTIVE_JOB_STATUSES = {"queued", "running", "cancelling"}
 VALID_JOB_STATUSES = ACTIVE_JOB_STATUSES | TERMINAL_JOB_STATUSES | {
@@ -71,23 +82,243 @@ STAGE_SPECS = (
     StageSpec("load_lyrics", "Load authoritative lyrics", 2.0, "lyrics"),
     StageSpec("align_lyrics", "Align authoritative lyrics to audio", 25.0, "lyrics"),
     StageSpec("classify_roles", "Classify vocal roles", 8.0, "lyrics"),
-    StageSpec("prepare_visuals", "Prepare song-specific landscape", 12.0, "media"),
+    StageSpec("prepare_visuals", "Prepare deterministic local visuals", 5.0, "media"),
     StageSpec("render_subtitles", "Build karaoke subtitles", 8.0, "render"),
     StageSpec("render_player_media", "Build compact synchronized playback assets", 12.0, "package"),
+    StageSpec("create_thumbnail", "Create first-line lyric thumbnail", 2.0, "package"),
     StageSpec("package_lrail", "Build authenticated LyricRail package", 3.0, "package"),
     StageSpec("cleanup_intermediates", "Remove verified cleartext intermediates", 1.0, "package"),
-    StageSpec("render_master", "Render the legacy YouTube upload MP4", 23.0, "youtube"),
-    StageSpec("create_thumbnail", "Create thumbnail", 2.0, "youtube"),
-    StageSpec("upload_youtube", "Upload YouTube resumable", 3.0, "youtube"),
-    StageSpec("attach_playlist", "Add video to playlist", 0.5, "youtube"),
-    StageSpec("wait_processing", "Wait for YouTube processing", 0.5, "youtube"),
-    StageSpec("publish", "Publish or schedule video", 0.5, "youtube"),
 )
 STAGE_BY_KEY = {stage.key: stage for stage in STAGE_SPECS}
 
 
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
+def _unicode_scalars(value: str) -> Iterator[str]:
+    index = 0
+    while index < len(value):
+        code = ord(value[index])
+        if 0xD800 <= code <= 0xDBFF and index + 1 < len(value):
+            low = ord(value[index + 1])
+            if 0xDC00 <= low <= 0xDFFF:
+                yield chr(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+                index += 2
+                continue
+        yield "\ufffd" if 0xD800 <= code <= 0xDFFF else value[index]
+        index += 1
+
+
+def replace_unpaired_surrogates(value: str) -> str:
+    return "".join(_unicode_scalars(value))
+
+
+def _bounded_diagnostic_string(
+    value: str, maximum_bytes: int = MAX_LOG_LINE_BYTES
+) -> str:
+    marker = " ... <text truncated>"
+    marker_bytes = len(marker.encode("utf-8"))
+    if maximum_bytes <= marker_bytes:
+        return "<text omitted>" if maximum_bytes >= 14 else ""
+    maximum = maximum_bytes - marker_bytes
+    rendered: list[str] = []
+    used = 0
+    truncated = False
+    for character in _unicode_scalars(value):
+        encoded = character.encode("utf-8")
+        if used + len(encoded) > maximum:
+            truncated = True
+            break
+        rendered.append(character)
+        used += len(encoded)
+    return "".join(rendered) + (marker if truncated else "")
+
+
+class _DiagnosticBudget:
+    def __init__(self) -> None:
+        self.remaining_nodes = MAX_DIAGNOSTIC_JSON_NODES
+        self.remaining_text_bytes = MAX_DIAGNOSTIC_TEXT_BYTES
+        self.seen: set[int] = set()
+
+    def take(self) -> bool:
+        if self.remaining_nodes <= 0:
+            return False
+        self.remaining_nodes -= 1
+        return True
+
+    def text(self, value: str) -> str:
+        if self.remaining_text_bytes <= 0:
+            return "<diagnostic text budget exhausted>"
+        rendered = _bounded_diagnostic_string(
+            value, min(MAX_LOG_LINE_BYTES, self.remaining_text_bytes)
+        )
+        self.remaining_text_bytes = max(
+            0, self.remaining_text_bytes - len(rendered.encode("utf-8"))
+        )
+        return rendered
+
+
+def _diagnostic_key(value: Any, budget: _DiagnosticBudget) -> str:
+    try:
+        return budget.text(str(value))
+    except Exception:  # noqa: BLE001 - hostile diagnostic object boundary
+        return "<unprintable key>"
+
+
+def _sanitize_diagnostic_payload(
+    value: Any, *, depth: int, budget: _DiagnosticBudget
+) -> Any:
+    if not budget.take():
+        return "<diagnostic budget exhausted>"
+    if depth >= MAX_DIAGNOSTIC_JSON_DEPTH:
+        return "<nested diagnostic omitted>"
+    if isinstance(value, str):
+        return budget.text(value)
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value if -(2**63) <= value <= 2**64 - 1 else "<integer out of range>"
+    if isinstance(value, float):
+        return value if math.isfinite(value) else "<non-finite number>"
+    if isinstance(value, dict):
+        identity = id(value)
+        if identity in budget.seen:
+            return "<cyclic diagnostic>"
+        budget.seen.add(identity)
+        result: dict[str, Any] = {}
+        try:
+            iterator = islice(value.items(), MAX_DIAGNOSTIC_JSON_ITEMS + 1)
+            for index, (key, child) in enumerate(iterator):
+                if budget.remaining_nodes <= 0:
+                    result["<diagnostic budget exhausted>"] = True
+                    break
+                if index >= MAX_DIAGNOSTIC_JSON_ITEMS:
+                    result["<items truncated>"] = True
+                    break
+                rendered_key = _diagnostic_key(key, budget)
+                if rendered_key in result:
+                    rendered_key = f"{rendered_key} <duplicate>"
+                result[rendered_key] = _sanitize_diagnostic_payload(
+                    child, depth=depth + 1, budget=budget
+                )
+        except Exception:  # noqa: BLE001 - hostile diagnostic mapping boundary
+            return "<unreadable diagnostic mapping>"
+        return result
+    if isinstance(value, (list, tuple)):
+        identity = id(value)
+        if identity in budget.seen:
+            return "<cyclic diagnostic>"
+        budget.seen.add(identity)
+        result = [
+            _sanitize_diagnostic_payload(child, depth=depth + 1, budget=budget)
+            for child in islice(value, min(MAX_DIAGNOSTIC_JSON_ITEMS, budget.remaining_nodes))
+        ]
+        if len(value) > MAX_DIAGNOSTIC_JSON_ITEMS:
+            result.append("<items truncated>")
+        return result
+    try:
+        return budget.text(str(value))
+    except Exception:  # noqa: BLE001 - hostile diagnostic object boundary
+        return f"<unprintable {type(value).__name__}>"
+
+
+def sanitize_diagnostic_payload(value: Any, *, _depth: int = 0) -> Any:
+    try:
+        return _sanitize_diagnostic_payload(
+            value, depth=_depth, budget=_DiagnosticBudget()
+        )
+    except Exception:  # noqa: BLE001 - final diagnostic boundary fallback
+        return "<diagnostic unavailable>"
+
+
+def redact_diagnostic_text(message: str) -> str:
+    value = replace_unpaired_surrogates(message).replace("\r", " ").replace("\0", "")
+    secret_key = (
+        r"token|access_token|refresh_token|id_token|password|secret|client_secret|"
+        r"private_key|authorization|credential|api[-_]?key|apikey|signature|"
+        r"x[-_]goog[-_]signature|x[-_]amz[-_]signature"
+    )
+    label, separator, payload = value.partition(":")
+    if separator and label in {"Argument", "Executable"}:
+        if re.search(
+            rf"(?i)\b(?:{secret_key})\b",
+            payload,
+        ):
+            return f"{label}: <redacted>"
+        if re.search(r"https?://", payload, flags=re.IGNORECASE):
+            return f"{label}: <remote address>"
+        if re.search(
+            r"(?i)(?:[A-Z]:[\\/]|\\\\|(?:^|\s)/[^\s]*)",
+            payload,
+        ):
+            return f"{label}: <local path>"
+    value = re.sub(r"https?://\S+", "<remote address>", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"(?i)\bbearer\s+(?:\"[^\"]*\"|'[^']*'|\S+)",
+        "Bearer <redacted>",
+        value,
+    )
+    value = re.sub(
+        rf"(?i)\"?({secret_key})\"?\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}}]+)",
+        lambda match: f"{match.group(1)}=<redacted>",
+        value,
+    )
+    value = re.sub(
+        r'''(?i)(["'])(?:[A-Z]:[\\/]|\\\\|/)[^"']+\1''',
+        "<local path>",
+        value,
+    )
+    path_match = re.search(
+        r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\)|(?<![A-Za-z0-9:])/(?!/)",
+        value,
+    )
+    if path_match:
+        prefix = value[: path_match.start()].rstrip(" \t\"'([{,=:")
+        value = f"{prefix} <local path>".strip()
+    encoded = value.encode("utf-8")
+    if len(encoded) <= MAX_LOG_LINE_BYTES:
+        return value
+    marker = b" ... <line truncated>"
+    return (encoded[: MAX_LOG_LINE_BYTES - len(marker)] + marker).decode(
+        "utf-8", errors="replace"
+    )
+
+
+def _append_bounded_log(path: Path, line: str, max_bytes: int) -> None:
+    encoded = line.encode("utf-8")
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        size = 0
+    if size + len(encoded) > max_bytes and size:
+        keep = max_bytes // 2
+        with path.open("rb") as handle:
+            handle.seek(max(0, size - keep))
+            tail = handle.read(keep)
+        if size > keep:
+            separator = tail.find(b"\n")
+            tail = tail[separator + 1 :] if separator >= 0 else b""
+        marker = b"... older bounded task output removed ...\n"
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(marker)
+                handle.write(tail)
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path.exists():
+                temporary_path.unlink()
+        return
+    with path.open("ab") as handle:
+        handle.write(encoded)
+        handle.flush()
 
 
 def slugify(value: str) -> str:
@@ -106,7 +337,7 @@ def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
     temporary_path = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2)
+            json.dump(data, handle, ensure_ascii=True, indent=2)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -130,7 +361,7 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def append_json_line(path: Path, event: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = (json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
+    line = (json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n").encode(
         "utf-8"
     )
     descriptor = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
@@ -142,7 +373,8 @@ def append_json_line(path: Path, event: dict[str, Any]) -> None:
 
 
 def stage_is_enabled(key: str, pipeline: dict[str, Any], upload: bool) -> tuple[bool, str]:
-    youtube = pipeline.get("youtube", {})
+    if upload:
+        raise ValueError("Cloud upload/processing stages have been removed.")
     if STAGE_BY_KEY[key].group == "package":
         package = pipeline.get("package", {})
         if not bool(package.get("enabled", True)):
@@ -152,19 +384,6 @@ def stage_is_enabled(key: str, pipeline: dict[str, Any], upload: bool) -> tuple[
         ):
             return False, "package.cleanupVerifiedIntermediates=false"
         return True, ""
-    if STAGE_BY_KEY[key].group != "youtube":
-        return True, ""
-    if not upload:
-        return False, "YouTube delivery disabled for this job"
-    option_by_stage = {
-        "create_thumbnail": "uploadThumbnail",
-        "attach_playlist": "addToPlaylist",
-        "wait_processing": "waitForProcessing",
-        "publish": "publishWhenReady",
-    }
-    option = option_by_stage.get(key)
-    if option and not bool(youtube.get(option, False)):
-        return False, f"youtube.{option}=false"
     return True, ""
 
 
@@ -223,16 +442,11 @@ def build_plan(
         "kind": "lyricrail.plan",
         "sourceVideo": str(video.resolve()),
         "qualityMode": pipeline.get("quality", {}).get("mode", "maximum"),
-        "uploadEnabled": upload,
-        "youtubePrivacy": metadata.get("insertBody", {})
-        .get("status", {})
-        .get("privacyStatus", "private"),
+        "uploadEnabled": False,
         "metadataPreview": {
-            "title": metadata.get("insertBody", {}).get("snippet", {}).get("title", ""),
-            "categoryId": metadata.get("insertBody", {})
-            .get("snippet", {})
-            .get("categoryId", ""),
-            "tags": metadata.get("insertBody", {}).get("snippet", {}).get("tags", []),
+            "title": metadata.get("source", {}).get("songTitle", ""),
+            "artist": metadata.get("source", {}).get("referenceArtist", ""),
+            "composer": metadata.get("source", {}).get("composer", ""),
         },
         "stages": stages,
         "warnings": list(metadata.get("warnings", [])),
@@ -291,6 +505,7 @@ class JobStore:
         if not lyrics_text.strip():
             raise ValueError("Authoritative lyrics must not be empty.")
         timestamp = datetime.now().astimezone()
+        source_stat = video.stat()
         suffix = uuid.uuid4().hex[:6]
         job_id = f"{timestamp:%Y%m%d-%H%M%S}-{slugify(video.stem)[:80]}-{suffix}"
         job_directory = self._job_directory(job_id)
@@ -319,6 +534,13 @@ class JobStore:
                 "sourceKindHint": source_kind_hint,
                 "sourceMedia": str(video.resolve()),
                 "sourceVideo": str(video.resolve()),
+                "sourceFingerprint": {
+                    "sizeBytes": source_stat.st_size,
+                    "modifiedNanoseconds": source_stat.st_mtime_ns,
+                    "changedNanoseconds": source_stat.st_ctime_ns,
+                    "device": source_stat.st_dev,
+                    "fileId": source_stat.st_ino,
+                },
                 "sourceRange": {
                     "startSeconds": requested_start_seconds,
                     "endSeconds": requested_end_seconds,
@@ -349,9 +571,9 @@ class JobStore:
                 "createdByPid": os.getpid(),
             },
             "execution": {
-                "isolationPolicy": "fresh-job-no-intermediate-reuse",
+                "isolationPolicy": "persistent-worker-fresh-job-artifacts",
                 "crossJobIntermediateReuse": False,
-                "sharedCaches": ["source-media", "model-weights"],
+                "sharedCaches": ["model-weights", "loaded-models"],
             },
             "paths": {
                 "jobDirectory": str(job_directory),
@@ -432,6 +654,47 @@ class JobStore:
                 lock_path.unlink()
             except FileNotFoundError:
                 pass
+
+    @contextmanager
+    def run_lease(self, reference: str) -> Iterator[None]:
+        """Hold an OS-released lease for the complete lifetime of one job run."""
+        job_id = self.resolve_job_id(reference)
+        lease_path = self._job_directory(job_id) / ".run.lease"
+        descriptor = os.open(lease_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise ValueError(
+                        f"Job is still owned by another processing worker: {job_id}"
+                    ) from exc
+                raise
+            try:
+                yield
+            finally:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
     def update_job(self, reference: str, **changes: Any) -> dict[str, Any]:
         job_id = self.resolve_job_id(reference)
@@ -539,7 +802,11 @@ class JobStore:
         return self.update_job(job["jobId"], status="cancelling")
 
     def prepare_retry(
-        self, reference: str, from_stage: str | None = None
+        self,
+        reference: str,
+        from_stage: str | None = None,
+        *,
+        allow_interrupted: bool = False,
     ) -> dict[str, Any]:
         job_id = self.resolve_job_id(reference)
         with self._lock(job_id):
@@ -550,7 +817,12 @@ class JobStore:
                 "cancelled",
             }
             explicit_reprocess = manifest["status"] == "succeeded" and bool(from_stage)
-            if not retryable_terminal and not explicit_reprocess:
+            interrupted = allow_interrupted and manifest["status"] in {
+                "queued",
+                "running",
+                "cancelling",
+            }
+            if not retryable_terminal and not explicit_reprocess and not interrupted:
                 raise ValueError(
                     "Only failed, blocked, or cancelled jobs can be retried automatically; "
                     f"a succeeded job requires an explicit --from-stage (current: {manifest['status']})"
@@ -561,7 +833,8 @@ class JobStore:
                     (
                         stage["key"]
                         for stage in manifest["stages"]
-                        if stage["status"] in {"failed", "blocked", "cancelled", "pending"}
+                        if stage["status"]
+                        in {"running", "failed", "blocked", "cancelled", "pending"}
                     ),
                     None,
                 )
@@ -604,8 +877,12 @@ class JobStore:
                 pass
         self._append_event(
             job_id,
-            "job.retry-prepared",
-            {"fromStage": candidate, "retryCount": manifest["retryCount"]},
+            "job.interrupted-retry-prepared" if interrupted else "job.retry-prepared",
+            {
+                "fromStage": candidate,
+                "retryCount": manifest["retryCount"],
+                "interrupted": interrupted,
+            },
         )
         self.log(job_id, f"Retry prepared from stage {candidate}", level="WARNING")
         return manifest
@@ -620,18 +897,21 @@ class JobStore:
         message: str,
         level: str = "INFO",
         stage: str | None = None,
-    ) -> None:
+    ) -> str:
         job_id = self.resolve_job_id(reference)
         directory = self._job_directory(job_id)
-        clean_message = message.replace("\r", " ").replace("\n", "\\n")
+        clean_message = redact_diagnostic_text(message.replace("\n", "\\n"))
         line = f"{now_iso()} {level.upper():<7} {stage or '-':<24} {clean_message}\n"
         targets = [directory / "logs" / "pipeline.log"]
         if stage:
             targets.append(directory / "logs" / f"{stage}.log")
-        for target in targets:
-            with target.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(line)
-                handle.flush()
+        for index, target in enumerate(targets):
+            _append_bounded_log(
+                target,
+                line,
+                MAX_PIPELINE_LOG_BYTES if index == 0 else MAX_STAGE_LOG_BYTES,
+            )
+        return clean_message
 
     def events_path(self, reference: str) -> Path:
         job_id = self.resolve_job_id(reference)

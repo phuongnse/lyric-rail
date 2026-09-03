@@ -9,6 +9,14 @@
       "associatedFileSha256": {
         "config_bs_roformer_instrumental_resurrection_unwa.yaml": "d28c16f35e3118c8db3b5b28320d70e3fbb7ab46ab1ff1e60e0332b1e5871ba1"
       },
+      "downloadUrls": {
+        "bs_roformer_instrumental_resurrection_unwa.ckpt": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/bs_roformer_instrumental_resurrection_unwa.ckpt",
+        "config_bs_roformer_instrumental_resurrection_unwa.yaml": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/config_bs_roformer_instrumental_resurrection_unwa.yaml"
+      },
+      "fileSizeBytes": {
+        "bs_roformer_instrumental_resurrection_unwa.ckpt": 204483033,
+        "config_bs_roformer_instrumental_resurrection_unwa.yaml": 2347
+      },
       "configPaths": ["audioSeparation.modelFilename"],
       "task": "instrumental extraction",
       "source": "https://github.com/nomadkaraoke/python-audio-separator/blob/main/docs/deton24-model-mapping-and-ensemble-guide.md",
@@ -20,6 +28,14 @@
       "sha256": "bd19766620f7d6f58fdf7aaada7e89907fe41bc64490ce3faa9a6dab15d6e1f2",
       "associatedFileSha256": {
         "config_melbandroformer_inst_v2.yaml": "4b902a7360a930c178edb4846b30e4e326aa1219d1b2daf660d46a311e0cd50b"
+      },
+      "downloadUrls": {
+        "melband_roformer_inst_v2.ckpt": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/melband_roformer_inst_v2.ckpt",
+        "config_melbandroformer_inst_v2.yaml": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/config_melbandroformer_inst_v2.yaml"
+      },
+      "fileSizeBytes": {
+        "melband_roformer_inst_v2.ckpt": 1574477088,
+        "config_melbandroformer_inst_v2.yaml": 921
       },
       "configPaths": [
         "lyrics.leakageQualityGate.residualConsensusModelFilename",
@@ -36,6 +52,14 @@
       "associatedFileSha256": {
         "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml": "b35077d94861f068097cce1a5e54633c055e7dcc2613eade4e4dc7c7c9c3f48b"
       },
+      "downloadUrls": {
+        "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
+        "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml"
+      },
+      "fileSizeBytes": {
+        "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": 913096801,
+        "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml": 1726
+      },
       "configPaths": ["roles.leadBackingModelFilename"],
       "task": "lead/backing analysis only",
       "source": "https://github.com/nomadkaraoke/python-audio-separator",
@@ -47,6 +71,14 @@
       "sha256": "123c00786bdbc6bd462dddb35cd21fd6ae99ab8319f93f63a8abc1012e593d94",
       "associatedFileSha256": {
         "config_chorus_male_female_bs_roformer.yaml": "363ef6bef5f0fd89b69e6e0f90dcc102dec6aaeb6e55790cae1796bebdf5097e"
+      },
+      "downloadUrls": {
+        "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt",
+        "config_chorus_male_female_bs_roformer.yaml": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/config_chorus_male_female_bs_roformer.yaml"
+      },
+      "fileSizeBytes": {
+        "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt": 527121477,
+        "config_chorus_male_female_bs_roformer.yaml": 1847
       },
       "configPaths": ["roles.oppositeGenderCoLeadModelFilename"],
       "task": "independent opposite-gender co-lead consensus",

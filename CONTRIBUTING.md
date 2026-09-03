@@ -2,14 +2,34 @@
 
 ## Setup
 
-Use Python 3.11 or newer. Create an isolated development environment from the repository root:
+On Windows, use the repository-owned native bootstrap. It installs the official
+toolchain and all code dependencies, creates `.venv`, imports MSVC and runs the governed
+profiles without WSL:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap_windows.ps1 -Plan
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap_windows.ps1
+```
+
+The read-only plan reports Windows Smart App Control status. Enforcement mode is not
+compatible with unsigned local Rust/Tauri builds, so bootstrap fails before mutation
+and directs the developer to make the Windows Security decision; it does not turn off
+or bypass application control.
+
+Bootstrap also rejects an existing non-3.12/non-x64/foreign `.venv` instead of
+overlaying it. CPU and NVIDIA runtimes are transitioned as mutually exclusive sets;
+the NVIDIA receipt requires live PyTorch CUDA and ONNX CUDA-provider evidence.
+
+Use `-IncludeModels` only when the task needs the large pinned inference weights and
+their licenses have been reviewed. On other platforms, use Python 3.11 or newer and
+create an isolated development environment from the repository root:
 
 ```text
 python scripts/install.py --extras dev
 python -m pytest -q
 ```
 
-Install the media, alignment, separation, or YouTube extras only when the change needs those engines. FFmpeg and ffprobe must come from `PATH` or the documented environment variables.
+Install alignment or separation extras only when the change needs those engines. FFmpeg and ffprobe must come from `PATH` or the documented environment variables.
 
 Install the hash-locked engineering-process authority separately or into the active
 environment, then validate the toolchain profile needed by the change:

@@ -7,6 +7,7 @@ mod crypto;
 mod error;
 mod header;
 mod package;
+mod private_store;
 mod recovery;
 mod rotation;
 pub mod runtime;
@@ -17,10 +18,12 @@ mod vault;
 pub use error::{Error, Result};
 pub use header::{FORMAT_MAJOR, FORMAT_MINOR, HEADER_SIZE, Header, MAGIC};
 pub use package::{
-    PackageReader, PackagedAsset, RewrappedPackage, inspect_package, pack, pack_for_vault,
-    rewrap_package_for_vaults, verify_package, verify_package_with_vault,
-    verify_package_with_vault_candidates,
+    PackageReader, PackagedAsset, RandomAccessSource, RewrappedPackage, inspect_package, pack,
+    pack_for_vault, revise_package_for_vault, revise_package_in_place_for_vault,
+    rewrap_package_for_vaults, verify_package, verify_package_matches_request_with_vault,
+    verify_package_with_vault, verify_package_with_vault_candidates,
 };
+pub use private_store::{open_library_record, seal_library_record};
 pub use recovery::{
     RecoveryBundleExport, RecoveryBundleInspection, RecoveryBundleVerification,
     RecoveryRestoreReport, export_recovery_bundle, inspect_recovery_bundle,
@@ -31,7 +34,7 @@ pub use rotation::{
 };
 pub use schema::{
     AssetRequest, ContentEncoding, KeyEnvelope, Manifest, PackageInspection, PackageRequest,
-    VerificationReport,
+    PackageRevisionReport, PackageRevisionRequest, VerificationReport,
 };
 pub use secret::{LockedSecret, LockedString};
 pub use vault::{load_or_create_vault_master, load_vault_master, pack_for_device_vault};

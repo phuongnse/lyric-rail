@@ -56,7 +56,7 @@
     {
       "id": "independent-security-review",
       "state": "planned",
-      "gap": "The format, key lifecycle, parser, player, runtime, broker, and update chain still require independent assessment."
+      "gap": "The format, key lifecycle, parser, lyric revision, remote transport/cache, OAuth, player, runtime, and update chain still require independent assessment."
     },
     {
       "id": "key-custody",
@@ -91,7 +91,7 @@
     {
       "id": "workspace-security",
       "state": "planned",
-      "gap": "Credential storage and encrypted-workspace adapters still need real-host evidence."
+      "gap": "OS credential stores, Google OAuth revocation, encrypted catalog, and cloud-only recovery still need real-host evidence on every claimed platform."
     }
   ]
 }

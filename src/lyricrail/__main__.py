@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -13,17 +12,19 @@ from .config import (
     load_project_config,
     load_project_environment,
     resolve_data_root,
-    resolve_environment_path,
 )
 from .job import (
     TERMINAL_JOB_STATUSES,
     VALID_JOB_STATUSES,
+    MAX_DIAGNOSTIC_JSON_BYTES,
     JobStore,
     build_plan,
+    redact_diagnostic_text,
+    sanitize_diagnostic_payload,
 )
 from .lyric_input import AuthoritativeLyrics, load_authoritative_lyrics
 from .local_pipeline import build_local_handlers, render_review_preview
-from .metadata import build_youtube_metadata
+from .metadata import build_local_metadata
 from .model_provenance import assert_model_provenance
 from .presentation import (
     clear_terminal,
@@ -36,6 +37,7 @@ from .presentation import (
     tail_lines,
 )
 from .runner import PipelineRunner
+from .revision_alignment import align_revision_scope
 from .source import ResolvedSource, parse_timecode, resolve_source
 from .toolchain import collect_doctor_report, print_doctor_report
 from .validation import validate_project
@@ -74,19 +76,13 @@ def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "source",
         nargs="?",
-        help="YouTube/web URL or local audio/video file; omit to use input/",
+        help="Local audio/video file; omit to use input/",
     )
     parser.add_argument(
         "--lyrics",
         type=Path,
         required=True,
         help="UTF-8 text file containing the exact lyrics, one semantic phrase per line",
-    )
-    parser.add_argument(
-        "--upload",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable or disable YouTube stages for this job",
     )
     parser.add_argument(
         "--start",
@@ -100,6 +96,7 @@ def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--title", help="Override the song title for output and metadata")
     parser.add_argument("--artist", help="Override the reference artist for metadata")
+    parser.add_argument("--composer", help="Optional composer metadata")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -188,37 +185,26 @@ def build_parser() -> argparse.ArgumentParser:
     preview.add_argument(
         "--duration", type=float, default=25.0, help="Review duration, up to 120 seconds"
     )
+
+    worker = subparsers.add_parser(
+        "worker", help="Run the persistent local processing worker over JSON lines"
+    )
+    _add_root_argument(worker)
+
+    revision_align = subparsers.add_parser(
+        "revision-align", help="Re-align explicitly changed package lyric lines"
+    )
+    _add_root_argument(revision_align)
+    _add_json_argument(revision_align)
+    revision_align.add_argument("--audio", type=Path, required=True)
+    revision_align.add_argument("--timing", type=Path, required=True)
+    revision_align.add_argument("--lyrics", type=Path, required=True)
+    revision_align.add_argument("--output", type=Path, required=True)
     return parser
 
 
 def _root(args: argparse.Namespace) -> Path:
     return load_project_environment(args.root)
-
-
-def _resolve_upload(args: argparse.Namespace, pipeline: dict[str, Any]) -> bool:
-    if args.upload is not None:
-        return bool(args.upload)
-    return bool(pipeline.get("youtube", {}).get("enabled", False))
-
-
-def _validate_upload_request(
-    root: Path, config: dict[str, Any], upload: bool
-) -> None:
-    if not upload:
-        return
-    secret = resolve_environment_path(
-        "YOUTUBE_CLIENT_SECRET_PATH", root, "credentials/client_secret.json"
-    )
-    if not secret.is_file():
-        raise ValueError(
-            f"Upload is enabled but the OAuth client is missing: {secret}. "
-            "Use --no-upload or configure credentials."
-        )
-    expected_channel = str(config["channel"].get("expectedChannelId", "")).strip()
-    if not expected_channel:
-        raise ValueError(
-            "Upload is enabled but config/channel.json has no expectedChannelId."
-        )
 
 
 def _validated_config(root: Path, as_json: bool) -> tuple[dict[str, Any] | None, int]:
@@ -250,15 +236,15 @@ def _config(args: argparse.Namespace) -> int:
     return 0
 
 
-def _resolved_source(root: Path, args: argparse.Namespace, *, download: bool) -> ResolvedSource:
+def _resolved_source(root: Path, args: argparse.Namespace) -> ResolvedSource:
     return resolve_source(
         root,
         args.source,
-        download_urls=download,
         start_seconds=args.start,
         end_seconds=args.end,
         title_override=args.title,
         artist_override=args.artist,
+        composer_override=args.composer,
     )
 
 
@@ -271,24 +257,15 @@ def _make_plan(args: argparse.Namespace) -> tuple[dict[str, Any] | None, int, Pa
     config, exit_code = _validated_config(root, args.json)
     if config is None:
         return None, exit_code, None
-    source = _resolved_source(root, args, download=False)
+    source = _resolved_source(root, args)
     lyrics = _resolved_lyrics(args)
-    upload = _resolve_upload(args, config["pipeline"])
-    metadata = build_youtube_metadata(
+    metadata = build_local_metadata(
         source.path,
-        config["channel"],
-        config["metadata"],
         song_title=source.song_title,
         artist=source.artist,
+        composer=source.composer,
     )
-    if not upload:
-        metadata["warnings"] = [
-            warning
-            for warning in metadata.get("warnings", [])
-            if "channelDisplayName" not in warning and "defaultPlaylistId" not in warning
-        ]
-    _validate_upload_request(root, config, upload)
-    plan = build_plan(source.path, config["pipeline"], metadata, upload)
+    plan = build_plan(source.path, config["pipeline"], metadata, False)
     plan["sourceInput"] = source.input_value
     plan["sourceOrigin"] = source.origin
     plan["sourceKindHint"] = source.media_kind_hint
@@ -336,75 +313,87 @@ def _human_runner_callback(job: dict[str, Any], stage: dict[str, Any] | None) ->
     )
 
 
-def _cleanup_successful_output(final: dict[str, Any]) -> dict[str, Any]:
-    """Remove only this successfully uploaded job's rebuildable by-products."""
-    final_outputs = [
-        Path(item["path"]).resolve()
-        for item in final.get("artifacts", [])
-        if item.get("kind") == "video-youtube-upload"
-    ]
-    if len(final_outputs) != 1 or not final_outputs[0].is_file():
-        raise RuntimeError(
-            "Cleanup blocked: the job must have exactly one valid YouTube upload MP4."
-        )
-    keep = final_outputs[0]
-    output_root = Path(final["paths"]["jobDirectory"]).resolve().parent
-    if keep.parent != output_root:
-        raise RuntimeError("Cleanup blocked: the final MP4 must be directly inside output/.")
-    removed: list[str] = []
-    job_directory = Path(final["paths"]["jobDirectory"]).resolve()
-    if job_directory.parent != output_root or not job_directory.is_dir():
-        raise RuntimeError("Cleanup blocked: invalid job directory.")
-    shutil.rmtree(job_directory)
-    removed.append(str(job_directory))
-
-    data_root = output_root.parent
-    request = final.get("request", {})
-    if request.get("sourceOrigin") == "url":
-        source = Path(request.get("sourceMedia") or request.get("sourceVideo", "")).resolve()
-        source_cache = (data_root / "cache" / "sources").resolve()
-        source_directory = source.parent
-        if (
-            source_directory.parent == source_cache
-            and source_directory.is_dir()
-            and source_cache in source.parents
-        ):
-            shutil.rmtree(source_directory)
-            removed.append(str(source_directory))
-    return {"performed": True, "kept": str(keep), "removed": removed}
-
-
-def _run(args: argparse.Namespace) -> int:
-    if args.dry_run:
-        return _plan(args)
+def _execute_job(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    *,
+    verify_models: bool,
+    on_update: Any = None,
+    on_output: Any = None,
+    resume_job_id: str | None = None,
+) -> dict[str, Any]:
     root = _root(args)
-    config, exit_code = _validated_config(root, args.json)
-    if config is None:
-        return exit_code
-    assert_model_provenance(root, config["pipeline"], verify_hashes=True)
-    source = _resolved_source(root, args, download=True)
+    if verify_models:
+        assert_model_provenance(root, config["pipeline"], verify_hashes=True)
+    source = _resolved_source(root, args)
     lyrics = _resolved_lyrics(args)
-    upload = _resolve_upload(args, config["pipeline"])
-    metadata = build_youtube_metadata(
+    metadata = build_local_metadata(
         source.path,
-        config["channel"],
-        config["metadata"],
         song_title=source.song_title,
         artist=source.artist,
+        composer=source.composer,
     )
-    if not upload:
-        metadata["warnings"] = [
-            warning
-            for warning in metadata.get("warnings", [])
-            if "channelDisplayName" not in warning and "defaultPlaylistId" not in warning
-        ]
-    _validate_upload_request(root, config, upload)
     store = JobStore(resolve_data_root(root) / "output")
+    runner = PipelineRunner(
+        store,
+        handlers=build_local_handlers(root),
+        on_update=on_update,
+        on_output=on_output,
+    )
+    if resume_job_id:
+        with store.run_lease(resume_job_id):
+            existing = store.load(resume_job_id)
+            request = existing.get("request", {})
+            fingerprint = request.get("sourceFingerprint", {})
+            source_stat = source.path.stat()
+            if Path(str(request.get("sourceMedia", ""))).resolve() != source.path.resolve():
+                raise ValueError("Retry source path does not match the isolated job")
+            if int(fingerprint.get("sizeBytes", -1)) != source_stat.st_size or int(
+                fingerprint.get("modifiedNanoseconds", -1)
+            ) != source_stat.st_mtime_ns or int(
+                fingerprint.get("changedNanoseconds", -1)
+            ) != source_stat.st_ctime_ns or int(
+                fingerprint.get("device", -1)
+            ) != source_stat.st_dev or int(
+                fingerprint.get("fileId", -1)
+            ) != source_stat.st_ino:
+                raise ValueError(
+                    "Retry source media changed after the successful stage artifacts were made"
+                )
+            if str(request.get("lyrics", {}).get("sha256", "")) != lyrics.sha256:
+                raise ValueError("Retry lyrics do not match the isolated job snapshot")
+            interrupted_after_all_stages = existing["status"] == "running" and all(
+                stage["status"] in {"succeeded", "skipped"}
+                for stage in existing["stages"]
+            )
+            if interrupted_after_all_stages:
+                existing = store.update_job(
+                    resume_job_id,
+                    status="succeeded",
+                    currentStage=None,
+                    finishedAt=existing.get("finishedAt") or existing.get("updatedAt"),
+                    error=None,
+                )
+            if existing["status"] == "succeeded":
+                package = next(
+                    (
+                        Path(str(artifact.get("path", "")))
+                        for artifact in existing.get("artifacts", [])
+                        if artifact.get("kind") == "lrail-package"
+                    ),
+                    None,
+                )
+                if package is None or not package.is_file():
+                    raise ValueError("Completed retry job has no durable package artifact")
+                return existing
+            job = store.prepare_retry(resume_job_id, allow_interrupted=True)
+            return runner.run_claimed(job["jobId"])
+
     job = store.create(
         source.path,
         config["pipeline"],
         metadata,
-        upload,
+        False,
         source_input=source.input_value,
         source_origin=source.origin,
         source_kind_hint=source.media_kind_hint,
@@ -420,27 +409,24 @@ def _run(args: argparse.Namespace) -> int:
         lyrics_word_count=lyrics.word_count,
         project_root=root,
     )
+    return runner.run(job["jobId"])
+
+
+def _run(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _plan(args)
+    root = _root(args)
+    config, exit_code = _validated_config(root, args.json)
+    if config is None:
+        return exit_code
     if not args.json:
-        print_job_created(job)
-        print()
-    runner = PipelineRunner(
-        store,
-        handlers=build_local_handlers(root),
+        print(f"Processing local media: {args.source or 'input/'}")
+    final = _execute_job(
+        args,
+        config,
+        verify_models=True,
         on_update=None if args.json else _human_runner_callback,
     )
-    final = runner.run(job["jobId"])
-    cleanup_enabled = bool(
-        config["pipeline"]
-        .get("render", {})
-        .get("cleanupAfterUploadSuccess", True)
-    )
-    upload_succeeded = bool(final.get("request", {}).get("uploadEnabled")) and any(
-        item.get("kind") == "youtube-video"
-        and str(item.get("videoId", "")).strip()
-        for item in final.get("artifacts", [])
-    )
-    if final["status"] == "succeeded" and cleanup_enabled and upload_succeeded:
-        final["cleanup"] = _cleanup_successful_output(final)
     if args.json:
         print_json(final)
     else:
@@ -449,6 +435,201 @@ def _run(args: argparse.Namespace) -> int:
     return {"succeeded": 0, "blocked": 3, "failed": 4, "cancelled": 130}.get(
         final["status"], 4
     )
+
+
+_WORKER_CONTROL_FIELDS = {
+    "kind",
+    "requestId",
+    "jobId",
+    "status",
+    "stage",
+    "stageStatus",
+    "outputStream",
+    "packagePath",
+}
+
+
+def _valid_scalar_text(value: str) -> bool:
+    return not any(0xD800 <= ord(character) <= 0xDFFF for character in value)
+
+
+def _worker_fallback(payload: dict[str, Any], message: str) -> dict[str, Any]:
+    request_id = payload.get("requestId")
+    return {
+        "kind": "lyricrail.worker.failed",
+        "requestId": (
+            request_id
+            if isinstance(request_id, str) and _valid_scalar_text(request_id)
+            else ""
+        ),
+        "error": message,
+    }
+
+
+def _worker_safe_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    safe = sanitize_diagnostic_payload(payload)
+    if not isinstance(safe, dict):
+        return _worker_fallback(payload, "Worker output payload is invalid")
+    for field in _WORKER_CONTROL_FIELDS:
+        if field not in payload:
+            continue
+        value = payload[field]
+        if value is not None and not isinstance(value, str):
+            return _worker_fallback(
+                payload, f"Worker produced an invalid control field {field}"
+            )
+        if isinstance(value, str) and not _valid_scalar_text(value):
+            return _worker_fallback(
+                payload, f"Worker produced invalid Unicode in control field {field}"
+            )
+        safe[field] = value
+    return safe
+
+
+def _worker_emit(payload: dict[str, Any]) -> None:
+    try:
+        safe_payload = _worker_safe_payload(payload)
+        line = json.dumps(
+            safe_payload,
+            ensure_ascii=True,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        if len(line.encode("utf-8")) > MAX_DIAGNOSTIC_JSON_BYTES:
+            line = json.dumps(
+                _worker_fallback(payload, "Worker output exceeded its JSON bound"),
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+    except Exception:  # noqa: BLE001 - worker output must retain a final safe fallback
+        line = '{"kind":"lyricrail.worker.failed","requestId":"","error":"Worker output could not be encoded"}'
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+
+
+def _worker(args: argparse.Namespace) -> int:
+    root = _root(args)
+    try:
+        validation = validate_project(root)
+        if not validation["valid"]:
+            raise ValueError(
+                f"Runtime configuration has {validation['summary']['errors']} errors"
+            )
+        config = load_project_config(root)
+        assert_model_provenance(root, config["pipeline"], verify_hashes=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        message = str(exc)
+        code = (
+            "PROCESSING_MODELS_MISSING"
+            if message.startswith("Model provenance gate failed:")
+            else "PROCESSING_RUNTIME_STARTUP_FAILED"
+        )
+        _worker_emit(
+            {
+                "kind": "lyricrail.worker.fatal",
+                "error": {"code": code, "message": message},
+            }
+        )
+        return 2
+    _worker_emit({"kind": "lyricrail.worker.ready", "schemaVersion": 1})
+    for raw_line in sys.stdin:
+        if len(raw_line.encode("utf-8")) > 1024 * 1024:
+            _worker_emit(
+                {
+                    "kind": "lyricrail.worker.rejected",
+                    "error": "Worker request exceeds 1 MiB",
+                }
+            )
+            continue
+        request: Any = None
+        try:
+            request = json.loads(raw_line)
+            if not isinstance(request, dict):
+                raise ValueError("Worker request must be an object")
+            request_id = str(request.get("requestId", ""))
+            if not request_id or len(request_id) > 180:
+                raise ValueError("Worker requestId is invalid")
+            namespace = argparse.Namespace(
+                root=root,
+                json=True,
+                dry_run=False,
+                source=str(request["mediaPath"]),
+                lyrics=Path(str(request["lyricsPath"])),
+                start=request.get("startSeconds"),
+                end=request.get("endSeconds"),
+                title=request.get("title"),
+                artist=request.get("artist"),
+                composer=request.get("composer"),
+            )
+
+            def notify(job: dict[str, Any], stage: dict[str, Any] | None) -> None:
+                _worker_emit(
+                    {
+                        "kind": "lyricrail.worker.progress",
+                        "requestId": request_id,
+                        "jobId": job.get("jobId"),
+                        "status": job.get("status"),
+                        "progressPercent": job.get("progressPercent", 0),
+                        "stage": stage.get("key") if stage else None,
+                        "stageTitle": stage.get("title") if stage else None,
+                        "stageProgressPercent": (
+                            stage.get("progressPercent", 0) if stage else None
+                        ),
+                        "stageStatus": stage.get("status") if stage else None,
+                    }
+                )
+
+            def output(event: dict[str, Any]) -> None:
+                _worker_emit(
+                    {
+                        "kind": "lyricrail.worker.output",
+                        "requestId": request_id,
+                        "outputStream": event.get("stream", "stdout"),
+                        "stage": event.get("stage"),
+                        "outputText": event.get("text", ""),
+                    }
+                )
+
+            final = _execute_job(
+                namespace,
+                config,
+                verify_models=False,
+                on_update=notify,
+                on_output=output,
+                resume_job_id=(
+                    str(request.get("resumeJobId", "")).strip() or None
+                ),
+            )
+            package = next(
+                (
+                    artifact.get("path")
+                    for artifact in final.get("artifacts", [])
+                    if artifact.get("kind") == "lrail-package"
+                ),
+                None,
+            )
+            _worker_emit(
+                {
+                    "kind": "lyricrail.worker.completed",
+                    "requestId": request_id,
+                    "jobId": final.get("jobId"),
+                    "status": final.get("status"),
+                    "packagePath": package,
+                    "error": final.get("error"),
+                }
+            )
+        except (KeyError, OSError, RuntimeError, ValueError) as exc:
+            _worker_emit(
+                {
+                    "kind": "lyricrail.worker.failed",
+                    "requestId": str(request.get("requestId", ""))
+                    if isinstance(request, dict)
+                    else "",
+                    "error": str(exc),
+                }
+            )
+    return 0
 
 
 def _jobs(args: argparse.Namespace) -> int:
@@ -592,12 +773,24 @@ def _preview(args: argparse.Namespace) -> int:
     return 0
 
 
+def _revision_align(args: argparse.Namespace) -> int:
+    payload = align_revision_scope(
+        _root(args),
+        args.audio.resolve(),
+        args.timing.resolve(),
+        args.lyrics.resolve(),
+        args.output.resolve(),
+    )
+    print_json(payload) if args.json else print(f"Revision timing ready: {payload['output']}")
+    return 0
+
+
 def _error_payload(exc: Exception) -> dict[str, Any]:
     return {
         "kind": "lyricrail.error",
         "error": {
             "code": "CLI_ERROR",
-            "message": str(exc),
+            "message": redact_diagnostic_text(str(exc)),
             "type": exc.__class__.__name__,
         },
     }
@@ -618,6 +811,8 @@ def main(argv: list[str] | None = None) -> int:
         "cancel": _cancel,
         "retry": _retry,
         "preview": _preview,
+        "worker": _worker,
+        "revision-align": _revision_align,
     }
     try:
         return handlers[args.command](args)
@@ -627,7 +822,7 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "json", False):
             print_json(_error_payload(exc), stream=sys.stderr)
         else:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            print(f"ERROR: {redact_diagnostic_text(str(exc))}", file=sys.stderr)
         return 2
 
 

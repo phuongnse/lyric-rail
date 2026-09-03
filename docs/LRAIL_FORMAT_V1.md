@@ -122,7 +122,7 @@ duplicate, overlapping, reordered, out-of-bounds, or trailing undeclared data.
 ## Assets and compression
 
 Version 1 currently supports only `identity`. Media, JSON, and image bytes enter
-the package unchanged; compression decisions belong to the Studio media layer.
+the package unchanged; compression decisions belong to the local processing core.
 Readers reject every unknown content-encoding identifier. A later format minor
 may add compression only together with explicit output-size and ratio limits.
 
@@ -133,12 +133,30 @@ media/video.mp4                    silent playback picture
 audio/karaoke.m4a                  default instrumental playback audio
 audio/original-reference.m4a       AAC reference audio (packet-copy when eligible)
 audio/original-reference.mp3       MP3 reference audio (packet-copy when eligible)
+lyrics/authoritative.txt           exact user-confirmed UTF-8 lyric revision
 lyrics/timing.json                 syllable timing and singer roles
 lyrics/render-plan.json            dynamic two-line presentation schedule
 metadata/release.json              professional credits and source links
 presentation/template.json         role colors and layout policy
-sources/visual-license.json        selected asset pages/licenses, when present
+artwork/thumbnail-base.webp         representative frame without lyric overlay
+artwork/thumbnail.webp              first-line lyric library thumbnail
 ```
+
+The Player must authenticate and parse `presentation/template.json` before exposing
+presentation values to its WebView. The v1 dynamic renderer supports the declared
+`alternating-two-lines`, `top-left-bottom-right`, left-to-right syllable sweep contract;
+numeric geometry is bounded and colors are strict six-digit hex values. It consumes
+`slot`, `showRoleCue`, `roleCueReason`, `displayStart` and `vocalStart` from the
+authenticated render plan. It does not re-decide cue policy or replace the package style
+with application defaults.
+
+The authoritative text asset preserves the exact confirmed string, including blank
+lines, whitespace and line-ending choices; timing/render assets contain the derived
+sung-line structure. Both artwork assets are bounded to 1 MiB and authenticated and
+encrypted like every other asset. Current local production captures the base from a
+representative source frame, or a deterministic local background for audio-only media,
+then overlays the exact first non-empty authoritative lyric line. The base and final
+thumbnail remain optional for compatible packages created before the unified Player.
 
 Exactly one of the two `audio/original-reference.*` variants is present. The
 Player accepts only the exact logical-name/media-type pairs shown above and
@@ -166,3 +184,35 @@ Release builds enforce at least:
 Readers support a major version explicitly or reject it. Minor versions may add
 optional fields only. Cryptographic algorithms, envelope mechanisms, and content
 encodings use independent identifiers so they can be migrated without ambiguity.
+
+## Random-access sources
+
+Package validation is source-agnostic. A local file handle and a remote read-through
+cache implement the same bounded `length + read_exact_at` contract. Remote readers
+pin object length and provider version, reject short or malformed ranges, bound the
+HTTP body before allocation, and pass every returned chunk through the same AEAD path
+before releasing plaintext. Provider redirects, caching and retries do not weaken
+package bounds.
+
+## Transactional lyric revisions
+
+A revision keeps the package UUID and key envelope, copies unchanged asset ciphertext
+byte-for-byte and replaces only declared authoritative-text, timing, render,
+release-metadata and final-thumbnail assets. A compatible older package may add only
+the canonical authoritative-text or final-thumbnail asset during revision.
+Changed assets receive fresh asset UUIDs and nonces under the existing DEK. The
+manifest receives a fresh nonce and updated offsets/hashes. The complete source is
+authenticated before writing; the replacement is authenticated before a same-volume
+atomic switch, with the old package retained as rollback until the published path
+verifies. Revision requests cannot change a playback asset's declared role or add an
+arbitrary logical name.
+
+## Request-bound publication recovery
+
+The package format is unchanged, but the local pipeline binds durable publication to
+the strict pack request. `verify-request` opens the existing output with the device
+vault, compares authenticated manifest metadata and every ordered asset declaration,
+streams each current request input to match plaintext length and SHA-256, and then
+authenticates every encrypted chunk. This allows a retry to adopt an output left after
+package publication but before stage-state persistence. Any mismatch or corruption is
+preserved in place and fails closed; recovery never repacks over an existing path.

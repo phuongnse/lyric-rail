@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import sys
+import threading
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -327,6 +329,28 @@ def evaluate_audio_consensus(
     }
 
 
+_ALIGNER_CACHE: dict[tuple[str, str, str], "VietnameseSongAligner"] = {}
+_ALIGNER_CACHE_LOCK = threading.Lock()
+
+
+def get_vietnamese_song_aligner(
+    root: Path, config: dict[str, Any]
+) -> "VietnameseSongAligner":
+    if os.environ.get("LYRICRAIL_PERSISTENT_WORKER") != "1":
+        return VietnameseSongAligner(root, config)
+    key = (
+        str(root.resolve()),
+        str(config.get("forcedAlignmentModel", "nguyenvulebinh/lyric-alignment")),
+        str(config.get("forcedAlignmentModelRevision", "")).strip(),
+    )
+    with _ALIGNER_CACHE_LOCK:
+        cached = _ALIGNER_CACHE.get(key)
+        if cached is None:
+            cached = VietnameseSongAligner(root, config)
+            _ALIGNER_CACHE[key] = cached
+        return cached
+
+
 class VietnameseSongAligner:
     """Word-level CTC forced aligner trained specifically for Vietnamese songs."""
 
@@ -556,7 +580,7 @@ def force_align_full_song_lines(
     enforce_minimum_confidence: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build karaoke timing from the vocal stem and exact lyric text only."""
-    aligner = VietnameseSongAligner(root, config)
+    aligner = get_vietnamese_song_aligner(root, config)
     waveform = aligner.load_audio(vocal_path)
     duration = waveform.shape[1] / 16000
     ordinary_maximum_hold = float(config.get("maximumWordHoldSeconds", 3.5))
@@ -1055,8 +1079,9 @@ def force_align_song_lines(
     progress: Callable[[int, int], None] | None = None,
     final_word_end_seconds: float | None = None,
     trusted_timing_endpoints: bool = False,
+    target_line_indexes: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    aligner = VietnameseSongAligner(root, config)
+    aligner = get_vietnamese_song_aligner(root, config)
     waveform = aligner.load_audio(vocal_path)
     duration = waveform.shape[1] / 16000
     maximum_hold = float(config.get("maximumWordHoldSeconds", 3.5))
@@ -1081,6 +1106,12 @@ def force_align_song_lines(
     ]
 
     screens = [(index, min(index + 2, len(output))) for index in range(0, len(output), 2)]
+    if target_line_indexes is not None:
+        screens = [
+            (left, right)
+            for left, right in screens
+            if any(index in target_line_indexes for index in range(left, right))
+        ]
     for screen_number, (left, right) in enumerate(screens, start=1):
         target_lines = coarse[left:right]
         target_words = [
@@ -1269,9 +1300,10 @@ def force_align_song_lines(
         for line_position in range(left, right):
             line = output[line_position]
             count = len(line["syllables"])
-            line["syllables"] = target_aligned[cursor : cursor + count]
-            line["start"] = line["syllables"][0]["start"]
-            line["end"] = line["syllables"][-1]["end"]
+            if target_line_indexes is None or line_position in target_line_indexes:
+                line["syllables"] = target_aligned[cursor : cursor + count]
+                line["start"] = line["syllables"][0]["start"]
+                line["end"] = line["syllables"][-1]["end"]
             cursor += count
         screen_reports.append(
             {
@@ -1302,6 +1334,9 @@ def force_align_song_lines(
         "consensusAcceptedWordCount": len(consensus_accepted),
         "consensusAcceptedWords": consensus_accepted,
         "screens": screen_reports,
+        "targetLineIndexes": (
+            sorted(target_line_indexes) if target_line_indexes is not None else None
+        ),
     }
     if low_confidence:
         details = ", ".join(

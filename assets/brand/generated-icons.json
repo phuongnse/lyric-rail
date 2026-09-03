@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "source": "assets/brand/lyricrail-mark.svg",
+  "sourceSha256": "a5c085c84e9cdc8e1fb71daf6cd71adb69bb0ad60e3d091689ca13e7ac60ec08",
+  "generator": {
+    "command": "npm run brand:icons",
+    "package": "@tauri-apps/cli",
+    "version": "2.11.4"
+  },
+  "outputs": {
+    "apps/player/src-tauri/icons/128x128.png": "6214184cda6a742c85a302b8ffc4cc24ce374eb815c7fbad50501c87d76b2544",
+    "apps/player/src-tauri/icons/128x128@2x.png": "3c533d7b41d72b6336832b36c6c066adb1ceab937fcf116722f937890d156604",
+    "apps/player/src-tauri/icons/32x32.png": "d1e750d0469c5aabb856f6b921f960acdc20cfcd5d525afd644159924da5d62a",
+    "apps/player/src-tauri/icons/64x64.png": "c33671444c923d9a32875ee45404128e3e4efaf5c43c6066fcba3fc1f865bf9e",
+    "apps/player/src-tauri/icons/icon.icns": "a705c9157f39df353af09189c1f89ad9e3b5061d01bb53df863cbdcf70c81747",
+    "apps/player/src-tauri/icons/icon.ico": "75a5b86b5bc2d6c417b2cda5b75ccf23dc90d58e23f26063b395d1d9c36b047e",
+    "apps/player/src-tauri/icons/icon.png": "b788407067630b1405174547a4a3555d344270cde57b2c5c06867d3818f2ec56",
+    "apps/player/src-tauri/icons/Square107x107Logo.png": "a95258feb9c5188861735f206584b5f1d96849167789acc0da8afabe0e2e088a",
+    "apps/player/src-tauri/icons/Square142x142Logo.png": "39e7535ec031ae0e36556574cfdb4d9db9895cc6bc248626af4b7142fe1106bc",
+    "apps/player/src-tauri/icons/Square150x150Logo.png": "7c384117cd11b396ccc6b66b108c574d491b9508641c857526756d0de64e0206",
+    "apps/player/src-tauri/icons/Square284x284Logo.png": "cde3a29404828948193907d17651234d7af08f535ee2b4bfd242c2824f63a204",
+    "apps/player/src-tauri/icons/Square30x30Logo.png": "94023247f928d5d0b1e591eaf32df3deb85c5884a334666d225e5ea31af40fdc",
+    "apps/player/src-tauri/icons/Square310x310Logo.png": "9b533f74600338ef918bb45401cec490766dd748d04780e83d5185a838839c28",
+    "apps/player/src-tauri/icons/Square44x44Logo.png": "1bbaceb28e045c6e10b043d10ca64e2c01b0f65a09e895ed75025693b15fa6d8",
+    "apps/player/src-tauri/icons/Square71x71Logo.png": "19c43a962584b08f2b70791e38ece1093a23c2266e2e46bbebb3f565f32960d7",
+    "apps/player/src-tauri/icons/Square89x89Logo.png": "348f754bb4125a5371cb0a2e8e5949ae3f9bebecac689cbf83d2fb250da30004",
+    "apps/player/src-tauri/icons/StoreLogo.png": "3e32c7fa635d9839ee0d0bf19c9e0055f662b525bbef333ac78da985b89ac4f1"
+  }
+}

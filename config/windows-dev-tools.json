@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "architecture": "x64",
+  "wingetSource": "winget",
+  "packages": {
+    "python": {
+      "id": "Python.Python.3.12",
+      "installVersion": "3.12.10",
+      "requiredVersionPrefix": "3.12.",
+      "scope": "user"
+    },
+    "node": {
+      "id": "OpenJS.NodeJS.LTS",
+      "installVersion": "24.19.0",
+      "requiredVersionPrefix": "v24.",
+      "scope": "user"
+    },
+    "rustup": {
+      "id": "Rustlang.Rustup",
+      "installVersion": "1.29.0"
+    },
+    "visualStudioBuildTools": {
+      "id": "Microsoft.VisualStudio.2022.BuildTools",
+      "installVersion": "17.14.39",
+      "workload": "Microsoft.VisualStudio.Workload.VCTools"
+    },
+    "ffmpeg": {
+      "id": "Gyan.FFmpeg",
+      "installVersion": "9.0.1",
+      "scope": "user"
+    }
+  },
+  "rust": {
+    "stableToolchain": "1.98.0",
+    "nightlyToolchain": "nightly-2026-07-01",
+    "target": "x86_64-pc-windows-msvc",
+    "cargoAuditVersion": "0.22.2",
+    "cargoFuzzVersion": "0.13.2"
+  },
+  "python": {
+    "baseExtras": ["bootstrap-common"],
+    "cpuSeparationExtra": "separation-cpu",
+    "gpuSeparationExtra": "separation-gpu",
+    "runtime": {
+      "torchVersion": "2.13.0",
+      "torchaudioVersion": "2.11.0",
+      "torchvisionVersion": "0.28.0",
+      "onnxCpuVersion": "1.28.0",
+      "onnxGpuVersion": "1.29.0",
+      "cpuBuildTag": "cpu",
+      "cpuIndexUrl": "https://download.pytorch.org/whl/cpu",
+      "nvidiaBuildTag": "cu130",
+      "nvidiaCudaMajor": "13",
+      "nvidiaIndexUrl": "https://download.pytorch.org/whl/cu130"
+    }
+  }
+}

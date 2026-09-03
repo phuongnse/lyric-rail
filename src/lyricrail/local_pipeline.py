@@ -5,14 +5,18 @@ import hashlib
 import json
 import math
 import os
+import queue
 import re
 import shutil
+import statistics
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
 from .config import load_json, load_project_config, resolve_environment_path
-from .job import atomic_write_json
+from .job import atomic_write_json, replace_unpaired_surrogates
 from .lyric_input import normalize_authoritative_lyrics
 from .package_manifest import build_package_request, build_release_metadata
 from .runner import StageContext, StageHandler
@@ -20,16 +24,17 @@ from .song_alignment import (
     VietnameseSongAligner,
     _snapshot_path,
     force_align_full_song_lines,
+    get_vietnamese_song_aligner,
 )
-from .visuals import prepare_content_landscape
 
 
 PUNCTUATION_BREAK = re.compile(r"[.!?…,:;]$")
+LIGHTWEIGHT_REFLOW_EVIDENCE = (
+    "authoritative-punctuation+aligned-acoustic-pauses+"
+    "underthesea-pos+curated-lexical-units"
+)
 _DLL_DIRECTORY_HANDLES: list[Any] = []
-_VIETNAMESE_CONSTITUENCY_PIPELINES: dict[str, Any] = {}
-_VIETNAMESE_PUNCTUATION_ANALYZERS: dict[
-    str, Callable[[str], list[dict[str, Any]]]
-] = {}
+_SEPARATION_MODEL_CACHE: dict[tuple[str, str, str, int, bool], Any] = {}
 
 
 def _prepend_process_path(directory: Path) -> None:
@@ -84,8 +89,12 @@ def _landscape_video(context: StageContext) -> Path:
     return _shared_work(context) / "landscape.mp4"
 
 
-def _landscape_manifest(context: StageContext) -> Path:
-    return context.artifacts_directory / "landscape-license-manifest.json"
+def _thumbnail(context: StageContext) -> Path:
+    return context.artifacts_directory / "thumbnail.webp"
+
+
+def _thumbnail_base(context: StageContext) -> Path:
+    return context.artifacts_directory / "thumbnail-base.webp"
 
 
 def _player_video(context: StageContext) -> Path:
@@ -199,28 +208,234 @@ def _run(
     progress: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     context.checkpoint()
-    context.log("Command: " + subprocess.list2cmdline(command))
-    completed = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
+    actual_command = list(command)
+    executable = Path(actual_command[0]).stem.lower()
+    stdout_is_media = any(argument in {"-", "pipe:1"} for argument in actual_command[1:])
+    machine_progress = (
+        executable.startswith("ffmpeg")
+        and not executable.startswith("ffprobe")
+        and not stdout_is_media
     )
-    output = completed.stdout.strip()
-    if output:
-        context.log(output[-16000:])
-    if completed.returncode:
-        tail = "\n".join(output.splitlines()[-20:])
+    if machine_progress and "-progress" not in actual_command:
+        actual_command[1:1] = ["-progress", "pipe:1", "-nostats"]
+    initial_progress = 0.0
+    if machine_progress and progress is not None:
+        current_job = context.store.load(context.job_id)
+        current_stage = next(
+            (
+                stage
+                for stage in current_job.get("stages", [])
+                if stage["key"] == context.stage_key
+            ),
+            None,
+        )
+        if current_stage:
+            initial_progress = float(current_stage.get("progressPercent", 0.0))
+    context.log("Executable: " + (Path(actual_command[0]).name or "<executable>"))
+    redact_next_argument = False
+    for argument in actual_command[1:]:
+        lower = argument.lower()
+        sensitive_flag = lower in {
+            "--token",
+            "--password",
+            "--secret",
+            "--authorization",
+            "--credential",
+            "--api-key",
+        }
+        rendered = "<redacted>" if redact_next_argument else argument
+        context.log("Argument: " + rendered)
+        redact_next_argument = sensitive_flag and not redact_next_argument
+    process = subprocess.Popen(
+        actual_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    output_queue: queue.Queue[tuple[str, bytes] | None] = queue.Queue(maxsize=128)
+
+    def emit_output_line(message: str, *, stream: str, level: str = "INFO") -> None:
+        output_line = getattr(context, "output_line", None)
+        if callable(output_line):
+            output_line(message, stream=stream, level=level)
+        else:
+            context.log(message)
+
+    def read_output(stream: str, pipe: Any) -> None:
+        pending = bytearray()
+        truncated = False
+        read_available = getattr(pipe, "read1", pipe.read)
+        while True:
+            block = read_available(4096)
+            if not block:
+                break
+            for byte in block:
+                if byte in {10, 13}:
+                    if pending:
+                        if truncated:
+                            pending.extend(b" ... <line truncated>")
+                        output_queue.put((stream, bytes(pending)))
+                    pending.clear()
+                    truncated = False
+                elif not truncated:
+                    if len(pending) < 16 * 1024:
+                        pending.append(byte)
+                    else:
+                        truncated = True
+        if pending:
+            if truncated:
+                pending.extend(b" ... <line truncated>")
+            output_queue.put((stream, bytes(pending)))
+        output_queue.put(None)
+
+    readers = [
+        threading.Thread(target=read_output, args=("stdout", process.stdout), daemon=True),
+        threading.Thread(target=read_output, args=("stderr", process.stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    captured_stdout: list[str] = []
+    captured_stderr: list[str] = []
+    captured_bytes = {"stdout": 0, "stderr": 0}
+    readers_done = 0
+    duration = _command_duration_seconds(actual_command)
+    last_machine_progress = 0.0
+
+    def terminate_and_drain() -> None:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        deadline = time.monotonic() + 5.0
+        while any(reader.is_alive() for reader in readers) and time.monotonic() < deadline:
+            try:
+                output_queue.get(timeout=0.05)
+            except queue.Empty:
+                pass
+        for reader in readers:
+            reader.join(timeout=0.2)
+
+    while process.poll() is None or readers_done < len(readers):
+        try:
+            item = output_queue.get(timeout=0.1)
+        except queue.Empty:
+            item = b""
+        try:
+            if item is None:
+                readers_done += 1
+            elif item:
+                stream, encoded_line = item
+                line = encoded_line.decode("utf-8", errors="replace")
+                if captured_bytes[stream] < 1024 * 1024:
+                    remaining = 1024 * 1024 - captured_bytes[stream]
+                    encoded = line.encode("utf-8")[:remaining]
+                    target = captured_stdout if stream == "stdout" else captured_stderr
+                    target.append(encoded.decode("utf-8", errors="replace"))
+                    captured_bytes[stream] += len(encoded)
+                if machine_progress and stream == "stdout" and (
+                    line.startswith("out_time_") or line.startswith("progress=")
+                ):
+                    emit_output_line(line, stream="progress")
+                    if progress is not None and duration:
+                        elapsed = _ffmpeg_progress_seconds(line)
+                        now = time.monotonic()
+                        if elapsed is not None and (
+                            now - last_machine_progress >= 0.2 or elapsed >= duration
+                        ):
+                            context.progress(
+                                min(
+                                    float(progress),
+                                    initial_progress
+                                    + (float(progress) - initial_progress)
+                                    * min(1.0, elapsed / duration),
+                                ),
+                                f"FFmpeg {min(100.0, elapsed / duration * 100.0):.1f}%",
+                            )
+                            last_machine_progress = now
+                else:
+                    emit_output_line(
+                        line,
+                        stream=stream,
+                        level="WARNING" if stream == "stderr" else "INFO",
+                    )
+            if process.poll() is None:
+                context.checkpoint()
+        except BaseException:
+            terminate_and_drain()
+            raise
+    for reader in readers:
+        reader.join(timeout=5)
+    returncode = process.wait()
+    output = "\n".join(captured_stdout).strip()
+    error_output = "\n".join(captured_stderr).strip()
+    completed = subprocess.CompletedProcess(
+        actual_command,
+        returncode,
+        stdout=output,
+        stderr=error_output,
+    )
+    if returncode:
+        diagnostics = error_output or output
+        tail = "\n".join(diagnostics.splitlines()[-20:])
         raise RuntimeError(
-            f"Command failed with exit code {completed.returncode}: {tail}"
+            f"Command failed with exit code {returncode}: {tail}"
         )
     if progress is not None:
         context.progress(progress)
     context.checkpoint()
     return completed
+
+
+def _time_value_seconds(value: str) -> float | None:
+    try:
+        parts = [float(part) for part in value.split(":")]
+    except ValueError:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return None
+
+
+def _command_duration_seconds(command: list[str]) -> float | None:
+    for option in ("-t", "-to"):
+        if option in command:
+            index = command.index(option)
+            if index + 1 < len(command):
+                duration = _time_value_seconds(command[index + 1])
+                if duration is not None and duration > 0:
+                    if option == "-to" and "-ss" in command:
+                        start_index = command.index("-ss")
+                        if start_index + 1 < len(command):
+                            start = _time_value_seconds(command[start_index + 1]) or 0.0
+                            duration -= start
+                    return duration if duration > 0 else None
+    return None
+
+
+def _ffmpeg_progress_seconds(line: str) -> float | None:
+    key, separator, value = line.partition("=")
+    if not separator:
+        return None
+    try:
+        if key == "out_time_us":
+            return max(0.0, float(value) / 1_000_000.0)
+        if key == "out_time_ms":
+            # FFmpeg historically labels this field ms while emitting microseconds.
+            return max(0.0, float(value) / 1_000_000.0)
+        if key == "out_time":
+            return _time_value_seconds(value)
+    except ValueError:
+        return None
+    return None
 
 
 def _ffmpeg(root: Path) -> str:
@@ -1256,7 +1471,7 @@ def refine_lyric_leakage(
     lexical_target_word_indexes: list[int] = []
     if lexical_enabled and project_root is not None:
         try:
-            lexical_aligner = VietnameseSongAligner(
+            lexical_aligner = get_vietnamese_song_aligner(
                 project_root, alignment_settings or {}
             )
             lexical_vocal_waveform = lexical_aligner.load_audio(vocal_path)
@@ -2536,7 +2751,7 @@ def _load_lyrics(context: StageContext) -> list[dict[str, Any]]:
         raise ValueError("The job lyric snapshot path is invalid.")
     if not snapshot.is_file():
         raise ValueError(f"The job lyric snapshot is missing: {snapshot}")
-    text, lines = normalize_authoritative_lyrics(snapshot.read_text(encoding="utf-8"))
+    text, lines = normalize_authoritative_lyrics(snapshot.read_bytes().decode("utf-8"))
     observed_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     expected_hash = str(lyric_request.get("sha256", "")).strip()
     if not expected_hash or observed_hash != expected_hash:
@@ -2571,6 +2786,33 @@ def _load_lyrics(context: StageContext) -> list[dict[str, Any]]:
     return [_artifact(output, "lyrics-source", "Authoritative lyric input")]
 
 
+def apply_embedded_media_metadata(
+    metadata: dict[str, Any], probe_data: dict[str, Any]
+) -> bool:
+    source_metadata = metadata.setdefault("source", {})
+    format_tags = {
+        str(key).casefold(): str(value).strip()
+        for key, value in probe_data.get("format", {}).get("tags", {}).items()
+        if str(value).strip()
+    }
+    tag_fields = {
+        "songTitle": ("title",),
+        "referenceArtist": ("artist", "album_artist", "albumartist"),
+        "composer": ("composer",),
+    }
+    changed = False
+    for destination, candidates in tag_fields.items():
+        if str(source_metadata.get(destination, "")).strip():
+            continue
+        value = next((format_tags[key] for key in candidates if key in format_tags), "")
+        if value:
+            source_metadata[destination] = value
+            changed = True
+    if changed:
+        source_metadata["identityMethod"] = "embedded-media-tags"
+    return changed
+
+
 def _probe(context: StageContext) -> list[dict[str, Any]]:
     root = _project_root(context)
     source = _source_media(context)
@@ -2600,6 +2842,10 @@ def _probe(context: StageContext) -> list[dict[str, Any]]:
     )
     if not audio_stream:
         raise ValueError("The source must contain an audio stream.")
+    metadata_path = context.job_directory / "metadata.json"
+    metadata = load_json(metadata_path) if metadata_path.is_file() else {"source": {}}
+    if apply_embedded_media_metadata(metadata, data):
+        atomic_write_json(metadata_path, metadata)
     directives = load_source_directives(source)
     duration = float(data.get("format", {}).get("duration") or 0)
     request = _job(context).get("request", {})
@@ -2717,18 +2963,35 @@ def _separate_stems(context: StageContext) -> list[dict[str, Any]]:
     torch.load = compatible_torch_load
     try:
         def execute(preset: str | None) -> tuple[Any, list[str]]:
-            active = Separator(
-                output_dir=str(output_dir),
-                model_file_dir=str(model_dir),
-                output_format="FLAC",
-                sample_rate=int(config.get("sampleRate", 48000)),
-                use_autocast=bool(config.get("useAutocast", True)),
-                ensemble_preset=preset,
+            sample_rate = int(config.get("sampleRate", 48000))
+            use_autocast = bool(config.get("useAutocast", True))
+            cache_key = (
+                str(model_dir.resolve()),
+                model,
+                preset or "",
+                sample_rate,
+                use_autocast,
             )
-            if preset:
-                active.load_model()
+            persistent_worker = os.environ.get("LYRICRAIL_PERSISTENT_WORKER") == "1"
+            active = _SEPARATION_MODEL_CACHE.get(cache_key) if persistent_worker else None
+            if active is None:
+                active = Separator(
+                    output_dir=str(output_dir),
+                    model_file_dir=str(model_dir),
+                    output_format="FLAC",
+                    sample_rate=sample_rate,
+                    use_autocast=use_autocast,
+                    ensemble_preset=preset,
+                )
+                if preset:
+                    active.load_model()
+                else:
+                    active.load_model(model_filename=model)
+                if persistent_worker:
+                    _SEPARATION_MODEL_CACHE[cache_key] = active
             else:
-                active.load_model(model_filename=model)
+                context.log(f"Reusing loaded separation model {model_label}")
+                active.output_dir = str(output_dir)
             context.progress(15, "Separating vocals and instrumental")
             separated = active.separate(
                 str(_source_audio(context)),
@@ -2791,14 +3054,6 @@ def _separate_stems(context: StageContext) -> list[dict[str, Any]]:
             + json.dumps(quality["errors"])
         )
     del separator
-    gc.collect()
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except ImportError:
-        pass
     context.progress(100, "Stem separation complete")
     return [
         _artifact(_instrumental(context), "instrumental", "Karaoke instrumental"),
@@ -3267,204 +3522,6 @@ def _vietnamese_protected_word_boundaries(
     return protected, boundary_penalties, report
 
 
-def load_vietnamese_punctuation_analyzer(
-    model_directory: Path,
-) -> Callable[[str], list[dict[str, Any]]]:
-    """Load a pinned word-preserving Vietnamese punctuation model.
-
-    Only punctuation probabilities are returned. The model is never allowed
-    to replace, normalize, capitalize, or generate an authoritative lyric word.
-    """
-    key = str(model_directory.resolve())
-    analyzer = _VIETNAMESE_PUNCTUATION_ANALYZERS.get(key)
-    if analyzer is not None:
-        return analyzer
-    try:
-        import numpy as np
-        import onnxruntime as ort
-        from transformers import AutoTokenizer
-    except ImportError as exc:
-        raise RuntimeError(
-            "Production semantic lyric layout requires onnxruntime and transformers"
-        ) from exc
-    model_path = model_directory / "vibert-capu.onnx"
-    label_path = model_directory / "vocabulary" / "labels.txt"
-    if not model_path.is_file() or not label_path.is_file():
-        raise RuntimeError(
-            "Pinned Vietnamese punctuation model is incomplete at "
-            f"{model_directory}"
-        )
-    tokenizer = AutoTokenizer.from_pretrained(
-        str(model_directory),
-        local_files_only=True,
-        do_basic_tokenize=False,
-        do_lower_case=False,
-    )
-    tokenizer.add_tokens(["$START"])
-    tokenizer.vocab["$START"] = len(tokenizer) - 1
-    session = ort.InferenceSession(
-        str(model_path), providers=["CPUExecutionProvider"]
-    )
-    labels = label_path.read_text(encoding="utf-8").splitlines()
-    append_indexes = {
-        index
-        for index, label in enumerate(labels)
-        if label.startswith("$APPEND_")
-    }
-    keep_index = labels.index("$KEEP")
-
-    def analyze(text: str) -> list[dict[str, Any]]:
-        words = [
-            re.sub(
-                r"[^0-9a-zà-ỹđ]+",
-                "",
-                value.casefold(),
-                flags=re.IGNORECASE,
-            )
-            for value in text.split()
-        ]
-        if not words or any(not word for word in words):
-            raise ValueError(
-                "Punctuation analysis must map losslessly to lyric words"
-            )
-        model_words = ["$START", *words]
-        encoded = tokenizer(
-            [model_words],
-            is_split_into_words=True,
-            return_tensors="np",
-            padding=True,
-            truncation=False,
-            add_special_tokens=False,
-        )
-        word_ids = encoded.word_ids(batch_index=0)
-        offsets = [0]
-        for index in range(1, len(word_ids)):
-            if word_ids[index] != word_ids[index - 1]:
-                offsets.append(index)
-        inputs = {
-            name: encoded[name].astype(np.int64)
-            for name in ("input_ids", "attention_mask", "token_type_ids")
-        }
-        inputs["input_offsets"] = np.asarray([offsets], dtype=np.int64)
-        logits = session.run(None, inputs)[0][0]
-        shifted = logits - logits.max(axis=-1, keepdims=True)
-        probabilities = np.exp(shifted)
-        probabilities /= probabilities.sum(axis=-1, keepdims=True)
-        if len(probabilities) != len(model_words):
-            raise ValueError("Punctuation model returned an invalid word count")
-        output: list[dict[str, Any]] = []
-        for word_index, row in enumerate(probabilities[1:], start=1):
-            action_index = int(row.argmax())
-            if action_index not in append_indexes:
-                continue
-            output.append(
-                {
-                    "boundary": word_index,
-                    "mark": labels[action_index].removeprefix("$APPEND_"),
-                    "probability": float(row[action_index]),
-                    "keepProbability": float(row[keep_index]),
-                    "margin": float(row[action_index] - row[keep_index]),
-                }
-            )
-        return output
-
-    _VIETNAMESE_PUNCTUATION_ANALYZERS[key] = analyze
-    return analyze
-
-
-def load_vietnamese_constituency_analyzer(
-    model_directory: Path,
-    punctuation_model_directory: Path | None = None,
-) -> Callable[[str], dict[str, Any]]:
-    """Load the pinned local Stanza Vietnamese constituency parser once."""
-    key = str(model_directory.resolve())
-    pipeline = _VIETNAMESE_CONSTITUENCY_PIPELINES.get(key)
-    if pipeline is None:
-        try:
-            import stanza
-            import torch
-        except ImportError as exc:
-            raise RuntimeError(
-                "Production semantic lyric layout requires stanza==1.14.0"
-            ) from exc
-        resources = model_directory / "resources.json"
-        if not resources.is_file():
-            raise RuntimeError(
-                "Pinned Vietnamese constituency models are missing; run the "
-                "model installer before production rendering"
-            )
-        try:
-            pipeline = stanza.Pipeline(
-                "vi",
-                model_dir=str(model_directory),
-                processors="tokenize,pos,lemma,depparse,constituency",
-                lemma_use_identity=True,
-                tokenize_no_ssplit=True,
-                use_gpu=bool(torch.cuda.is_available()),
-                download_method=None,
-                verbose=False,
-            )
-        except PermissionError as exc:
-            raise RuntimeError(
-                "Vietnamese constituency models exist but Windows denied read "
-                f"access to {model_directory}"
-            ) from exc
-        _VIETNAMESE_CONSTITUENCY_PIPELINES[key] = pipeline
-
-    punctuation_analyzer = (
-        load_vietnamese_punctuation_analyzer(punctuation_model_directory)
-        if punctuation_model_directory is not None
-        else None
-    )
-
-    def analyze(text: str) -> dict[str, Any]:
-        document = pipeline(text)
-        if len(document.sentences) != 1:
-            raise ValueError("Vietnamese lyric parser must return exactly one sentence")
-        sentence = document.sentences[0]
-        tokens = [
-            {
-                "text": word.text,
-                "pos": word.upos,
-                "head": word.head,
-                "deprel": word.deprel,
-            }
-            for word in sentence.words
-        ]
-        constituents: list[dict[str, Any]] = []
-
-        def walk(node: Any, cursor: int) -> int:
-            children = list(getattr(node, "children", []))
-            if not children:
-                return cursor + 1
-            start = cursor
-            for child in children:
-                cursor = walk(child, cursor)
-            constituents.append(
-                {
-                    "label": str(getattr(node, "label", "")),
-                    "startToken": start,
-                    "endToken": cursor,
-                }
-            )
-            return cursor
-
-        leaf_count = walk(sentence.constituency, 0)
-        if leaf_count != len(tokens):
-            raise ValueError(
-                "Vietnamese constituency leaves do not match parsed lyric tokens"
-            )
-        return {
-            "tokens": tokens,
-            "constituents": constituents,
-            "punctuationBoundaries": (
-                punctuation_analyzer(text) if punctuation_analyzer else []
-            ),
-        }
-
-    return analyze
-
-
 def lyric_font_size_policy(
     layout: dict[str, Any], base_font_size: int
 ) -> tuple[bool, int, int]:
@@ -3512,6 +3569,11 @@ def reflow_aligned_lyric_lines(
         or target_words < 1
     ):
         raise ValueError("Legacy lyric wrapping limits must be positive")
+    authoritative_word_stream = [
+        str(syllable.get("text", ""))
+        for line in lines
+        for syllable in line.get("syllables", [])
+    ]
     grouped: dict[int, list[dict[str, Any]]] = {}
     group_order: list[int] = []
     for index, line in enumerate(lines, start=1):
@@ -3839,6 +3901,13 @@ def reflow_aligned_lyric_lines(
     for index, line in enumerate(output, start=1):
         line["index"] = index
         line["slot"] = "top" if index % 2 else "bottom"
+    reflowed_word_stream = [
+        str(syllable.get("text", ""))
+        for line in output
+        for syllable in line.get("syllables", [])
+    ]
+    if reflowed_word_stream != authoritative_word_stream:
+        raise ValueError("Lyric reflow changed the authoritative word stream")
     return output, {
         "policy": (
             "semantic-pause-visual-width-reflow"
@@ -3857,6 +3926,16 @@ def reflow_aligned_lyric_lines(
         "lineCountBefore": len(lines),
         "lineCountAfter": len(output),
         "orphanLineCount": orphan_line_count,
+        "authoritativeWordStreamPreserved": True,
+        "semanticEvidence": (
+            LIGHTWEIGHT_REFLOW_EVIDENCE
+            if width_mode and semantic_analyzer is None
+            else (
+                "explicit-test-analyzer"
+                if width_mode
+                else "authoritative-punctuation+aligned-acoustic-pauses+curated-break-penalties"
+            )
+        ),
         "chosenBreaks": chosen_breaks,
         "inferredSemanticBoundaries": inferred_semantic_boundaries,
         "protectedLexicalUnits": protected_lexical_units,
@@ -4031,7 +4110,7 @@ def _align_authoritative_lyrics(context: StageContext) -> list[dict[str, Any]]:
     if source.get("mode") != "authoritative-input":
         raise ValueError("Authoritative lyric input is required for alignment.")
     reference_lines = [
-        str(item.get("text", "")).strip()
+        str(item.get("text", ""))
         for item in source.get("lines", [])
         if str(item.get("text", "")).strip()
     ]
@@ -4145,15 +4224,6 @@ def _align_authoritative_lyrics(context: StageContext) -> list[dict[str, Any]]:
             available_render_width * base_font_size / minimum_font_size
         )
         measure_text = lambda text: float(font.getlength(text)) * scale_x
-        semantic_analyzer = load_vietnamese_constituency_analyzer(
-            root / "models" / "stanza",
-            root
-            / "models"
-            / "huggingface"
-            / "models--welcomyou--vibert-capu-onnx"
-            / "snapshots"
-            / "a7754d037f4a9e29f7f3224f27acb60149eab874",
-        )
         lines, line_reflow = reflow_aligned_lyric_lines(
             lines,
             maximum_words=None,
@@ -4165,8 +4235,8 @@ def _align_authoritative_lyrics(context: StageContext) -> list[dict[str, Any]]:
             measure_text=measure_text,
             maximum_line_width=semantic_reflow_width,
             hard_maximum_line_width=hard_reflow_width,
-            semantic_analyzer=semantic_analyzer,
         )
+        line_reflow["generatedPunctuation"] = False
         fitted_sizes: list[int] = []
         for line in lines:
             width = measure_text(str(line["text"]))
@@ -4951,7 +5021,7 @@ def _colead_lexical_evidence(
     lines: list[dict[str, Any]],
     settings: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    aligner = VietnameseSongAligner(root, settings)
+    aligner = get_vietnamese_song_aligner(root, settings)
     lead_waveform = aligner.load_audio(lead_path)
     backing_waveform = aligner.load_audio(backing_path)
     duration = lead_waveform.shape[1] / 16000
@@ -6729,6 +6799,74 @@ def smooth_roles_with_semantic_group_embeddings(
     return resolved, report
 
 
+def resolve_mixed_group_lines_from_unanimous_clause_roles(
+    line_roles: list[str],
+    reference_groups: list[int],
+    clauses: list[dict[str, Any]],
+    clause_roles: list[str | None],
+    *,
+    proven_transition_groups: set[int],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Prefer complete semantic-clause evidence over arbitrary display splits."""
+    if len(line_roles) != len(reference_groups) or len(clauses) != len(clause_roles):
+        raise ValueError("Semantic role consistency evidence has inconsistent lengths")
+    resolved = list(line_roles)
+    by_group: dict[int, list[int]] = {}
+    for index, group in enumerate(reference_groups):
+        by_group.setdefault(int(group), []).append(index)
+    report: list[dict[str, Any]] = []
+    for group, line_indexes in by_group.items():
+        observed = sorted({resolved[index] for index in line_indexes})
+        if len(observed) < 2 or group in proven_transition_groups:
+            continue
+        clause_indexes = [
+            index
+            for index, clause in enumerate(clauses)
+            if int(clause["referenceGroup"]) == group
+        ]
+        if not clause_indexes:
+            continue
+        covered_lines: set[int] = set()
+        valid_coverage = True
+        for clause_index in clause_indexes:
+            for reference in clauses[clause_index].get("wordReferences", []):
+                line_index = int(reference.get("line", 0)) - 1
+                if (
+                    line_index < 0
+                    or line_index >= len(reference_groups)
+                    or int(reference_groups[line_index]) != group
+                ):
+                    valid_coverage = False
+                    break
+                covered_lines.add(line_index)
+            if not valid_coverage:
+                break
+        candidate_roles = {clause_roles[index] for index in clause_indexes}
+        if (
+            not valid_coverage
+            or covered_lines != set(line_indexes)
+            or len(candidate_roles) != 1
+            or not candidate_roles <= {"male", "female"}
+        ):
+            continue
+        role = next(iter(candidate_roles))
+        changed = [index for index in line_indexes if resolved[index] != role]
+        for index in changed:
+            resolved[index] = role
+        report.append(
+            {
+                "referenceGroup": group,
+                "role": role,
+                "previousRoles": observed,
+                "lineIndexes": [index + 1 for index in line_indexes],
+                "clauseIndexes": [index + 1 for index in clause_indexes],
+                "changedLineIndexes": [index + 1 for index in changed],
+                "evidence": "unanimous-full-coverage-semantic-clause-roles",
+            }
+        )
+    return resolved, report
+
+
 def build_semantic_clause_segments(
     lines: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[list[int]]]:
@@ -6777,91 +6915,207 @@ def build_semantic_clause_segments(
     return clauses, mapping
 
 
-def resolve_ambiguous_semantic_clause_roles(
-    roles: list[str | None],
-    diagnostics: list[dict[str, Any]],
-    pitch_medians: list[float | None],
-    cluster_state: dict[str, Any],
-    settings: dict[str, Any],
-) -> tuple[list[str | None], list[dict[str, Any]]]:
-    """Resolve only low-margin clauses confirmed by independent absolute pitch."""
-    if not (len(roles) == len(diagnostics) == len(pitch_medians)):
-        raise ValueError("Semantic clause role evidence must have equal lengths")
-    resolved = list(roles)
-    report: list[dict[str, Any]] = []
-    minimum_margin = float(
-        settings.get("minimumSemanticClausePitchResolutionMargin", 0.05)
-    )
-    male_maximum = float(settings.get("maleMaximumMedianHz", 235.0))
-    female_minimum = float(settings.get("femaleMinimumMedianHz", 275.0))
-    role_by_cluster = cluster_state["roleByCluster"]
-    for index, role in enumerate(resolved):
-        if role in {"male", "female"}:
-            continue
-        pitch = pitch_medians[index]
-        pitch_role = (
-            "male"
-            if pitch is not None and float(pitch) <= male_maximum
-            else "female"
-            if pitch is not None and float(pitch) >= female_minimum
-            else None
-        )
-        cluster = int(diagnostics[index]["cluster"])
-        candidate_role = str(role_by_cluster[cluster])
-        margin = float(diagnostics[index].get("cosineMargin", 0.0))
-        if margin < minimum_margin or pitch_role != candidate_role:
-            continue
-        resolved[index] = candidate_role
-        report.append(
-            {
-                "clause": index + 1,
-                "role": candidate_role,
-                "cosineMargin": round(margin, 4),
-                "medianPitchHz": round(float(pitch), 2),
-                "evidence": "voiceprint-candidate-confirmed-by-absolute-pitch",
-            }
-        )
-    return resolved, report
-
-
-def resolve_ambiguous_semantic_clause_roles_from_group_context(
+def resolve_ambiguous_semantic_clause_roles_from_group_embeddings(
     roles: list[str | None],
     clauses: list[dict[str, Any]],
+    group_roles: dict[int, str | None],
+    group_diagnostics: dict[int, dict[str, Any]],
 ) -> tuple[list[str | None], list[dict[str, Any]]]:
-    """Use an unambiguous sibling clause from the same lyric phrase.
-
-    Punctuation can leave a short clause such as ``Tôi vẫn nhớ,`` too brief for
-    a confident standalone voiceprint.  A reference group comes from one
-    authoritative lyric line, so a sole male/female identity among its sibling
-    clauses is stronger evidence than guessing from a neighboring phrase.
-    """
+    """Use only an accepted embedding for the same authoritative lyric group."""
     if len(roles) != len(clauses):
-        raise ValueError("Semantic clause group evidence must match clause roles")
+        raise ValueError("Semantic clause aggregate evidence must match clause roles")
     resolved = list(roles)
-    roles_by_group: dict[int, set[str]] = {}
-    for role, clause in zip(roles, clauses):
-        if role in {"male", "female"}:
-            group = int(clause["referenceGroup"])
-            roles_by_group.setdefault(group, set()).add(role)
     report: list[dict[str, Any]] = []
     for index, (role, clause) in enumerate(zip(resolved, clauses)):
         if role in {"male", "female"}:
             continue
         group = int(clause["referenceGroup"])
-        candidates = roles_by_group.get(group, set())
-        if len(candidates) != 1:
+        candidate = group_roles.get(group)
+        diagnostics = group_diagnostics.get(group, {})
+        if candidate not in {"male", "female"} or diagnostics.get("role") != candidate:
             continue
-        inferred_role = next(iter(candidates))
-        resolved[index] = inferred_role
+        resolved[index] = candidate
         report.append(
             {
                 "clause": index + 1,
                 "referenceGroup": group,
-                "role": inferred_role,
-                "evidence": "unambiguous-sibling-clause-in-authoritative-lyric-group",
+                "role": candidate,
+                "cosineMargin": diagnostics.get("cosineMargin"),
+                "evidence": "accepted-authoritative-group-voiceprint",
             }
         )
     return resolved, report
+
+
+def resolve_ambiguous_semantic_group_roles_from_pitch_consensus(
+    group_roles: dict[int, str | None],
+    group_diagnostics: dict[int, dict[str, Any]],
+    line_pitch_medians: list[float | None],
+    reference_groups: list[int],
+    cluster_state: dict[str, Any],
+    settings: dict[str, Any],
+) -> tuple[dict[int, str | None], dict[int, dict[str, Any]], list[dict[str, Any]]]:
+    """Accept a full-group role only when aggregate pitch and cluster candidate agree."""
+    if len(line_pitch_medians) != len(reference_groups):
+        raise ValueError("Semantic-group pitch evidence must match line groups")
+    resolved_roles = dict(group_roles)
+    resolved_diagnostics = {
+        group: dict(diagnostics) for group, diagnostics in group_diagnostics.items()
+    }
+    male_maximum = float(settings.get("maleMaximumMedianHz", 235.0))
+    female_minimum = float(settings.get("femaleMinimumMedianHz", 275.0))
+    minimum_ratio = float(settings.get("minimumSemanticGroupPitchConsensusRatio", 0.5))
+    if not 0 < minimum_ratio <= 1:
+        raise ValueError("Semantic-group pitch consensus ratio must be in (0, 1]")
+
+    def pitch_role(value: float) -> str | None:
+        if value <= male_maximum:
+            return "male"
+        if value >= female_minimum:
+            return "female"
+        return None
+
+    report: list[dict[str, Any]] = []
+    for group, diagnostics in resolved_diagnostics.items():
+        if resolved_roles.get(group) in {"male", "female"}:
+            continue
+        indexes = [
+            index
+            for index, candidate in enumerate(reference_groups)
+            if int(candidate) == int(group)
+        ]
+        if len(indexes) < 2:
+            continue
+        pitches = [
+            float(line_pitch_medians[index])
+            for index in indexes
+            if line_pitch_medians[index] is not None
+            and math.isfinite(float(line_pitch_medians[index]))
+        ]
+        classified_roles = [role for pitch in pitches if (role := pitch_role(pitch))]
+        classified = set(classified_roles)
+        ratio = len(classified_roles) / max(1, len(indexes))
+        if not pitches or len(classified) != 1 or ratio < minimum_ratio:
+            continue
+        aggregate_pitch = float(statistics.median(pitches))
+        aggregate_role = pitch_role(aggregate_pitch)
+        cluster = diagnostics.get("cluster")
+        candidate_role = (
+            cluster_state.get("roleByCluster", {}).get(int(cluster))
+            if isinstance(cluster, int)
+            else None
+        )
+        role = next(iter(classified))
+        if aggregate_role != role or candidate_role != role:
+            continue
+        resolved_roles[group] = role
+        diagnostics["role"] = role
+        diagnostics["resolutionEvidence"] = "group-pitch-confirmed-cluster-candidate"
+        diagnostics["aggregatePitchHz"] = round(aggregate_pitch, 2)
+        diagnostics["classifiedPitchLineRatio"] = round(ratio, 4)
+        report.append(
+            {
+                "referenceGroup": int(group),
+                "role": role,
+                "aggregatePitchHz": round(aggregate_pitch, 2),
+                "linePitchMediansHz": [round(pitch, 2) for pitch in pitches],
+                "classifiedPitchLineRatio": round(ratio, 4),
+                "minimumClassifiedPitchLineRatio": minimum_ratio,
+                "cluster": cluster,
+                "embeddingCosineMargin": diagnostics.get("cosineMargin"),
+                "evidence": "group-pitch-confirmed-cluster-candidate",
+            }
+        )
+    return resolved_roles, resolved_diagnostics, report
+
+
+def resolve_ambiguous_semantic_clause_roles_from_line_consensus(
+    roles: list[str | None],
+    clauses: list[dict[str, Any]],
+    raw_line_roles: list[str],
+    line_diagnostics: list[dict[str, Any]],
+    *,
+    minimum_margin: float,
+) -> tuple[list[str | None], list[dict[str, Any]]]:
+    """Use unanimous confident lines containing every exact clause word."""
+    if len(roles) != len(clauses) or len(raw_line_roles) != len(line_diagnostics):
+        raise ValueError("Semantic clause line evidence has inconsistent lengths")
+    if not math.isfinite(minimum_margin) or minimum_margin < 0:
+        raise ValueError("Semantic clause line consensus margin must be non-negative")
+    resolved = list(roles)
+    report: list[dict[str, Any]] = []
+    for index, (role, clause) in enumerate(zip(resolved, clauses)):
+        if role in {"male", "female"}:
+            continue
+        line_indexes = sorted(
+            {
+                int(reference.get("line", 0)) - 1
+                for reference in clause.get("wordReferences", [])
+            }
+        )
+        if not line_indexes or any(
+            line_index < 0 or line_index >= len(raw_line_roles)
+            for line_index in line_indexes
+        ):
+            continue
+        observations = [
+            (raw_line_roles[line_index], line_diagnostics[line_index])
+            for line_index in line_indexes
+        ]
+        candidates = {candidate for candidate, _ in observations}
+        margins = [
+            float(diagnostics.get("cosineMargin", -math.inf))
+            for _, diagnostics in observations
+        ]
+        if (
+            len(candidates) != 1
+            or not candidates <= {"male", "female"}
+            or not all(
+                diagnostics.get("rawRole") == candidate
+                for candidate, diagnostics in observations
+            )
+            or any(not math.isfinite(margin) or margin < minimum_margin for margin in margins)
+        ):
+            continue
+        candidate = next(iter(candidates))
+        resolved[index] = candidate
+        report.append(
+            {
+                "clause": index + 1,
+                "referenceGroup": int(clause["referenceGroup"]),
+                "role": candidate,
+                "lineIndexes": [line_index + 1 for line_index in line_indexes],
+                "minimumCosineMargin": round(min(margins), 4),
+                "requiredCosineMargin": round(minimum_margin, 4),
+                "evidence": "unanimous-confident-containing-line-voiceprints",
+            }
+        )
+    return resolved, report
+
+
+ROLE_INFERENCE_CHECKPOINTS = (
+    ("line-identity", 15.0, "Measured lead-line pitch and speaker identity"),
+    ("lexical-evidence", 35.0, "Aligned lead, backing and gender evidence to exact words"),
+    ("speaker-clusters", 45.0, "Established singer identity clusters"),
+    ("clause-evidence", 55.0, "Measured semantic-clause speaker evidence"),
+    ("group-evidence", 65.0, "Resolved authoritative-group speaker evidence"),
+    ("word-identity", 80.0, "Measured word-level lead and backing identity"),
+    ("colead-decoding", 95.0, "Decoded independently supported co-lead words"),
+    ("complete", 100.0, "Completed automatic vocal-role inference"),
+)
+
+
+def _report_role_inference_checkpoint(
+    on_progress: Callable[[float, str], None] | None,
+    key: str,
+) -> None:
+    if on_progress is None:
+        return
+    for candidate, percent, message in ROLE_INFERENCE_CHECKPOINTS:
+        if candidate == key:
+            on_progress(percent, message)
+            return
+    raise ValueError(f"Unknown role inference checkpoint: {key}")
 
 
 def infer_automatic_vocal_roles(
@@ -6872,6 +7126,8 @@ def infer_automatic_vocal_roles(
     gender_female_path: Path,
     lines: list[dict[str, Any]],
     settings: dict[str, Any],
+    *,
+    on_progress: Callable[[float, str], None] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Infer male/female/duet from timbre identity plus same-lyric evidence."""
     import numpy as np
@@ -6880,6 +7136,7 @@ def infer_automatic_vocal_roles(
     lead_embeddings, backing_embeddings = _speaker_line_embeddings(
         root, [lead_path, backing_path], lines, settings
     )
+    _report_role_inference_checkpoint(on_progress, "line-identity")
     groups = [int(line.get("referenceGroup", index + 1)) for index, line in enumerate(lines)]
     line_alignment_settings = dict(settings)
     line_alignment_settings["coLeadSemanticGroupAlignment"] = False
@@ -6898,6 +7155,7 @@ def infer_automatic_vocal_roles(
     phrase_lexical = _colead_lexical_evidence(
         root, lead_path, backing_path, lines, phrase_alignment_settings
     )
+    _report_role_inference_checkpoint(on_progress, "lexical-evidence")
     backing_identity_indexes = select_backing_identity_candidates(lexical, settings)
     identity_embeddings = np.asarray(lead_embeddings, dtype=np.float32)
     identity_pitches = list(pitch_medians)
@@ -6921,6 +7179,7 @@ def infer_automatic_vocal_roles(
     identity_roles, speaker_report, cluster_state = cluster_speaker_embeddings(
         identity_embeddings, identity_pitches, identity_groups, settings
     )
+    _report_role_inference_checkpoint(on_progress, "speaker-clusters")
     lead_roles = identity_roles[: len(lines)]
     raw_lead_roles = [
         str(item.get("rawRole", item["role"]))
@@ -6954,69 +7213,7 @@ def infer_automatic_vocal_roles(
     semantic_clause_roles, semantic_clause_diagnostics = assign_speaker_embeddings(
         semantic_clause_embeddings, cluster_state, semantic_clause_settings
     )
-    semantic_clause_pitches = _line_pitch_medians(
-        lead_path, semantic_clauses, settings
-    )
-    semantic_clause_roles, semantic_clause_pitch_resolutions = (
-        resolve_ambiguous_semantic_clause_roles(
-            semantic_clause_roles,
-            semantic_clause_diagnostics,
-            semantic_clause_pitches,
-            cluster_state,
-            settings,
-        )
-    )
-    semantic_clause_roles, semantic_clause_group_resolutions = (
-        resolve_ambiguous_semantic_clause_roles_from_group_context(
-            semantic_clause_roles,
-            semantic_clauses,
-        )
-    )
-    ambiguous_clauses = [
-        {
-            **semantic_clauses[index],
-            "diagnostics": semantic_clause_diagnostics[index],
-        }
-        for index, role in enumerate(semantic_clause_roles)
-        if role not in {"male", "female"}
-    ]
-    if (
-        ambiguous_clauses
-        and bool(settings.get("failOnAmbiguousSemanticClauseRole", True))
-    ):
-        raise ValueError(
-            "Ambiguous lead singer for a semantic lyric clause: "
-            + json.dumps(ambiguous_clauses, ensure_ascii=False)
-        )
-    for line_index, clause_indexes in enumerate(semantic_clause_mapping):
-        words = lexical[line_index].get("wordEvidence", [])
-        if len(words) != len(clause_indexes):
-            raise RuntimeError(
-                "Semantic clause speaker evidence must match every lyric word"
-            )
-        for word, clause_index in zip(words, clause_indexes):
-            word["semanticClauseRole"] = semantic_clause_roles[clause_index]
-            word["semanticClauseIndex"] = clause_index + 1
-    speaker_report["semanticClauseAssignments"] = [
-        {
-            **clause,
-            "role": semantic_clause_roles[index],
-            "medianPitchHz": (
-                round(float(semantic_clause_pitches[index]), 2)
-                if semantic_clause_pitches[index] is not None
-                else None
-            ),
-            "diagnostics": semantic_clause_diagnostics[index],
-        }
-        for index, clause in enumerate(semantic_clauses)
-    ]
-    speaker_report["semanticClausePitchResolutions"] = (
-        semantic_clause_pitch_resolutions
-    )
-    speaker_report["semanticClauseGroupResolutions"] = (
-        semantic_clause_group_resolutions
-    )
-    speaker_report["ambiguousSemanticClauses"] = ambiguous_clauses
+    _report_role_inference_checkpoint(on_progress, "clause-evidence")
     group_order = list(dict.fromkeys(groups))
     group_segments: list[dict[str, float]] = []
     for group in group_order:
@@ -7043,6 +7240,78 @@ def infer_automatic_vocal_roles(
     semantic_group_diagnostics = dict(
         zip(group_order, semantic_group_diagnostics_list)
     )
+    (
+        semantic_group_roles,
+        semantic_group_diagnostics,
+        semantic_group_pitch_resolutions,
+    ) = resolve_ambiguous_semantic_group_roles_from_pitch_consensus(
+        semantic_group_roles,
+        semantic_group_diagnostics,
+        pitch_medians,
+        groups,
+        cluster_state,
+        settings,
+    )
+    semantic_clause_roles, semantic_clause_aggregate_resolutions = (
+        resolve_ambiguous_semantic_clause_roles_from_group_embeddings(
+            semantic_clause_roles,
+            semantic_clauses,
+            semantic_group_roles,
+            semantic_group_diagnostics,
+        )
+    )
+    semantic_clause_roles, semantic_clause_line_resolutions = (
+        resolve_ambiguous_semantic_clause_roles_from_line_consensus(
+            semantic_clause_roles,
+            semantic_clauses,
+            raw_lead_roles,
+            speaker_report["lines"][: len(lines)],
+            minimum_margin=float(
+                settings.get("minimumSemanticClauseLineConsensusMargin", 0.05)
+            ),
+        )
+    )
+    _report_role_inference_checkpoint(on_progress, "group-evidence")
+    ambiguous_clauses = [
+        {
+            **semantic_clauses[index],
+            "diagnostics": semantic_clause_diagnostics[index],
+        }
+        for index, role in enumerate(semantic_clause_roles)
+        if role not in {"male", "female"}
+    ]
+    if ambiguous_clauses:
+        raise ValueError(
+            "Ambiguous lead singer for a semantic lyric clause: "
+            + json.dumps(ambiguous_clauses, ensure_ascii=False)
+        )
+    if any(role not in {"male", "female"} for role in semantic_clause_roles):
+        raise RuntimeError("Semantic clause role validation failed before word projection")
+    for line_index, clause_indexes in enumerate(semantic_clause_mapping):
+        words = lexical[line_index].get("wordEvidence", [])
+        if len(words) != len(clause_indexes):
+            raise RuntimeError(
+                "Semantic clause speaker evidence must match every lyric word"
+            )
+        for word, clause_index in zip(words, clause_indexes):
+            word["semanticClauseRole"] = semantic_clause_roles[clause_index]
+            word["semanticClauseIndex"] = clause_index + 1
+    speaker_report["semanticClauseAssignments"] = [
+        {
+            **clause,
+            "role": semantic_clause_roles[index],
+            "diagnostics": semantic_clause_diagnostics[index],
+        }
+        for index, clause in enumerate(semantic_clauses)
+    ]
+    speaker_report["semanticClauseAggregateResolutions"] = (
+        semantic_clause_aggregate_resolutions
+    )
+    speaker_report["semanticGroupPitchResolutions"] = semantic_group_pitch_resolutions
+    speaker_report["semanticClauseLineConsensusResolutions"] = (
+        semantic_clause_line_resolutions
+    )
+    speaker_report["ambiguousSemanticClauses"] = ambiguous_clauses
     lead_roles, semantic_group_smoothing = (
         smooth_roles_with_semantic_group_embeddings(
             lead_roles,
@@ -7088,6 +7357,7 @@ def infer_automatic_vocal_roles(
     word_backing_roles, word_backing_report = assign_speaker_embeddings(
         word_backing_embeddings, cluster_state, word_settings
     )
+    _report_role_inference_checkpoint(on_progress, "word-identity")
     cursor = 0
     for line in lexical:
         for word in line.get("wordEvidence", []):
@@ -7182,6 +7452,15 @@ def infer_automatic_vocal_roles(
     proven_transition_groups = {
         int(item["referenceGroup"]) for item in transition_extensions
     }
+    lead_roles, semantic_clause_consistency_resolutions = (
+        resolve_mixed_group_lines_from_unanimous_clause_roles(
+            lead_roles,
+            groups,
+            semantic_clauses,
+            semantic_clause_roles,
+            proven_transition_groups=proven_transition_groups,
+        )
+    )
     unresolved_semantic_role_changes: list[dict[str, Any]] = []
     by_group: dict[int, list[int]] = {}
     for index, group in enumerate(groups):
@@ -7236,6 +7515,7 @@ def infer_automatic_vocal_roles(
         ),
         "selectionPolicy": "highest-line-and-word-speaker-evidence",
         "unresolvedChanges": unresolved_semantic_role_changes,
+        "clauseResolutions": semantic_clause_consistency_resolutions,
         "provenTransitionGroups": sorted(proven_transition_groups),
     }
     if fail_on_semantic_change and unresolved_semantic_role_changes:
@@ -7253,6 +7533,7 @@ def infer_automatic_vocal_roles(
                 word_colead_report["ambiguousSemanticTails"], ensure_ascii=False
             )
         )
+    _report_role_inference_checkpoint(on_progress, "colead-decoding")
     for line, decoded in zip(lexical, decoded_word_roles):
         for word, is_colead in zip(line.get("wordEvidence", []), decoded):
             word["coLead"] = bool(is_colead)
@@ -7266,6 +7547,7 @@ def infer_automatic_vocal_roles(
         item["assignedRole"] = roles[index]
     # Line-level co-lead candidates remain diagnostic. The actual duet color is
     # applied only after the word-sequence decoder establishes exact boundaries.
+    _report_role_inference_checkpoint(on_progress, "complete")
     return lead_roles, {
         "schemaVersion": 1,
         "status": "passed",
@@ -7815,7 +8097,12 @@ def _classify_roles(context: StageContext) -> list[dict[str, Any]]:
             _role_gender_female(context),
             lyrics["lines"],
             config,
+            on_progress=lambda percent, message: context.progress(
+                35.0 + 0.55 * percent,
+                message,
+            ),
         )
+        context.progress(90, "Applying validated word-level vocal roles")
         automatic_report["stems"] = stem_report
         atomic_write_json(_role_analysis_file(context), automatic_report)
     elif bool(config.get("pitchAssistance", True)) and not authoritative:
@@ -7866,63 +8153,44 @@ def _prepare_visuals(context: StageContext) -> list[dict[str, Any]]:
         return []
 
     root = _project_root(context)
-    settings = load_project_config(root)["pipeline"].get("audioOnlyVisuals", {})
-    if not bool(settings.get("enabled", True)):
-        raise ValueError("Audio-only sources require pipeline.audioOnlyVisuals.enabled=true")
-    if str(settings.get("provider", "mixkit")).casefold() != "mixkit":
-        raise ValueError("Only the Mixkit audio-only visual provider is currently supported")
-
-    lyric_payload = load_json(_lyrics(context))
-    lyric_text = "\n".join(
-        str(line.get("text", "")).strip()
-        for line in lyric_payload.get("lines", [])
-        if str(line.get("text", "")).strip()
-    )
-    job = _job(context)
-    metadata_path = context.job_directory / "metadata.json"
-    metadata = load_json(metadata_path) if metadata_path.is_file() else {}
-    title = str(metadata.get("source", {}).get("songTitle", "")).strip()
-    if not title:
-        title = _source_media(context).stem
-
     output = _landscape_video(context)
-    visual_work = context.work_directory
-    visual_work.mkdir(parents=True, exist_ok=True)
-
-    def report(current: int, total: int, asset_title: str) -> None:
-        context.checkpoint()
-        percent = 5.0 + 65.0 * current / max(1, total)
-        context.progress(percent, f"Downloading landscape {current}/{total}: {asset_title}")
-
-    context.progress(3, f"Selecting fresh landscapes for {title}")
-    plan = prepare_content_landscape(
-        ffmpeg=_ffmpeg(root),
-        ffprobe=_ffprobe(root),
-        title=title,
-        lyrics=lyric_text,
-        duration_seconds=float(probe["outputDurationSeconds"]),
-        output=output,
-        work_directory=visual_work,
-        target_scene_seconds=float(settings.get("targetSceneSeconds", 22.0)),
-        minimum_scenes=int(settings.get("minimumScenes", 6)),
-        maximum_scenes=int(settings.get("maximumScenes", 16)),
-        fps=int(settings.get("fps", 30)),
-        crossfade_seconds=float(settings.get("crossfadeSeconds", 0.6)),
-        progress=report,
-        run=lambda command: _run(context, command, progress=96),
+    output.parent.mkdir(parents=True, exist_ok=True)
+    context.progress(10, "Creating deterministic local background")
+    _run(
+        context,
+        [
+            _ffmpeg(root),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x090d16:s=1920x1080:r=2",
+            "-t",
+            f"{float(probe['outputDurationSeconds']):.6f}",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-tune",
+            "stillimage",
+            "-g",
+            "4",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ],
+        progress=100,
     )
-    plan["jobId"] = job["jobId"]
-    plan["songTitle"] = title
-    atomic_write_json(_landscape_manifest(context), plan)
-    context.progress(100, "Created song-specific landscape montage")
-    return [
-        _artifact(output, "video-song-landscape", "Song-specific landscape montage"),
-        _artifact(
-            _landscape_manifest(context),
-            "stock-license-manifest",
-            "Landscape sources and license manifest",
-        ),
-    ]
+    return [_artifact(output, "video-local-background", "Deterministic local background")]
 
 
 def _ass_color(hex_color: str, alpha: str = "00") -> str:
@@ -8809,12 +9077,139 @@ def _filter_path(path: Path) -> str:
     return value.replace(":", "\\:")
 
 
+def _create_thumbnail(context: StageContext) -> list[dict[str, Any]]:
+    lyrics = load_json(_lyrics(context))
+    exact_text = _input_lyrics_snapshot(context).read_bytes().decode("utf-8")
+    text = next((line for line in exact_text.splitlines() if line.strip()), None)
+    first = next(
+        (line for line in lyrics.get("lines", []) if str(line.get("text", "")).strip()),
+        None,
+    )
+    if first is None or text is None:
+        raise ValueError("A thumbnail requires one non-empty authoritative lyric line")
+    if any(ord(character) < 32 and character not in {"\t"} for character in text):
+        raise ValueError("The first lyric line contains unsupported control characters")
+    timestamp = max(0.0, float(first.get("start", 0.0)))
+    root = _project_root(context)
+    pipeline = load_project_config(root)["pipeline"]
+    template = load_json(root / str(pipeline.get("render", {}).get("template")))
+    font = str(template.get("font", {}).get("family", "Be Vietnam Pro"))
+    ass = context.work_directory / "thumbnail.ass"
+    ass.parent.mkdir(parents=True, exist_ok=True)
+    ass.write_text(
+        "\n".join(
+            [
+                "[Script Info]",
+                "ScriptType: v4.00+",
+                "PlayResX: 640",
+                "PlayResY: 360",
+                "WrapStyle: 0",
+                "ScaledBorderAndShadow: yes",
+                "",
+                "[V4+ Styles]",
+                "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
+                f"Style: Thumb,{font},34,&H00FFFFFF,&H00FFFFFF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,38,38,30,1",
+                "",
+                "[Events]",
+                "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
+                f"Dialogue: 0,0:00:00.00,0:00:10.00,Thumb,,0,0,0,,{_ass_escape(text)}",
+                "",
+            ]
+        ),
+        encoding="utf-8-sig",
+        newline="\n",
+    )
+    base = _thumbnail_base(context)
+    output = _thumbnail(context)
+    base_filters = (
+        "scale=640:360:force_original_aspect_ratio=decrease,"
+        "pad=640:360:(ow-iw)/2:(oh-ih)/2:color=0x090d16"
+    )
+    fonts_directory = root / str(
+        pipeline.get("render", {}).get("fontsDirectory", "assets/fonts")
+    )
+    context.progress(10, "Rendering first-line lyric thumbnail")
+    _run(
+        context,
+        [
+            _ffmpeg(root),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-ss",
+            f"{timestamp:.6f}",
+            "-i",
+            str(_player_video(context)),
+            "-frames:v",
+            "1",
+            "-vf",
+            base_filters,
+            "-c:v",
+            "libwebp",
+            "-quality",
+            "82",
+            "-compression_level",
+            "6",
+            str(base),
+        ],
+        progress=50,
+    )
+    overlay_filter = f"ass='{_filter_path(ass)}'"
+    if fonts_directory.is_dir():
+        overlay_filter += f":fontsdir='{_filter_path(fonts_directory)}'"
+    _run(
+        context,
+        [
+            _ffmpeg(root),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-i",
+            str(base),
+            "-frames:v",
+            "1",
+            "-vf",
+            overlay_filter,
+            "-c:v",
+            "libwebp",
+            "-quality",
+            "82",
+            "-compression_level",
+            "6",
+            str(output),
+        ],
+        progress=100,
+    )
+    if any(
+        not path.is_file() or path.stat().st_size == 0 or path.stat().st_size > 1024 * 1024
+        for path in (base, output)
+    ):
+        raise RuntimeError("Thumbnail output is empty or exceeds 1 MiB")
+    return [
+        _artifact(base, "thumbnail-base", "Representative thumbnail frame"),
+        _artifact(output, "thumbnail", "First authoritative lyric line thumbnail"),
+    ]
+
+
 def friendly_delivery_filename(metadata: dict[str, Any], source: Path) -> str:
     source_info = metadata.get("source", {})
-    title = str(source_info.get("songTitle", "")).strip()
-    artist = str(source_info.get("referenceArtist", "")).strip()
+    title = replace_unpaired_surrogates(
+        str(source_info.get("songTitle", ""))
+    ).strip()
+    artist = replace_unpaired_surrogates(
+        str(source_info.get("referenceArtist", ""))
+    ).strip()
     if not title:
-        title = re.sub(r"\s*\[source\]\s*$", "", source.stem, flags=re.IGNORECASE)
+        title = re.sub(
+            r"\s*\[source\]\s*$",
+            "",
+            replace_unpaired_surrogates(source.stem),
+            flags=re.IGNORECASE,
+        )
     stem = f"{title} - {artist}" if artist else title
     # Portable subset for Windows/macOS/Linux and conservative path length.
     stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", stem)
@@ -9131,6 +9526,36 @@ def _render_player_media(context: StageContext) -> list[dict[str, Any]]:
     ]
 
 
+def _ensure_request_bound_package(
+    context: StageContext,
+    native_cli: str,
+    request_path: Path,
+    output: Path,
+) -> None:
+    if output.is_symlink():
+        raise RuntimeError(
+            f"Existing package output is a symlink and was preserved: {output}"
+        )
+    if output.exists():
+        if not output.is_file():
+            raise RuntimeError(
+                f"Existing package output is not a regular file and was preserved: {output}"
+            )
+        context.progress(80, "Authenticating the interrupted package output")
+    else:
+        context.progress(5, "Encrypting and authenticating the LyricRail package")
+        _run(
+            context,
+            [native_cli, "pack", "--request", str(request_path), "--output", str(output)],
+            progress=80,
+        )
+    _run(
+        context,
+        [native_cli, "verify-request", str(output), "--request", str(request_path)],
+        progress=100,
+    )
+
+
 def _package_lrail(context: StageContext) -> list[dict[str, Any]]:
     root = _project_root(context)
     config = load_project_config(root)["pipeline"]
@@ -9154,14 +9579,16 @@ def _package_lrail(context: StageContext) -> list[dict[str, Any]]:
         playback_video=_player_video(context),
         karaoke_audio=_player_karaoke_audio(context),
         original_audio=_player_original_audio(context),
+        authoritative_lyrics=_input_lyrics_snapshot(context),
         lyrics_timing=_lyrics(context),
         render_plan=_karaoke_render_plan(context),
         release_metadata_file=release_path,
         presentation_template=template_path,
+        thumbnail=_thumbnail(context),
+        thumbnail_base=_thumbnail_base(context),
         minimum_player_version=str(
             package_config.get("minimumPlayerVersion", "0.8.0")
         ),
-        visual_license_manifest=_landscape_manifest(context),
     )
     request_path = context.artifacts_directory / "package-request.json"
     atomic_write_json(request_path, package_request)
@@ -9169,16 +9596,8 @@ def _package_lrail(context: StageContext) -> list[dict[str, Any]]:
     output = context.job_directory.parent / friendly_package_filename(
         delivery_metadata, _source_media(context), str(job.get("jobId") or "")
     )
-    if output.exists():
-        raise RuntimeError(f"Refusing to overwrite an existing package: {output}")
     native_cli = _lrail_cli(root)
-    context.progress(5, "Encrypting and authenticating the LyricRail package")
-    _run(
-        context,
-        [native_cli, "pack", "--request", str(request_path), "--output", str(output)],
-        progress=80,
-    )
-    _run(context, [native_cli, "verify", str(output)], progress=100)
+    _ensure_request_bound_package(context, native_cli, request_path, output)
     return [
         _artifact(
             output,
@@ -9268,165 +9687,9 @@ def _cleanup_verified_intermediates(context: StageContext) -> list[dict[str, Any
     ]
 
 
-def _render_master(context: StageContext) -> list[dict[str, Any]]:
-    root = _project_root(context)
-    config = load_project_config(root)["pipeline"]
-    quality = config["quality"]["youtubeUpload"]
-    probe_data = load_json(_probe_file(context))
-    probe = probe_data["lyricRail"]
-    video_stream = next(
-        (
-            stream
-            for stream in probe_data.get("streams", [])
-            if stream.get("codec_type") == "video"
-        ),
-        None,
-    )
-    frame_rate = str(
-        (video_stream or {}).get("avg_frame_rate")
-        or (video_stream or {}).get("r_frame_rate")
-        or config.get("audioOnlyVisuals", {}).get("fps", 30)
-        or "30/1"
-    )
-    if "/" not in frame_rate:
-        frame_rate += "/1"
-    numerator, denominator = (float(part) for part in frame_rate.split("/", 1))
-    gop_frames = max(1, round((numerator / denominator) / 2))
-    has_video = bool(probe.get("hasVideo"))
-    if has_video:
-        source = _source_media(context)
-    else:
-        source = _landscape_video(context)
-        if not source.is_file():
-            raise ValueError("Audio-only source has no prepared landscape montage")
-    metadata_path = context.job_directory / "metadata.json"
-    metadata = load_json(metadata_path) if metadata_path.is_file() else {}
-    output = context.job_directory.parent / friendly_delivery_filename(
-        metadata, _source_media(context)
-    )
-    temporary = output.with_name(f".{output.stem}.partial{output.suffix}")
-    duration = float(probe["outputDurationSeconds"])
-    render = config.get("render", {})
-    tail_padding = max(0.0, float(render.get("tailPaddingSeconds", 0.0)))
-    tail_fade = max(0.0, float(render.get("tailFadeSeconds", 0.0)))
-    fade_start = max(0.0, duration - tail_fade)
-    fonts_directory = root / str(render.get("fontsDirectory", "assets/fonts"))
-    trim_start = float(probe["trimStartSeconds"]) if has_video else 0.0
-    video_filter = (
-        f"trim=start={trim_start:.6f}:duration={duration:.6f},"
-        f"setpts=PTS-STARTPTS,ass='{_filter_path(_ass(context))}'"
-    )
-    if fonts_directory.is_dir():
-        video_filter += f":fontsdir='{_filter_path(fonts_directory)}'"
-    audio_filter = f"atrim=duration={duration:.6f},asetpts=PTS-STARTPTS"
-    if tail_fade > 0:
-        audio_filter += f",afade=t=out:st={fade_start:.6f}:d={tail_fade:.6f}"
-    if tail_padding > 0:
-        video_filter += f",tpad=stop_mode=clone:stop_duration={tail_padding:.6f}"
-        audio_filter += f",apad=pad_dur={tail_padding:.6f}"
-    total_duration = duration + tail_padding
-    context.progress(3, "Rendering MP4 with karaoke and original audio tracks")
-    temporary.unlink(missing_ok=True)
-    _run(
-        context,
-        [
-            _ffmpeg(root),
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-i",
-            str(source),
-            "-i",
-            str(_instrumental(context)),
-            "-i",
-            str(_source_audio(context)),
-            "-filter_complex",
-            (
-                f"[0:v:0]{video_filter}[v];"
-                f"[1:a:0]{audio_filter}[karaoke];"
-                f"[2:a:0]{audio_filter}[original]"
-            ),
-            "-map",
-            "[v]",
-            "-map",
-            "[karaoke]",
-            "-map",
-            "[original]",
-            "-c:v",
-            str(quality.get("videoCodec", "libx264")),
-            "-profile:v",
-            str(quality.get("profile", "high")),
-            "-preset",
-            str(quality.get("preset", "slow")),
-            "-crf",
-            str(quality.get("crf", 16)),
-            "-pix_fmt",
-            str(quality.get("pixelFormat", "yuv420p")),
-            "-color_primaries",
-            str(quality.get("colorPrimaries", "bt709")),
-            "-color_trc",
-            str(quality.get("colorTransfer", "bt709")),
-            "-colorspace",
-            str(quality.get("colorSpace", "bt709")),
-            "-color_range",
-            str(quality.get("colorRange", "tv")),
-            "-bf",
-            str(quality.get("bFrames", 2)),
-            "-flags",
-            "+cgop",
-            "-g",
-            str(gop_frames),
-            "-sc_threshold",
-            "0",
-            "-c:a",
-            str(quality.get("audioCodec", "aac")),
-            "-b:a",
-            str(quality.get("audioBitrate", "384k")),
-            "-ar",
-            str(quality.get("audioSampleRate", 48000)),
-            "-ac",
-            str(quality.get("audioChannels", 2)),
-            "-metadata:s:a:0",
-            "title=Karaoke",
-            "-metadata:s:a:0",
-            "handler_name=Karaoke",
-            "-metadata:s:a:0",
-            "language=vie",
-            "-disposition:a:0",
-            "default",
-            "-metadata:s:a:1",
-            "title=Original",
-            "-metadata:s:a:1",
-            "handler_name=Original",
-            "-metadata:s:a:1",
-            "language=vie",
-            "-disposition:a:1",
-            "0",
-            "-t",
-            f"{total_duration:.6f}",
-            "-movflags",
-            "+faststart",
-            str(temporary),
-        ],
-        progress=100,
-    )
-    os.replace(temporary, output)
-    context.log(f"Published dual-audio YouTube upload: {output}")
-    return [
-        _artifact(
-            output,
-            "video-youtube-upload",
-            "YouTube upload MP4 with karaoke and original audio tracks",
-        )
-    ]
-
-
 def build_local_handlers(root: Path) -> dict[str, StageHandler]:
-    from .youtube_pipeline import build_youtube_handlers
-
-    handlers: dict[str, StageHandler] = {
+    del root
+    return {
         "probe": _probe,
         "extract_audio": _extract_audio,
         "separate_stems": _separate_stems,
@@ -9436,9 +9699,7 @@ def build_local_handlers(root: Path) -> dict[str, StageHandler]:
         "prepare_visuals": _prepare_visuals,
         "render_subtitles": _render_subtitles,
         "render_player_media": _render_player_media,
+        "create_thumbnail": _create_thumbnail,
         "package_lrail": _package_lrail,
         "cleanup_intermediates": _cleanup_verified_intermediates,
-        "render_master": _render_master,
     }
-    handlers.update(build_youtube_handlers(root))
-    return handlers

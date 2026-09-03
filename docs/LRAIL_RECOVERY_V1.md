@@ -1,6 +1,7 @@
 # LyricRail library recovery bundle v1
 
-Status: implemented for the Windows 0.8 release candidate.
+Status: native adapters are implemented for Windows, macOS and Linux; each claimed
+release platform still requires its real-host credential and terminal drill.
 
 ## Purpose and extension
 
@@ -9,8 +10,8 @@ single 256-bit device library master. It contains no song, media, package DEK,
 or clear credential. It is separate from the optional per-package
 `recovery-v1` key slot.
 
-The native `lrail` process owns all passphrase input. Studio opens that process
-in a separate native console; passphrases never enter WebView JavaScript, IPC
+The native `lrail` process owns all passphrase input. Player opens it in a Windows
+console, macOS Terminal session, or an installed Linux terminal; passphrases never enter WebView JavaScript, IPC
 arguments, environment variables, logs, or filenames.
 
 ## Binary envelope
@@ -61,6 +62,12 @@ Restore is intentionally conservative:
 This means a bundle cannot silently replace a valid but different library. If
 the OS key and all verified recovery material are lost, recovery is impossible.
 
+For a new device whose songs exist only on Google Drive, Player first downloads one
+selected `.lrail` object as ciphertext into a bounded recovery cache. It then launches
+the same native restore command against that package. The passphrase never crosses
+frontend JavaScript. After the package verifies and the key is stored, normal cloud
+playback returns to progressive range reads and does not prompt again.
+
 ## Native commands
 
 ```text
@@ -70,6 +77,6 @@ lrail recovery-verify library.lrail-recovery
 lrail recovery-restore library.lrail-recovery --library D:\Karaoke
 ```
 
-Export asks twice; verify and restore ask once. Studio invokes the same signed
+Export asks twice; verify and restore ask once. Player invokes the same signed
 native executable and leaves the console open long enough to inspect success or
 failure.

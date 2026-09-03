@@ -132,6 +132,12 @@ jobs:
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Validate native Windows bootstrap plan
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $plan = .\scripts\bootstrap_windows.ps1 -Plan | ConvertFrom-Json
+          if ($plan.platform -ne "windows-x86_64" -or $plan.mutatesSystem) { throw "Invalid bootstrap plan" }
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - run: rustup default stable
       - name: Run governed Rust profile

@@ -26,6 +26,7 @@ token*.json
 __pycache__/
 *.py[cod]
 .venv/
+.dev/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -42,7 +43,6 @@ target/
 fuzz/artifacts/
 apps/**/node_modules/
 apps/**/dist/
-apps/studio/src-tauri/windows/payload/*.exe
 *.lrail
 
 # Generated release artifacts stay out of source history. Publish signed
@@ -52,7 +52,6 @@ release/windows/*.msi
 release/windows/SHA256SUMS.txt
 release/windows/stale-*/
 *.cdx.json
-!release/sbom/*.cdx.json
 *.egg-info/
 
 # Editors and operating systems

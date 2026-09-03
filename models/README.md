@@ -3,3 +3,5 @@
 Runtime engines download model weights into this directory. Model files are machine-local, may be several gigabytes, and are intentionally excluded from Git.
 
 LyricRail does not install or run a text-recognition model. The Vietnamese singing CTC model is retained only for forced alignment of exact user-supplied lyrics; audio-separation and speaker-embedding models support instrumental cleanup and vocal-role classification.
+
+Display-line reflow does not download separate constituency or punctuation weights. It uses the exact supplied words and punctuation with measured width, aligned acoustic pauses, curated lexical protections, and the pinned `underthesea` package.

@@ -23,14 +23,14 @@ EXPECTED_EVIDENCE = {
 EXPECTED_GAPS = {
     "dependency-security": "Linux GTK/glib advisories and audit coverage exclusions remain stable-release blockers.",
     "incident-recovery": "Signing-key compromise and destructive recovery drills remain open.",
-    "independent-security-review": "The format, key lifecycle, parser, player, runtime, broker, and update chain still require independent assessment.",
+    "independent-security-review": "The format, key lifecycle, parser, lyric revision, remote transport/cache, OAuth, player, runtime, and update chain still require independent assessment.",
     "key-custody": "The release signing seed still needs documented offline or hardware-backed custody.",
     "linux-release-security": "The Tauri GTK3/glib unsoundness and unmaintained dependency chain remains unresolved.",
     "recovery-integrity": "Recovery must be verified before the last clear master can be removed.",
     "release-integrity": "Signed installers and clean-host platform release evidence remain open.",
     "runtime-delivery-integrity": "Runtime delivery and model/checkpoint redistribution licensing remain unresolved.",
     "update-integrity": "A signed updater and rollback policy remain open.",
-    "workspace-security": "Credential storage and encrypted-workspace adapters still need real-host evidence.",
+    "workspace-security": "OS credential stores, Google OAuth revocation, encrypted catalog, and cloud-only recovery still need real-host evidence on every claimed platform.",
 }
 EXPECTED_CHECKS = {
     "frontend": ["frontend-build", "frontend-tests", "frontend-dependency-audit"],
@@ -88,5 +88,36 @@ def test_readiness_evidence_resolves_without_making_security_global() -> None:
 def test_readiness_keeps_existing_release_claims_honest() -> None:
     release_status = (ROOT / "docs/RELEASE_STATUS.md").read_text(encoding="utf-8")
     security_acceptance = (ROOT / "docs/SECURITY_ACCEPTANCE.md").read_text(encoding="utf-8")
-    assert "not a stable\nproduction-security release" in release_status
+    assert "not a stable production-security release" in " ".join(
+        release_status.split()
+    )
     assert "must not be described as production-grade security" in security_acceptance
+
+
+def test_required_models_match_the_lightweight_runtime_paths() -> None:
+    manifest = read_json("config/model-manifest.json")
+    assert set(manifest["models"]) == {
+        "instrumental-primary",
+        "instrumental-residual-consensus",
+        "lead-backing-analysis",
+        "opposite-gender-colead-analysis",
+        "vietnamese-song-aligner",
+        "speaker-embedding",
+    }
+    pipeline = (ROOT / "src/lyricrail/local_pipeline.py").read_text(encoding="utf-8")
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    constraints = (ROOT / "requirements/constraints-tested.txt").read_text(
+        encoding="utf-8"
+    )
+    for removed in (
+        "import stanza",
+        "models/stanza",
+        "vibert-capu",
+        "load_vietnamese_constituency_analyzer",
+        "load_vietnamese_punctuation_analyzer",
+    ):
+        assert removed not in pipeline
+    assert "stanza==" not in project
+    assert "stanza==" not in constraints
+    assert '"underthesea==9.5.0"' in project
+    assert "underthesea==9.5.0" in constraints

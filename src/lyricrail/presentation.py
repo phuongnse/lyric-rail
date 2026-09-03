@@ -24,9 +24,9 @@ STATUS_SYMBOLS = {
 
 def print_json(data: Any, compact: bool = False, stream: TextIO = sys.stdout) -> None:
     if compact:
-        print(json.dumps(data, ensure_ascii=False, separators=(",", ":")), file=stream)
+        print(json.dumps(data, ensure_ascii=True, separators=(",", ":")), file=stream)
     else:
-        print(json.dumps(data, ensure_ascii=False, indent=2), file=stream)
+        print(json.dumps(data, ensure_ascii=True, indent=2), file=stream)
 
 
 def format_duration(seconds: float | int | None) -> str:
@@ -60,11 +60,9 @@ def print_plan(plan: dict[str, Any]) -> None:
     print("LyricRail · PROCESSING PLAN")
     print(f"Source:   {plan['sourceVideo']}")
     print(f"Title:    {plan['metadataPreview']['title']}")
+    if plan["metadataPreview"].get("artist"):
+        print(f"Artist:   {plan['metadataPreview']['artist']}")
     print(f"Quality:  {plan['qualityMode']}")
-    print(
-        f"YouTube:  {'enabled' if plan['uploadEnabled'] else 'disabled'} "
-        f"({plan['youtubePrivacy']})"
-    )
     print("\nStages")
     for stage in plan["stages"]:
         symbol = STATUS_SYMBOLS[stage["status"]]

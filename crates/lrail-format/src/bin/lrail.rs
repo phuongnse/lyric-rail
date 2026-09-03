@@ -3,14 +3,39 @@ use std::{fs, io, path::PathBuf, process::ExitCode};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use lrail_format::{
-    LockedString, PackageRequest, export_recovery_bundle, inspect_package, inspect_recovery_bundle,
-    load_vault_master, pack_for_device_vault, restore_recovery_bundle,
+    LockedString, PackageRequest, PackageRevisionRequest, export_recovery_bundle, inspect_package,
+    inspect_recovery_bundle, load_vault_master, pack_for_device_vault, restore_recovery_bundle,
+    revise_package_for_vault,
     runtime::{
         RUNTIME_MANIFEST_NAME, RUNTIME_SIGNATURE_NAME, RuntimeExecutables, create_runtime_manifest,
         generate_runtime_keypair, runtime_platform, sign_runtime_manifest, verify_runtime_pack,
     },
-    verify_package, verify_package_with_vault, verify_recovery_bundle,
+    verify_package, verify_package_matches_request_with_vault, verify_package_with_vault,
+    verify_recovery_bundle,
 };
+
+const MAX_PACKAGE_REQUEST_BYTES: u64 = 64 * 1024 * 1024;
+
+fn read_package_request(path: &std::path::Path) -> Result<PackageRequest> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("unable to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_PACKAGE_REQUEST_BYTES
+    {
+        bail!(
+            "package request is not a bounded regular file: {}",
+            path.display()
+        );
+    }
+    let request_bytes =
+        fs::read(path).with_context(|| format!("unable to read {}", path.display()))?;
+    if request_bytes.len() as u64 > MAX_PACKAGE_REQUEST_BYTES {
+        bail!("package request exceeds 64 MiB: {}", path.display());
+    }
+    serde_json::from_slice(&request_bytes)
+        .with_context(|| format!("invalid package request {}", path.display()))
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -35,6 +60,14 @@ enum Command {
         #[arg(long)]
         with_recovery: bool,
     },
+    /// Create a transactional local lyric/thumbnail package revision.
+    Revise {
+        input: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Inspect the public header and key-envelope mechanisms.
     Inspect { input: PathBuf },
     /// Authenticate the manifest and every encrypted asset chunk.
@@ -43,6 +76,12 @@ enum Command {
         /// Ignore the local OS vault and prompt for the recovery passphrase.
         #[arg(long)]
         recovery: bool,
+    },
+    /// Authenticate a package and bind it to an exact strict pack request.
+    VerifyRequest {
+        input: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
     },
     /// Export the current device library master as a passphrase-encrypted bundle.
     RecoveryExport {
@@ -59,7 +98,7 @@ enum Command {
         #[arg(long)]
         library: PathBuf,
     },
-    /// Generate an offline Ed25519 keypair for signing Studio runtime packs.
+    /// Generate an offline Ed25519 keypair for signing local-core runtime packs.
     RuntimeKeygen {
         #[arg(long)]
         private_key: PathBuf,
@@ -125,10 +164,7 @@ fn run() -> Result<()> {
             output,
             with_recovery,
         } => {
-            let request_bytes = fs::read(&request)
-                .with_context(|| format!("unable to read {}", request.display()))?;
-            let package_request: PackageRequest = serde_json::from_slice(&request_bytes)
-                .with_context(|| format!("invalid package request {}", request.display()))?;
+            let package_request = read_package_request(&request)?;
             let passphrase = if with_recovery {
                 Some(recovery_passphrase(true)?)
             } else {
@@ -152,6 +188,19 @@ fn run() -> Result<()> {
                 }))?
             );
         }
+        Command::Revise {
+            input,
+            request,
+            output,
+        } => {
+            let request_bytes = fs::read(&request)
+                .with_context(|| format!("unable to read {}", request.display()))?;
+            let revision: PackageRevisionRequest = serde_json::from_slice(&request_bytes)
+                .with_context(|| format!("invalid revision request {}", request.display()))?;
+            let vault_master = load_vault_master()?;
+            let report = revise_package_for_vault(&input, &output, &vault_master, &revision)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Command::Inspect { input } => {
             println!(
                 "{}",
@@ -172,6 +221,13 @@ fn run() -> Result<()> {
                 let passphrase = recovery_passphrase(false)?;
                 verify_package(&input, passphrase.as_bytes())?
             };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::VerifyRequest { input, request } => {
+            let package_request = read_package_request(&request)?;
+            let vault_master = load_vault_master()?;
+            let report =
+                verify_package_matches_request_with_vault(&input, &vault_master, &package_request)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::RecoveryExport { output } => {

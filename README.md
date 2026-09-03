@@ -1,174 +1,217 @@
 # LyricRail
 
-LyricRail is a private, cross-platform karaoke system with two desktop tools:
+LyricRail is a private cross-platform karaoke system with two responsibilities:
 
-- **LyricRail Studio** turns local media plus authoritative UTF-8 lyrics into a
-  compact, authenticated `.lrail` package.
-- **LyricRail Player** opens only authenticated packages, renders word timing
-  dynamically, and switches between `Karaoke` and `Original Reference` audio.
+1. The local core turns media plus authoritative UTF-8 lyrics into an authenticated,
+   encrypted `.lrail` package.
+2. One simple Player searches and plays packages from any number of local folders or
+   user-selected Google Drive files and folders.
 
-The current version is **0.8 beta / private release candidate**. The Windows
-apps and a separately verified local runtime pack are implemented and exercised.
-The installers are intentionally unsigned and do not embed the 17.1 GB runtime.
-macOS and Linux are source targets covered by CI, but signed/notarized release
-artifacts still require platform credentials and clean-host release testing.
+There is no separate Studio application. The Player owns one sequential local queue;
+cloud sources are read-only and accept `.lrail` packages only.
 
-Cross-platform here means one package format, crypto core, pipeline contract,
-and UI contract with small native adapters where the operating systems differ.
-Encrypted-workspace evidence uses BitLocker plus a least-privilege broker on
-Windows, APFS/FileVault status on macOS, and the mounted block-device
-dm-crypt/LUKS chain on Linux. Windows-only service build and installer hooks
-live exclusively in `tauri.windows.conf.json`; they are not evaluated by
-macOS/Linux builds. See [`docs/PLATFORM_ARCHITECTURE.md`](docs/PLATFORM_ARCHITECTURE.md).
+## Player
 
-## Package output
+The video uses the full window. Library, queue, source management and search live in
+one drawer that overlays the Player and can be shown or hidden without resizing it.
+Ready packages never autoplay merely because they were imported. Users choose a song,
+play in order or shuffle, seek, change volume/fullscreen, and switch between
+`Karaoke` and `Original` audio.
 
-Studio emits one `.lrail` file containing:
+The Player's visual language is repository-owned rather than an off-the-shelf UI
+theme: Be Vietnam Pro, the LyricRail gold/cyan/ink palette, custom CSS tokens and a
+hand-authored SVG icon set. Icon-only actions include matching accessible labels and
+hover/focus help text; compact UI copy is kept at a readable 10px minimum.
+
+Visible actions have one home. Library groups Files/Folder under Local and Google Drive
+under Cloud; lyric and retry controls stay on their song; playback controls stay in Player. Windows and
+Linux use no duplicate native menu. The top bar adds only a styled Activity entry and a
+small About utility on those platforms; macOS owns About in its minimal system menu.
+
+Activity is the single detailed home for long work. Tasks contains only queued/running
+work, while Issues contains failures and setup requirements from every subsystem. Both share
+one native task ID/state model; active cards show the current stage, exact elapsed time,
+determinate or indeterminate progress, measured ETA only when reliable, and Cancel only
+where the underlying operation supports it. Realtime output is redacted before reaching
+the WebView, delivered in bounded batches, replayable after reopening, and can be paused,
+filtered or copied without pausing work. A burst that sheds one pending delivery batch
+signals Activity to fill the gap from the retained ring. Completed work does not create a
+separate visible history archive.
+
+Errors enter the unified Issues tab with a stable code, plain-language cause,
+secondary bounded diagnostics and allowlisted resolution actions. An Issue may carry a
+generic related task ID and show that task's retained output inline without leaving Issues.
+A processing failure links to its task and retry action. Missing processing
+models put affected songs in `setup-required` without discarding their media, exact
+lyrics or trim. A development checkout can install the pinned models after an explicit
+size/license confirmation; progress and cancellation remain visible, every hash is
+verified, and affected songs retry automatically. A signed runtime is immutable and
+instead requires replacement by a complete verified pack.
+
+Opening files or local folders produces one unified list:
+
+- authenticated `.lrail` packages become ready;
+- one selected local media file opens a Clip Editor with the whole timeline selected;
+- local media with an exact-stem UTF-8 `.txt` sidecar enters the sequential queue;
+- media without lyrics waits in place for Paste or TXT;
+- processing progress, failures and completed packages update the same row.
+
+The compact row is only a summary/link projection of the same processing task ID;
+processing Cancel lives in Activity rather than a second row action. Status,
+stage, progress and timestamps used after restart come from task evidence inside the
+authenticated encrypted catalog. A fixed-path durable job manifest must still match
+that catalog job ID and exact-lyric hash before its bounded log tail is attached;
+unbound or malformed clear job evidence is ignored.
+Large queues keep a bounded Activity snapshot/count, while every queued row can fetch
+its stable task directly by ID for View task and Cancel; no active task is rejected or hidden
+from its action path merely because it falls outside the snapshot window.
+
+The Clip Editor supports millisecond Start/End entry, playhead capture, frame or 10 ms
+nudging and a selection loop. Users can add the whole file or only the selected timeline.
+Native ffprobe/ffmpeg are time/output bounded and restricted to local files plus a fixed
+demuxer allowlist. For consistent WebView playback across all supported inputs, native
+code derives a lightweight mono PCM preview into an anonymous delete-on-close handle and
+serves it through an opaque range endpoint. Leading/trailing silence preserves the exact
+source timeline even when its audio starts late or ends early. The selected source is
+identity-bound while the editor is open; preview, cancel and commit never rewrite or
+delete it. Selecting one `.lrail` package or multiple files keeps direct add behavior.
+
+If the app stops after a package is published but before its stage status is saved,
+Retry authenticates and binds that exact output to the job request, then continues
+without repeating separation/media encoding or overwriting an existing file.
+
+Search covers title, artist, composer and full lyric text. Vietnamese matching is
+case- and diacritic-insensitive while displayed text stays unchanged. The catalog and
+search source are authenticated and encrypted at rest.
+
+## Thumbnails and lyric revisions
+
+The core creates a compact encrypted WebP thumbnail from a representative frame and
+overlays the exact first non-empty lyric line. Audio-only sources use a deterministic
+local background. Older packages without artwork receive a neutral fallback.
+
+The source lyric file is never edited. A package stores the exact user-confirmed UTF-8
+text separately from derived timing. For a local typo correction with the same safe
+sung structure, the revision acoustically re-aligns only changed lines against the
+packaged Original track; whitespace-only edits do not load the model. It reuses the
+encrypted representative thumbnail frame, generates fresh nonces for changed assets,
+copies media ciphertext byte-for-byte, authenticates the complete replacement and only
+then switches it into place. Unsafe structural changes fail closed and require local
+reprocessing. Cloud packages must be copied local before editing.
+
+## Google Drive playback
+
+The desktop Picker grants narrow `drive.file` access to files or folders selected by
+the user. Selected roots are stored in the encrypted catalog, so a folder rescan can
+discover new packages and mark unavailable children offline without dropping rows.
+Recursive discovery and provider page tokens are bounded before entries reach the queue.
+LyricRail reads `.lrail` through bounded Drive byte ranges. Manifest,
+playhead, seek and audio-switch reads preempt background download; spare bandwidth
+completes a versioned ciphertext-only cache. Playback can therefore start before the
+whole object downloads, while a complete cached package remains available offline.
+Repeated opens of one object/version join the same in-flight transfer and stable task.
+
+OAuth uses PKCE plus a loopback callback. Refresh tokens live only in the operating
+system credential store. Configure a desktop OAuth client outside the repository:
 
 ```text
-media/video.mp4                    picture without burned lyrics
-audio/karaoke.m4a                  default instrumental track
-audio/original-reference.m4a|mp3   reference vocal track, source codec preserved
-lyrics/timing.json                 authoritative syllable timing and roles
-lyrics/render-plan.json            two-line dynamic presentation schedule
-metadata/release.json              title, artist, description, credits, rights
-presentation/template.json         role colors and layout policy
-sources/visual-license.json        optional visual provenance
+LYRICRAIL_GOOGLE_CLIENT_ID=...
+LYRICRAIL_GOOGLE_CLIENT_SECRET=...   # only if the registered client requires it
 ```
 
-Media is not compressed again by the package layer. H.264 source video is
-stream-copied when no timeline edit is needed; otherwise video is encoded once
-at H.264 High/CRF 18/slow. Karaoke, which is a newly processed mix, uses AAC-LC
-256 kbps. A complete AAC or MP3 Original Reference timeline is remuxed without
-decoding or re-encoding; trimmed or non-portable codecs use the AAC fallback.
-Integration fixtures also compare encoded-packet hashes across the supported
-MP4/MKV remux paths. The encrypted release metadata records the actual codec,
-size, duration, and whether a transcode occurred.
+Packages remain protected by the library master. On a new device, import an encrypted
+recovery bundle and enter its passphrase once in the native recovery tool. The key is
+validated against a package before it enters that device's credential store; routine
+playback does not ask again.
 
-Every asset is split into authenticated 1 MiB chunks and encrypted with
-XChaCha20-Poly1305. The Player decrypts bounded ranges in memory and does not
-write a clear playback file. `.lrail` is protection for a personal offline
-library, not commercial DRM; an administrator, debugger, screen recorder, or
-compromised OS can capture media while it is being decoded.
+## Package contents
 
-## Desktop development
+```text
+media/video.mp4
+audio/karaoke.m4a
+audio/original-reference.m4a|mp3
+lyrics/authoritative.txt
+lyrics/timing.json
+lyrics/render-plan.json
+metadata/release.json
+presentation/template.json
+artwork/thumbnail-base.webp
+artwork/thumbnail.webp
+```
 
-Requirements: Node.js 24, Rust stable with a native C/C++ toolchain, Python
-3.12, FFmpeg/ffprobe, and the pinned ML models.
+Every private byte is encrypted with XChaCha20-Poly1305 in independently authenticated
+chunks. The Player decrypts only bounded ranges in memory and writes no clear playback
+file. `.lrail` protects a personal offline library; it is not commercial DRM and cannot
+stop capture by a compromised or administrator-controlled operating system.
+
+## Development
+
+### Windows
+
+Windows development is native PowerShell; WSL is neither required nor used. From a
+fresh 64-bit Windows checkout with Microsoft App Installer (`winget`), run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap_windows.ps1
+```
+
+The host must permit unsigned local development builds. Windows Smart App Control in
+`On`/enforcement mode blocks Rust build helpers and the unsigned Tauri development
+binary; the bootstrap detects this before mutation and never disables or evades the
+policy. Use Windows Security to make an informed host-level choice, or develop on a
+separate Windows machine/VM whose application-control policy permits local builds.
+
+The bootstrap installs the declared official Python 3.12, Node.js 24 LTS, rustup,
+MSVC Build Tools and FFmpeg packages, creates `.venv`, rebuilds `node_modules` with
+`npm ci`, installs a hash-locked patched pip plus pinned Rust/security tools, and
+isolates Cargo output under `.dev/target-windows`. It then runs all repository
+verification profiles and remains idempotent on later runs.
+Inspect the read-only plan first with `-Plan`; add `-IncludeModels` to download and
+verify the large pinned processing models after reviewing their licenses.
+The development Player exposes the same pinned installer from a missing-model issue;
+it is not available as a runtime-mutating action in signed builds.
+
+An existing `.venv` is reused only when it is native Windows Python 3.12 x64 with the
+expected repository prefix and `pyvenv.cfg`; incompatible environments are preserved
+and rejected with cleanup guidance. `-Acceleration Auto` selects NVIDIA only when an
+NVIDIA device is present, installs the pinned official CUDA build, and records NVIDIA
+only after both PyTorch CUDA and ONNX `CUDAExecutionProvider` pass. CPU and GPU ONNX
+distributions are mutually exclusive.
+
+Launch the native Windows Player after setup:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\dev_player_windows.ps1
+```
+
+Google OAuth IDs, signing keys and other credentials are owner-supplied configuration
+and are never generated by bootstrap. LyricRail's repository-owned vector mark and
+bundle-icon regeneration contract live under `assets/brand/`.
+
+### Other platforms
+
+Portable source remains supported. Manual requirements are Node.js 24, Rust 1.98 with
+a native toolchain, Python 3.12, FFmpeg/ffprobe and the pinned local models.
 
 ```text
 npm ci
-npm run dev:studio
 npm run dev:player
+npm run build
+python scripts/lyricrail.py run "Song - Artist.mp4" --lyrics "Song - Artist.txt"
 ```
 
-Production frontend builds:
+Canonical verification is owned by `.process/project.json`:
 
 ```text
 npm run build
-```
-
-Windows production bundles:
-
-```text
-npm run tauri build --workspace @lyricrail/studio
-npm run tauri build --workspace @lyricrail/player
-```
-
-Native tests and lint:
-
-```text
+npm test
+python -m pytest -q
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-## Pipeline CLI
-
-The native Studio starts the pinned Python pipeline without a shell. The CLI is
-also available directly:
-
-```text
-python scripts/lyricrail.py config validate
-python scripts/lyricrail.py doctor --production
-python scripts/lyricrail.py run "Song - Artist.mp4" --lyrics lyrics.txt --no-upload
-```
-
-Lyrics are immutable input: models may align the supplied words and classify
-roles, but may not infer, replace, or correct them. Each run verifies exact model
-revisions/checkpoint SHA-256 values before processing. Clear work files exist
-during production; after the final package passes full authentication, optional
-cleanup removes only that job's intermediates. It does not claim SSD secure
-erasure and never deletes the source media.
-
-## Native key recovery
-
-Passphrases are read only by the native executable, never by Studio JavaScript:
-
-```text
-lrail recovery-export --output library.lrail-recovery
-lrail recovery-inspect library.lrail-recovery
-lrail recovery-verify library.lrail-recovery
-lrail recovery-restore library.lrail-recovery --library D:\Karaoke
-```
-
-Restore is fail-closed: it requires at least one package, authenticates the
-complete selected library, rejects active rotation, and never overwrites a
-different current key. The format is documented in
-[`docs/LRAIL_RECOVERY_V1.md`](docs/LRAIL_RECOVERY_V1.md).
-
-## Verification
-
-LyricRail pins the `engineering-process` version declared in
-`requirements/process.in` with a complete hash lock. Non-trivial changes use the
-managed lifecycle in `AGENTS.md`: define the contract, plan the work, implement,
-verify the immutable checkpoint, obtain independent review, and resolve every
-required finding before completion. Install and inspect the authority
-with:
-
-```text
-python -m pip install --require-hashes -r requirements/process.txt
-processctl adoption check --project-root . --requirements-lock requirements/process.txt
-processctl doctor --project-root . --profile python
-```
-
-The required profiles are `python`, `frontend`, and `rust`; security-sensitive
-changes also require `security`. CI invokes the same profile definitions on Linux,
-macOS, and Windows where applicable.
-
-The versioned `desktop-media@1` readiness path currently reports `building`, not
-production. Existing source-quality evidence is enforced while the stable signing,
-real-host, dependency, recovery, runtime delivery, updater, incident, and independent
-security-review gaps remain planned in the consumer-owned readiness sidecar and
-normative acceptance documents.
-
-```text
-python -m pytest -q
-cargo test --workspace --locked
-npm run build
-rustup toolchain install nightly-2026-07-01 --profile minimal
-cargo +nightly-2026-07-01 fuzz run package_open -- -runs=1000 -max_len=512
-npm audit --audit-level=moderate
-cargo audit
-python -m pip_audit --local --progress-spinner off
-```
-
-Run the fuzz command on Linux or WSL2; upstream cargo-fuzz does not provide a
-supported native Windows ASan path. The toolchain is pinned because
-libFuzzer/AddressSanitizer must use a matching Rust/LLVM ABI. Current dependency
-findings and platform-specific release blockers are documented in
-[`docs/SECURITY_EXCEPTIONS.md`](docs/SECURITY_EXCEPTIONS.md).
-
-## Security and format documentation
-
-- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
-- [`docs/LRAIL_FORMAT_V1.md`](docs/LRAIL_FORMAT_V1.md)
-- [`docs/LRAIL_RECOVERY_V1.md`](docs/LRAIL_RECOVERY_V1.md)
-- [`docs/KEY_MANAGEMENT.md`](docs/KEY_MANAGEMENT.md)
-- [`docs/RUNTIME_PACK.md`](docs/RUNTIME_PACK.md)
-- [`docs/PLATFORM_ARCHITECTURE.md`](docs/PLATFORM_ARCHITECTURE.md)
-- [`docs/SECURITY_ACCEPTANCE.md`](docs/SECURITY_ACCEPTANCE.md)
-- [`docs/RELEASE_STATUS.md`](docs/RELEASE_STATUS.md)
-- [`SECURITY.md`](SECURITY.md)
-
-No license has been selected for the LyricRail source code. Bundled Be Vietnam
-Pro fonts retain their SIL Open Font License in `assets/fonts`.
+Package, key, recovery, remote-range and cache changes also require the `security`
+profile. The readiness stage remains `building`; open signing, clean-host, runtime
+delivery, updater, incident-response and independent-review gates prevent a stable
+production-security claim. See [security acceptance](docs/SECURITY_ACCEPTANCE.md) and
+[release status](docs/RELEASE_STATUS.md).

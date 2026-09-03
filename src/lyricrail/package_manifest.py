@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .job import replace_unpaired_surrogates
+
 
 def build_release_metadata(
     job: dict[str, Any],
@@ -13,45 +15,39 @@ def build_release_metadata(
     """Build encrypted, portable metadata without leaking local filesystem paths."""
     request = job.get("request", {})
     source_identity = delivery_metadata.get("source", {})
-    snippet = delivery_metadata.get("insertBody", {}).get("snippet", {})
-    source_record = source_directives.get("source", {})
-    sources: list[dict[str, Any]] = []
-    if request.get("sourceOrigin") == "url":
-        input_url = str(source_record.get("inputUrl") or request.get("sourceInput") or "")
-        webpage_url = str(source_record.get("webpageUrl") or input_url)
-        sources.append(
-            {
-                "kind": "online-media",
-                "url": input_url,
-                "webpageUrl": webpage_url,
-                "provider": str(source_record.get("extractor") or ""),
-                "providerId": str(source_record.get("id") or ""),
-                "range": source_record.get("range") or request.get("sourceRange") or {},
-            }
-        )
-    else:
-        media = Path(str(request.get("sourceMedia") or request.get("sourceVideo") or "source"))
-        sources.append(
-            {
-                "kind": "local-media",
-                "fileName": media.name,
-                "range": request.get("sourceRange") or {},
-            }
-        )
+    del source_directives
+    media = Path(str(request.get("sourceMedia") or request.get("sourceVideo") or "source"))
+    title = replace_unpaired_surrogates(
+        str(source_identity.get("songTitle") or "")
+    ).strip()
+    artist = replace_unpaired_surrogates(
+        str(source_identity.get("referenceArtist") or "")
+    ).strip()
+    composer = replace_unpaired_surrogates(
+        str(source_identity.get("composer") or "")
+    ).strip()
+    sources = [
+        {
+            "kind": "local-media",
+            "fileName": replace_unpaired_surrogates(media.name),
+            "range": request.get("sourceRange") or {},
+        }
+    ]
 
     app_playback = pipeline.get("quality", {}).get("appPlayback", {})
     return {
         "schemaVersion": 1,
         "jobId": str(job.get("jobId") or ""),
-        "title": str(source_identity.get("songTitle") or "").strip(),
-        "referenceArtist": str(source_identity.get("referenceArtist") or "").strip(),
-        "description": str(snippet.get("description") or "").strip(),
-        "tags": list(snippet.get("tags") or []),
-        "language": str(snippet.get("defaultLanguage") or "vi"),
+        "title": title,
+        "referenceArtist": artist,
+        "composer": composer,
+        "description": "",
+        "tags": [],
+        "language": "vi",
         "credits": [
             {
                 "role": "reference-performance",
-                "name": str(source_identity.get("referenceArtist") or "").strip(),
+                "name": artist,
             }
         ],
         "sources": sources,
@@ -99,7 +95,7 @@ def build_release_metadata(
             ],
         },
         "producer": {
-            "name": "LyricRail Studio",
+            "name": "LyricRail Core",
             "version": str(job.get("runtime", {}).get("lyricRailVersion") or ""),
         },
     }
@@ -111,12 +107,14 @@ def build_package_request(
     playback_video: Path,
     karaoke_audio: Path,
     original_audio: Path,
+    authoritative_lyrics: Path,
     lyrics_timing: Path,
     render_plan: Path,
     release_metadata_file: Path,
     presentation_template: Path,
+    thumbnail: Path,
+    thumbnail_base: Path,
     minimum_player_version: str,
-    visual_license_manifest: Path | None = None,
 ) -> dict[str, Any]:
     original_delivery = {
         ".m4a": ("audio/mp4", "m4a"),
@@ -152,6 +150,13 @@ def build_package_request(
             "default": False,
         },
         {
+            "logicalName": "lyrics/authoritative.txt",
+            "path": str(authoritative_lyrics.resolve()),
+            "mediaType": "text/plain; charset=utf-8",
+            "kind": "authoritative-lyrics",
+            "language": "vi",
+        },
+        {
             "logicalName": "lyrics/timing.json",
             "path": str(lyrics_timing.resolve()),
             "mediaType": "application/json",
@@ -177,16 +182,19 @@ def build_package_request(
             "mediaType": "application/json",
             "kind": "presentation-template",
         },
+        {
+            "logicalName": "artwork/thumbnail-base.webp",
+            "path": str(thumbnail_base.resolve()),
+            "mediaType": "image/webp",
+            "kind": "thumbnail-base",
+        },
+        {
+            "logicalName": "artwork/thumbnail.webp",
+            "path": str(thumbnail.resolve()),
+            "mediaType": "image/webp",
+            "kind": "thumbnail",
+        },
     ]
-    if visual_license_manifest and visual_license_manifest.is_file():
-        assets.append(
-            {
-                "logicalName": "sources/visual-license.json",
-                "path": str(visual_license_manifest.resolve()),
-                "mediaType": "application/json",
-                "kind": "source-attribution",
-            }
-        )
     return {
         "metadata": release_metadata,
         "assets": assets,

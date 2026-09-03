@@ -1,13 +1,15 @@
-# Input
+# Local input
 
-Có thể đặt đúng một file audio hoặc video vào thư mục này rồi chạy `lyricrail run` không truyền `SOURCE`. Ngoài ra có thể truyền thẳng đường dẫn local hoặc URL, không cần chép file vào đây.
+The CLI can process exactly one supported local audio/video file from this directory
+when `SOURCE` is omitted. URLs and cloud objects are not accepted by the processing
+core. Supply authoritative UTF-8 lyrics separately with `--lyrics`.
 
-Tên khuyên dùng:
+Recommended pairing for Player folder imports:
 
 ```text
-Tên bài hát - Ca sĩ.ext
+Song - Artist.mp4
+Song - Artist.txt
 ```
 
-Video: MP4, MOV, MKV, WebM, AVI, MPG/MPEG.
-
-Audio: WAV, FLAC, MP3, M4A, AAC, OGG, Opus, WMA, AIFF.
+Supported video includes MP4, MOV, MKV, WebM, AVI and MPG/MPEG. Supported audio
+includes WAV, FLAC, MP3, M4A, AAC, OGG, Opus, WMA and AIFF.
