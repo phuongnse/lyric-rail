@@ -7,7 +7,7 @@ shell to launch media, recovery or model work.
 | Boundary | Portable contract | Native adapter |
 |---|---|---|
 | Package playback | One authenticated random-access reader for local and remote bytes | Local file handle or bounded provider cache |
-| Karaoke presentation | Authenticated typed template plus renderer-independent slot/cue schedule; exact role colors and reference geometry | Native bounded parser; responsive WebView container-unit renderer with shipped font |
+| Karaoke presentation | Authenticated typed template plus renderer-independent slot/cue schedule; exact role colors and reference geometry | Native bounded parser; SVG reference viewport matched to the contain-fitted video, with shipped font |
 | Processing | One low-priority sequential worker with isolated jobs and an OS-released per-job run lease | Windows Job Object/priority class; Unix process priority and native file locking |
 | Keys/tokens | Secrets never cross frontend JavaScript | Credential Manager, Keychain or Secret Service via `keyring` |
 | Recovery prompt | Passphrase is owned by the native `lrail` executable | Windows console, macOS Terminal/AppleScript and Linux terminal adapters; real-host release evidence remains gated |
@@ -34,9 +34,12 @@ the long role-analysis stage.
 
 The dynamic Player does not own a second visual theme. Native package open validates the
 required presentation asset's kind, media type, enums, colors and numeric bounds, then
-returns only normalized fields. The WebView scales reference pixels to its video-stage
-container, keeps top-left and bottom-right slots distinct, layers inner/outer outlines,
-and animates only render-plan cue events across their authenticated lead interval.
+returns only normalized fields. The WebView places its HTML lyric canvas in an SVG
+viewBox from that reference resolution and uses `xMidYMid meet` to mirror the video's
+contain fit. Reference-pixel geometry therefore scales inside the video image instead
+of its pillarbox or letterbox bars. The renderer keeps top-left and bottom-right slots
+distinct, layers inner/outer outlines, and animates only render-plan cue events across
+their authenticated lead interval.
 
 OS-native paths remain exact `Path`/argument values inside the local worker. Internal
 job JSON uses ASCII escapes so an OS string that contains a lone UTF-16 surrogate still

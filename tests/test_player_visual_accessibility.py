@@ -119,6 +119,10 @@ def test_player_honors_authenticated_karaoke_presentation_and_cues() -> None:
         "presentation.layout.bottomMargin",
         "presentation.layout.lineGap",
         "presentation.layout.safeAreaPercent",
+        "viewBox={`0 0 ${referenceWidth} ${referenceHeight}`}",
+        'preserveAspectRatio="xMidYMid meet"',
+        "<foreignObject",
+        'className="lyric-canvas"',
         "event.slot === \"top\"",
         "event.showRoleCue",
         "event.roleCueReason",
@@ -135,7 +139,9 @@ def test_player_honors_authenticated_karaoke_presentation_and_cues() -> None:
         assert selector in CSS
     assert "justify-content: flex-start; text-align: left" in CSS
     assert "justify-content: flex-end; text-align: right" in CSS
-    assert "container-type: size" in CSS
+    assert "container-type: size" not in CSS
+    assert "cqh" not in LYRICS
+    assert "144px" not in CSS
     assert "var(--lyric-line-font-size" in CSS
     assert "var(--lyric-inner-width) var(--lyric-inner)" in CSS
     assert "var(--lyric-outer-width) var(--lyric-outer)" in CSS

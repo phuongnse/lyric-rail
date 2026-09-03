@@ -67,12 +67,14 @@ const cueEvent: RenderEvent = {
 };
 
 describe("authenticated karaoke presentation", () => {
-  it("scales the exact classic style from its 1080p reference", () => {
+  it("uses the exact classic style as reference-space pixels", () => {
     const style = presentationStyle(presentation) as Record<string, string | number>;
-    expect(style["--lyric-base-font-size"]).toBe("12.4074cqh");
-    expect(style["--lyric-cue-font-size"]).toBe("7.5926cqh");
-    expect(style["--lyric-bottom"]).toBe("7.7778cqh");
-    expect(style["--lyric-line-step"]).toBe("15.0000cqh");
+    expect(style["--lyric-base-font-size"]).toBe("134px");
+    expect(style["--lyric-cue-font-size"]).toBe("82px");
+    expect(style["--lyric-bottom"]).toBe("84px");
+    expect(style["--lyric-line-step"]).toBe("162px");
+    expect(style["--lyric-outer-width"]).toBe("9px");
+    expect(style["--lyric-inner-width"]).toBe("4.5px");
     expect(style["--lyric-male"]).toBe("#153CFF");
     expect(style["--lyric-female"]).toBe("#F02A2A");
     expect(style["--lyric-duet"]).toBe("#FF3D9D");
@@ -83,6 +85,18 @@ describe("authenticated karaoke presentation", () => {
     expect(boundedLineFontSize(112, presentation)).toBe(112);
     expect(boundedLineFontSize(Number.POSITIVE_INFINITY, presentation)).toBe(134);
     expect(boundedLineFontSize(10000, presentation)).toBe(134);
+  });
+
+  it("contains its reference canvas inside the video-shaped meet viewport", () => {
+    const markup = renderToStaticMarkup(
+      <LyricOverlay events={[cueEvent]} presentation={presentation} time={11.5} />,
+    );
+    expect(markup).toContain("<svg");
+    expect(markup).toContain('viewBox="0 0 1920 1080"');
+    expect(markup).toContain('preserveAspectRatio="xMidYMid meet"');
+    expect(markup).toContain('<foreignObject width="1920" height="1080">');
+    expect(markup).toContain('class="lyric-canvas"');
+    expect(markup).toContain("--lyric-line-font-size:134px");
   });
 
   it("sweeps exactly three planned dots across display lead time", () => {

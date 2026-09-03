@@ -99,8 +99,8 @@ export function cueDotFill(
   return clampPercent(((time - dotStart) / dotDuration) * 100);
 }
 
-function referenceHeightValue(value: number, referenceHeight: number): string {
-  return `${((value / referenceHeight) * 100).toFixed(4)}cqh`;
+function referencePixelValue(value: number): string {
+  return `${value}px`;
 }
 
 export function boundedLineFontSize(
@@ -115,7 +115,6 @@ export function boundedLineFontSize(
 }
 
 export function presentationStyle(presentation: KaraokePresentation): CSSProperties {
-  const referenceHeight = presentation.referenceResolution[1];
   const browserFontFamily = presentation.font.family.replace(/ Bold$/, "");
   const lineStep = (
     presentation.font.sizeAt1080p * presentation.font.scaleY / 100
@@ -124,35 +123,24 @@ export function presentationStyle(presentation: KaraokePresentation): CSSPropert
   return {
     "--lyric-safe-x": `${presentation.layout.safeAreaPercent}%`,
     "--lyric-max-width": `${presentation.layout.maximumLineWidthPercent}%`,
-    "--lyric-bottom": referenceHeightValue(presentation.layout.bottomMargin, referenceHeight),
-    "--lyric-line-step": referenceHeightValue(lineStep, referenceHeight),
-    "--lyric-base-font-size": referenceHeightValue(presentation.font.sizeAt1080p, referenceHeight),
-    "--lyric-cue-font-size": referenceHeightValue(
+    "--lyric-bottom": referencePixelValue(presentation.layout.bottomMargin),
+    "--lyric-line-step": referencePixelValue(lineStep),
+    "--lyric-base-font-size": referencePixelValue(presentation.font.sizeAt1080p),
+    "--lyric-cue-font-size": referencePixelValue(
       presentation.roleChangeCue.dotFontSizeAt1080p,
-      referenceHeight,
     ),
-    "--lyric-letter-spacing": referenceHeightValue(
-      presentation.font.letterSpacing,
-      referenceHeight,
-    ),
+    "--lyric-letter-spacing": referencePixelValue(presentation.font.letterSpacing),
     "--lyric-scale-x": presentation.font.scaleX / 100,
     "--lyric-scale-y": presentation.font.scaleY / 100,
     "--lyric-unsung": presentation.unsung.fill,
     "--lyric-outer": presentation.unsung.outerOutline,
-    "--lyric-outer-width": referenceHeightValue(
+    "--lyric-outer-width": referencePixelValue(
       presentation.unsung.outerOutlineWidth + presentation.sung.innerOutlineWidth,
-      referenceHeight,
     ),
     "--lyric-inner": presentation.sung.innerOutline,
-    "--lyric-inner-width": referenceHeightValue(
-      presentation.sung.innerOutlineWidth,
-      referenceHeight,
-    ),
+    "--lyric-inner-width": referencePixelValue(presentation.sung.innerOutlineWidth),
     "--lyric-shadow": presentation.unsung.shadow,
-    "--lyric-shadow-offset": referenceHeightValue(
-      presentation.unsung.shadowOffset,
-      referenceHeight,
-    ),
+    "--lyric-shadow-offset": referencePixelValue(presentation.unsung.shadowOffset),
     "--lyric-male": presentation.sung.colors.male,
     "--lyric-female": presentation.sung.colors.female,
     "--lyric-duet": presentation.sung.colors.duet,
@@ -189,67 +177,75 @@ export function LyricOverlay({
   presentation: KaraokePresentation;
 }) {
   const active = visibleLyricEvents(events, time);
+  const [referenceWidth, referenceHeight] = presentation.referenceResolution;
   return (
-    <div className="lyric-overlay" style={presentationStyle(presentation)} aria-hidden="true">
-      {active.map((event, eventIndex) => {
-        const line = event.line;
-        const syllables = line?.syllables ?? [];
-        const role = line?.role ?? event.role;
-        const slot = event.slot === "top" ? "top" : "bottom";
-        const fontSize = boundedLineFontSize(line?.fontSizeAt1080p, presentation);
-        const lineStyle = {
-          "--lyric-line-font-size": referenceHeightValue(
-            fontSize,
-            presentation.referenceResolution[1],
-          ),
-        } as CSSProperties;
-        const cueCount = presentation.roleChangeCue.enabled && event.showRoleCue
-          ? presentation.roleChangeCue.dotCount
-          : 0;
-        return (
-          <div
-            className={`lyric-line ${slot} ${roleClass(role)}`}
-            style={lineStyle}
-            data-cue-reason={event.showRoleCue ? event.roleCueReason : undefined}
-            key={`${event.lineIndex ?? eventIndex}-${event.displayStart ?? event.vocalStart}`}
-          >
-            <div className="lyric-line-content">
-              {cueCount > 0 && (
-                <span className="lyric-cue">
-                  {Array.from({ length: cueCount }, (_, dotIndex) => (
-                    <KaraokeToken
-                      cue
-                      fill={cueDotFill(event, time, dotIndex, cueCount)}
-                      key={`cue-${dotIndex}`}
-                      text="●"
-                    />
-                  ))}
-                </span>
-              )}
-              <span className="lyric-copy">
-                {syllables.length
-                  ? syllables.map((syllable, index) => {
-                    const start = syllable.visualStart ?? syllable.start ?? 0;
-                    const end = syllable.visualEnd ?? syllable.end ?? start;
-                    const fill = time <= start
-                      ? 0
-                      : time >= end
-                        ? 100
-                        : ((time - start) / Math.max(0.001, end - start)) * 100;
-                    return (
-                      <KaraokeToken
-                        fill={fill}
-                        key={`${index}-${syllable.text}`}
-                        text={syllable.text}
-                      />
-                    );
-                  })
-                  : <KaraokeToken fill={0} text={line?.text ?? ""} />}
-              </span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
+    <svg
+      className="lyric-overlay"
+      viewBox={`0 0 ${referenceWidth} ${referenceHeight}`}
+      preserveAspectRatio="xMidYMid meet"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <foreignObject width={referenceWidth} height={referenceHeight}>
+        <div className="lyric-canvas" style={presentationStyle(presentation)}>
+          {active.map((event, eventIndex) => {
+            const line = event.line;
+            const syllables = line?.syllables ?? [];
+            const role = line?.role ?? event.role;
+            const slot = event.slot === "top" ? "top" : "bottom";
+            const fontSize = boundedLineFontSize(line?.fontSizeAt1080p, presentation);
+            const lineStyle = {
+              "--lyric-line-font-size": referencePixelValue(fontSize),
+            } as CSSProperties;
+            const cueCount = presentation.roleChangeCue.enabled && event.showRoleCue
+              ? presentation.roleChangeCue.dotCount
+              : 0;
+            return (
+              <div
+                className={`lyric-line ${slot} ${roleClass(role)}`}
+                style={lineStyle}
+                data-cue-reason={event.showRoleCue ? event.roleCueReason : undefined}
+                key={`${event.lineIndex ?? eventIndex}-${event.displayStart ?? event.vocalStart}`}
+              >
+                <div className="lyric-line-content">
+                  {cueCount > 0 && (
+                    <span className="lyric-cue">
+                      {Array.from({ length: cueCount }, (_, dotIndex) => (
+                        <KaraokeToken
+                          cue
+                          fill={cueDotFill(event, time, dotIndex, cueCount)}
+                          key={`cue-${dotIndex}`}
+                          text="●"
+                        />
+                      ))}
+                    </span>
+                  )}
+                  <span className="lyric-copy">
+                    {syllables.length
+                      ? syllables.map((syllable, index) => {
+                        const start = syllable.visualStart ?? syllable.start ?? 0;
+                        const end = syllable.visualEnd ?? syllable.end ?? start;
+                        const fill = time <= start
+                          ? 0
+                          : time >= end
+                            ? 100
+                            : ((time - start) / Math.max(0.001, end - start)) * 100;
+                        return (
+                          <KaraokeToken
+                            fill={fill}
+                            key={`${index}-${syllable.text}`}
+                            text={syllable.text}
+                          />
+                        );
+                      })
+                      : <KaraokeToken fill={0} text={line?.text ?? ""} />}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </foreignObject>
+    </svg>
   );
 }

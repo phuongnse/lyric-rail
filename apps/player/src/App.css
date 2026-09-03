@@ -125,7 +125,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 }
 
 .panel { border: 1px solid var(--line); border-radius: 15px; background: var(--panel); box-shadow: var(--shadow); }
-.video-stage { position: relative; min-height: 0; overflow: hidden; container-type: size; background: #030407; }
+.video-stage { position: relative; min-height: 0; overflow: hidden; background: #030407; }
 .video-stage video { width: 100%; height: 100%; object-fit: contain; background: #030407; }
 .video-stage audio { display: none; }
 .stage-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.22), transparent 30%, transparent 62%, rgba(0,0,0,.66)); }
@@ -141,8 +141,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .center-play { position: absolute; top: 50%; left: 50%; width: 68px; height: 68px; border-color: rgba(255,255,255,.22); border-radius: 50%; color: white; background: rgba(5,7,11,.58); opacity: 0; transform: translate(-50%, -50%) scale(.94); transition: 160ms ease; backdrop-filter: blur(15px); }
 .video-stage:hover .center-play, .center-play:focus-visible { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 
-.lyric-overlay { position: absolute; z-index: 2; inset: 0; overflow: hidden; pointer-events: none; font-family: "Be Vietnam Pro", sans-serif; }
-.lyric-line { --role: var(--lyric-male); position: absolute; right: var(--lyric-safe-x); left: var(--lyric-safe-x); display: flex; align-items: baseline; font-size: clamp(30px, var(--lyric-line-font-size, var(--lyric-base-font-size)), 144px); font-weight: 850; line-height: 1.08; letter-spacing: var(--lyric-letter-spacing); text-rendering: geometricPrecision; }
+.lyric-overlay { position: absolute; z-index: 2; inset: 0; display: block; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+.lyric-canvas { position: relative; width: 100%; height: 100%; overflow: hidden; font-family: "Be Vietnam Pro", sans-serif; }
+.lyric-line { --role: var(--lyric-male); position: absolute; right: var(--lyric-safe-x); left: var(--lyric-safe-x); display: flex; align-items: baseline; font-size: var(--lyric-line-font-size, var(--lyric-base-font-size)); font-weight: 850; line-height: 1.08; letter-spacing: var(--lyric-letter-spacing); text-rendering: geometricPrecision; }
 .lyric-line.top { bottom: calc(var(--lyric-bottom) + var(--lyric-line-step)); justify-content: flex-start; text-align: left; }
 .lyric-line.bottom { bottom: var(--lyric-bottom); justify-content: flex-end; text-align: right; }
 .lyric-line.female { --role: var(--lyric-female); }
