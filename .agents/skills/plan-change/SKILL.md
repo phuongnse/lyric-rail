@@ -10,6 +10,12 @@ approach, bounded work items with owned paths, and concrete risks with mitigatio
 The plan must bind the exact contract digest and must not add behavior that the
 contract did not accept.
 
+Read **production-engineering** and add one `productionEngineering` assessment for
+each canonical invariant in its defined order. Decide applicability from the stated
+trigger, give a concrete rationale, and bind every applicable invariant to the work
+items that will implement its required structure and evidence. A not-applicable
+assessment has no evidence work items and cannot waive a known violation.
+
 For each affected readiness capability, make the protecting or advancing work visible
 in an existing work-item outcome and verification boundary. Preserve every enforced
 capability; do not add unrelated planned gaps as hardening scope. If the contract aims

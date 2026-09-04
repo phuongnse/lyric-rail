@@ -16,6 +16,10 @@ without starting another cycle; review checks all registered participants.
 Implement only the current plan. Add focused regression coverage for deterministic
 defects and keep consumer-owned policy in the consumer. If review requested changes,
 resolve every blocking finding in the next cycle without renaming or dropping it.
+Follow every applicable **production-engineering** assessment and make its named work
+items produce the planned objective evidence. If implementation proves an
+applicability decision wrong, preserve the accepted contract and implement the
+required structure; the independent review records the corrected semantic result.
 
 Do not weaken an affected enforced readiness capability or silently change its pack,
 version, profile mapping, state, or gap. A planned-to-enforced transition must be an
