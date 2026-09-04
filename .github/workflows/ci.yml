@@ -13,15 +13,15 @@ env:
 
 jobs:
   policy-verification:
-    name: policy-verification
+    name: Policy verification
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
       pull-requests: read
-    uses: phuongnse/renovate-ops/.github/workflows/policy-verification.yml@5fb53c2295c0f62c29d34c8141121b71198769f4
+    uses: phuongnse/renovate-ops/.github/workflows/policy-verification.yml@38d952b8c94604df10fadc48b6c830a144ea1137
 
   python:
-    name: Python 3.12 / ${{ matrix.os }}
+    name: Python 3.12 (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -106,7 +106,7 @@ jobs:
           processctl verify --project-root . --profile frontend
 
   rust:
-    name: Rust / ${{ matrix.os }}
+    name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:

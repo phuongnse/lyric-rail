@@ -3,10 +3,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-POLICY_REVISION = "5fb53c2295c0f62c29d34c8141121b71198769f4"
+POLICY_REVISION = "38d952b8c94604df10fadc48b6c830a144ea1137"
 EXPECTED_POLICY_JOB = (
     "  policy-verification:\n"
-    "    name: policy-verification\n"
+    "    name: Policy verification\n"
     "    if: github.event_name == 'pull_request'\n"
     "    permissions:\n"
     "      contents: read\n"
@@ -54,6 +54,8 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
     assert "automation/renovate/engineering-process" in workflow
     assert "processctl adoption check" in workflow
     assert extract_policy_job(workflow) == EXPECTED_POLICY_JOB
+    assert "    name: Python 3.12 (${{ matrix.os }})\n" in workflow
+    assert "    name: Rust (${{ matrix.os }})\n" in workflow
 
     assert workflow.count("Install published engineering-process authority") == 4
     assert workflow.count("--require-hashes") == 4
