@@ -62,3 +62,28 @@ Follow-up scope is only carried findings, remediation diffs, and regressions aga
 the frozen contract. A new blocker must be either remediation-caused or a P0/P1 late
 violation with a rationale. After two correction cycles, another changes-requested
 verdict blocks the change; it never turns into approval or permission to skip review.
+
+## Finding priority
+
+P0-P3 are this process's review-impact convention. Assess the consequences if the
+finding remains unresolved in a supported scenario. Consumer scheduling and incident
+response deadlines remain consumer-owned.
+
+| Priority | Impact | Illustrative example |
+| --- | --- | --- |
+| P0 - critical | Catastrophic loss of essential operation, authoritative data, or a critical security guarantee. | Irrecoverable loss of the only authoritative dataset. |
+| P1 - high | Severe failure of a core workflow or guarantee, below P0's catastrophic consequences. | A primary workflow produces wrong results that can be regenerated from intact inputs. |
+| P2 - medium | Material but contained incorrect behavior or operational or maintenance cost; core workflows remain usable. | A recoverable failure in a secondary workflow with a safe alternative. |
+| P3 - low | Minor inconvenience or clarity or consistency defect with little effect on behavior or reliability. | An unclear optional explanation when all required steps remain unambiguous. |
+
+Choose the highest level whose consequences the evidence supports. Explain affected
+guarantees, reach, preconditions, recoverability, and safe alternatives. Examples are
+illustrative, not an exhaustive classifier; file type, finding category, keywords,
+and ease of repair do not determine priority.
+
+Severity follows whether the reviewed snapshot violates the accepted contract or an
+applicable production invariant; priority is not a waiver. A P2 or P3 finding can
+therefore be blocking. The existing P0/P1 restriction on a new `critical-late` blocker
+is an eligibility condition, not permission to block without the required bounded
+late rationale. Preserve carried finding priorities and historical reports under the
+existing correction-cycle rules.
