@@ -1,39 +1,29 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    "helpers:pinGitHubActionDigests"
-  ],
-  "enabled": true,
-  "configMigration": true,
   "branchPrefix": "automation/renovate/",
-  "dependencyDashboard": true,
-  "draftPR": true,
-  "labels": [
-    "dependencies"
-  ],
-  "schedule": [
-    "before 5am on monday"
-  ],
-  "timezone": "Asia/Bangkok",
-  "semanticCommits": "enabled",
-  "semanticCommitType": "chore",
-  "semanticCommitScope": "deps",
+  "configMigration": true,
   "constraints": {
     "python": "==3.12"
   },
-  "pip-compile": {
-    "managerFilePatterns": [
-      "/^requirements\\/process\\.txt$/"
-    ]
-  },
-  "pip_requirements": {
-    "enabled": false
-  },
-  "prBodyTemplate": "<!-- engineering-process:pr-description:start -->\n## Summary\n\nRenovate proposes one normal locked dependency update for LyricRail.\n\n{{{table}}}\n\n## Contract and scope\n\nDependency automation follows repository-owned manifests; engineering-process updates include the complete managed adoption transaction.\n\n## Impact and risk\n\nThe dependency proposal remains a draft until project verification, independent review, and owner authorization complete.\n\n## Verification\n\nProject checks validate the exact published dependency checkpoint.\n\n## Independent review\n\nA separate reviewer approves the complete verified adoption checkpoint before merge.\n\n## Requirements and rules followed\n\n- [ ] **Scope and contract** — accepted scope is implemented without unapproved expansion. [status: pending]\n- [ ] **Verification evidence** — required current profiles pass on the published checkpoint. [status: pending]\n- [ ] **Independent review** — a separate reviewer approved the published checkpoint with no open required finding. [status: pending]\n<!-- engineering-process:pr-description:end -->",
+  "dependencyDashboard": true,
+  "draftPR": true,
+  "enabled": true,
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "github>phuongnse/engineering-process//templates/renovate#71bb94acb18aab41c97120f66e3cbd7c2fcee468"
+  ],
+  "labels": [
+    "dependencies"
+  ],
   "packageRules": [
     {
+      "commitMessageTopic": "engineering-process",
       "description": "Adopt each published engineering-process release as a complete managed pull request.",
+      "draftPR": true,
+      "enabled": true,
+      "groupName": "engineering-process",
+      "groupSlug": "engineering-process",
       "matchFileNames": [
         "requirements/process.in",
         "requirements/process.txt"
@@ -41,19 +31,11 @@
       "matchPackageNames": [
         "engineering-process"
       ],
-      "enabled": true,
-      "draftPR": true,
-      "groupName": "engineering-process",
-      "groupSlug": "engineering-process",
-      "schedule": [
-        "at any time"
-      ],
-      "prPriority": 100,
-      "commitMessageTopic": "engineering-process",
       "postUpgradeTasks": {
         "commands": [
           "python .process/adopt-process.py --project-root . --requirements-lock requirements/process.txt"
         ],
+        "executionMode": "update",
         "fileFilters": [
           ".agents/skills/**",
           ".github/PULL_REQUEST_TEMPLATE.md",
@@ -65,11 +47,29 @@
           ".process/project.json",
           "AGENTS.md"
         ],
-        "executionMode": "update",
         "installTools": {
           "python": {}
         }
-      }
+      },
+      "prPriority": 100,
+      "schedule": [
+        "at any time"
+      ]
     }
-  ]
+  ],
+  "pip-compile": {
+    "managerFilePatterns": [
+      "/^requirements\\/process\\.txt$/"
+    ]
+  },
+  "pip_requirements": {
+    "enabled": false
+  },
+  "schedule": [
+    "before 5am on monday"
+  ],
+  "semanticCommitScope": "deps",
+  "semanticCommitType": "chore",
+  "semanticCommits": "enabled",
+  "timezone": "Asia/Bangkok"
 }
