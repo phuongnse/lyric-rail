@@ -29,6 +29,11 @@ Verification proves only the deterministic properties exercised by its exact
 commands on the unchanged candidate. It must not claim to infer architecture,
 security, intent, or arbitrary prose semantics that those commands do not observe.
 
+When an artifact claim depends on byte identity, make encoding and newline rules
+explicit at its writer and compare bytes at the exported or installed boundary.
+Text-mode newline normalization and a clean Git diff cannot supply that proof;
+follow the artifact owner's format rather than imposing one text policy on consumers.
+
 Independent review reassesses every invariant against the contract, plan, complete
 diff, profile evidence, and readiness result. Mark it `satisfied`, `not-applicable`,
 or `violated`, give a concrete rationale, and cite evidence for `satisfied`. A
