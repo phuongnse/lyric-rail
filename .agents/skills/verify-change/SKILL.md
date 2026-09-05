@@ -11,9 +11,10 @@ profile through the lifecycle:
     processctl change verify --change-id ID --profile PROFILE
 
 Commands are exact argument arrays with timeouts. Do not substitute a different tool
-or narrower check when a required command fails. A command failure, timeout,
-surviving descendant, or tracked repository mutation is a failure and leaves the
-change in implementing.
+or narrower check when a required command fails. A command failure, timeout, output
+or stream failure, failed descendant cleanup, or tracked repository mutation is a
+failure and leaves the change in implementing. Successfully cleaned post-exit
+descendants remain recorded without replacing the foreground command result.
 
 The contract must already include conditional profiles required by affected enforced
 capabilities. Run those profiles exactly; do not run every planned production gate for

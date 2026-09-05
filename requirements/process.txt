@@ -11,8 +11,8 @@ attrs==26.1.0 \
     # via
     #   jsonschema
     #   referencing
-engineering-process==1.1.1 \
-    --hash=sha256:6efd60a2553e9c1b829c9062849abf65ab5925979ba780b5be27472662342f1c
+engineering-process==1.2.3 \
+    --hash=sha256:f55667502f8f73e1d9bb771b6b2cc3a8d0b79b898c646eabc28b316b42a2d424
     # via -r requirements/process.in
 jsonschema==4.26.0 \
     --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce

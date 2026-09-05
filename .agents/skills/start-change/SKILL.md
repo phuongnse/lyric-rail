@@ -19,7 +19,11 @@ consumer. Unrelated planned gaps remain visible and non-blocking. A planned capa
 may become change scope only through an explicit owner-accepted outcome.
 
 For a process change, include consumerEvidence that names the real consumer and
-incident or request. Validate and register the contract:
+incident or request. When the project configures an accepted issue URL prefix, source
+must be that exact prefix plus a canonical positive issue number; placeholders,
+cross-repository URLs, queries, and fragments fail before state is written. This
+local shape check does not replace owner acceptance. Validate and register the
+contract:
 
     processctl contract validate --kind change change.json
     processctl change start --actor ACTOR --context CONTEXT --contract change.json

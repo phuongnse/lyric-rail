@@ -13,10 +13,36 @@ implementer in the current cycle. Start the assignment:
 Review the accepted contract, plan, complete diff, focused tests, and verification
 evidence. The first pass is comprehensive within that frozen contract. Every finding
 maps to one accepted criterion and records priority, origin, severity, and location.
-Ideas outside the contract are proposals, not blocking findings. approved may contain
-non-blocking observations but no blocking finding; changes-requested requires at least
-one blocking finding. Write the report to the reportPath returned by review
-start; that path is process state and does not mutate the reviewed snapshot.
+Priority records impact if the finding remains unresolved; severity controls the
+current lifecycle gate and is not derived mechanically from priority. Ideas outside
+the contract are proposals, not blocking findings. approved may contain non-blocking
+observations but no blocking finding; changes-requested requires at least one blocking
+finding.
+
+Read **production-engineering** and independently reassess every canonical invariant.
+Use the report's `productionEngineering` entries to record `satisfied`,
+`not-applicable`, or `violated`; cite concrete snapshot evidence for each satisfied
+entry. A violated entry links to a distinct blocking finding whose origin records the
+production invariant, unless a correction-cycle regression or critical late finding
+already supplies the bounded origin. The plan's applicability decision is evidence,
+not authority: correct it in the review result when the complete diff proves
+otherwise.
+
+Use the `reportSchemaVersion` and `reportPath` returned by review start. In schema
+versions 6 and later, every non-blocking finding has a disposition and rationale;
+never omit an observation merely to reach approval. `resolved` records why the
+reviewed snapshot closes it. `accepted-risk` and `tracked-follow-up` also record an
+owner and stable HTTPS `recordUrl`. The report path is process state and does not
+mutate the reviewed snapshot.
+
+Review start also returns bounded `processSignals` derived from exact lifecycle
+events. Treat them as prompts for judgment, not proof of a shared defect; independently
+consider consumer evidence that the lifecycle cannot observe. Every schema-version 7
+report classifies `processImprovement` as `none`, `consumer-specific`, or
+`shared-process` and gives a concrete rationale. Consumer-specific behavior stays in
+the consumer. For `shared-process`, keep the assignment `review-pending` and route the
+candidate through **improve-process**. Submit only after an existing or owner-authorized
+issue supplies the stable HTTPS `recordUrl`; the review itself remains read-only.
 
 Read the consumer readiness result and repository rules. Check the complete diff for
 an affected enforced capability omitted from the contract, weakened evidence, a pack

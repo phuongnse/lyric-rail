@@ -29,6 +29,11 @@ When changing this process itself, first use **improve-process** to prove the re
 came from a real consumer incident or need; the change still follows the same six
 phases afterward.
 
+From planning through independent review, use **production-engineering** as the
+shared correctness floor. Its canonical definitions drive the plan and review
+contracts; do not replace their contextual assessment with keyword or naming
+heuristics.
+
 The project's nearest AGENTS.md owns product decisions and .process/project.json owns
 exact argument-array commands. Skills guide the work; only processctl advances
 lifecycle state. Never replace missing, stale, failed, or self-authored evidence with
