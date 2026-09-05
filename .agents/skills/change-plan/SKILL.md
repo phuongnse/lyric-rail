@@ -1,6 +1,6 @@
 ---
-name: plan-change
-description: Produce the smallest implementation plan that covers every accepted outcome and its verification boundary.
+name: change-plan
+description: Plan the registered change and its verification boundary when deliver-change routes a specified change.
 ---
 
 # Plan a change

@@ -1,6 +1,6 @@
 ---
-name: verify-change
-description: Run the project-owned verification profiles and bind their results to one unchanged repository snapshot.
+name: change-verify
+description: Run the project-owned verification profiles on one unchanged repository snapshot when routed by deliver-change.
 ---
 
 # Verify a change
@@ -23,4 +23,4 @@ planned capability whose gap remains open. A readiness promotion is valid only w
 all evidence named by that capability passes on this same snapshot.
 
 When all required profiles pass on the same snapshot, the lifecycle becomes verified;
-route to **review-change**.
+route to **change-review**.
