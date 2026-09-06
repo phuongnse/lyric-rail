@@ -63,8 +63,13 @@ Live karaoke uses the bundled Be Vietnam Pro Medium face. Its unsung base and sh
 offset shadow stay fixed while the role color and inner outline sweep together over
 the exact timed text. Planned cue circles use the same paint layers and word gap;
 their geometry avoids the fallback-font circle missing from the bundled typeface.
-The Player appearance applies to existing packages while preserving their authenticated
-palette, layout and cue/timing policy, as specified in
+Every sentence uses the same fixed reference size and natural font proportions.
+The shared renderer measures the real bundled face and paginates long events into
+bounded two-row pages without changing lyric order or using per-sentence scaling.
+Steady-state fill follows the authoritative audio clock on each animation frame by
+updating only the visible token paint; React changes layout only at event/page
+boundaries. The Player appearance applies to existing packages while preserving their
+authenticated palette, layout and cue/timing policy, as specified in
 [the v1 presentation contract](../../docs/LRAIL_FORMAT_V1.md).
 
 ```text

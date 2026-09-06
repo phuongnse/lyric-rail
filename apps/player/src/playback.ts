@@ -1,4 +1,11 @@
 const END_RESTART_EPSILON_SECONDS = 0.05;
+export const TRANSPORT_CLOCK_INTERVAL_MS = 100;
+
+export function shouldUpdateTransportClock(now: number, lastUpdate: number): boolean {
+  return Number.isFinite(now)
+    && Number.isFinite(lastUpdate)
+    && now - lastUpdate >= TRANSPORT_CLOCK_INTERVAL_MS;
+}
 
 export function playbackStartTime(
   currentTime: number,

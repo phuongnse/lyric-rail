@@ -115,7 +115,6 @@ def test_player_honors_authenticated_karaoke_layout_palette_and_cues() -> None:
         "presentation.sung.colors.female",
         "presentation.sung.colors.duet",
         "presentation.unsung.fill",
-        "presentation.font.sizeAt1080p",
         "presentation.layout.bottomMargin",
         "presentation.layout.lineGap",
         "presentation.layout.safeAreaPercent",
@@ -126,12 +125,16 @@ def test_player_honors_authenticated_karaoke_layout_palette_and_cues() -> None:
         "event.slot === \"top\"",
         "event.showRoleCue",
         "event.roleCueReason",
-        "cueDotFill(event, time, dotIndex, cueCount)",
+        "cueDotInterval(event, dotIndex, cueCount)",
+        "paginateLyricEvent(event, presentation, measureText)",
+        "requestAnimationFrame(update)",
     ):
         assert token in LYRICS
     for selector in (
         ".lyric-line.top",
         ".lyric-line.bottom",
+        ".lyric-stack",
+        ".lyric-row",
         ".lyric-token-outline",
         ".lyric-token-shadow",
         ".lyric-cue-dot > span",
@@ -143,7 +146,10 @@ def test_player_honors_authenticated_karaoke_layout_palette_and_cues() -> None:
     assert "container-type: size" not in CSS
     assert "cqh" not in LYRICS
     assert "144px" not in CSS
-    assert "var(--lyric-line-font-size" in CSS
+    assert "font-size: var(--lyric-base-font-size)" in CSS
+    assert "transform: scale(var(--lyric-scale-x)" not in CSS
+    assert "shouldUpdateTransportClock(now, last)" in APP
+    assert "now - last >= 33" not in APP
     assert "var(--lyric-inner-width) var(--lyric-inner)" in CSS
     assert "var(--lyric-outer-width) var(--lyric-outer)" in CSS
     assert "#6cb9ff" not in CSS

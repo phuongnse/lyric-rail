@@ -4,6 +4,7 @@ import {
   formatTime,
   playbackStartTime,
   shouldResyncVideo,
+  shouldUpdateTransportClock,
   toggleDocumentFullscreen,
   toggleMutedVolume,
 } from "./playback";
@@ -17,6 +18,13 @@ describe("playback helpers", () => {
   it("resyncs only meaningful audio/video drift", () => {
     expect(shouldResyncVideo(3, 2.7)).toBe(true);
     expect(shouldResyncVideo(3, 2.95)).toBe(false);
+  });
+
+  it("updates transport controls less often than frame-driven lyric paint", () => {
+    expect(shouldUpdateTransportClock(99.9, 0)).toBe(false);
+    expect(shouldUpdateTransportClock(100, 0)).toBe(true);
+    expect(shouldUpdateTransportClock(250, 150)).toBe(true);
+    expect(shouldUpdateTransportClock(Number.NaN, 0)).toBe(false);
   });
 
   it("formats a compact player clock", () => {

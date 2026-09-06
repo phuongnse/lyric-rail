@@ -25,6 +25,7 @@ import {
   formatTime,
   playbackStartTime,
   shouldResyncVideo,
+  shouldUpdateTransportClock,
   toggleDocumentFullscreen,
   toggleMutedVolume,
 } from "./playback";
@@ -862,10 +863,12 @@ function App() {
     const update = (now: number) => {
       const audio = audioRef.current;
       const video = videoRef.current;
-      if (audio && now - last >= 33) {
-        setTime(audio.currentTime);
+      if (audio) {
         if (video && shouldResyncVideo(audio.currentTime, video.currentTime)) video.currentTime = audio.currentTime;
-        last = now;
+        if (shouldUpdateTransportClock(now, last)) {
+          setTime(audio.currentTime);
+          last = now;
+        }
       }
       frame = requestAnimationFrame(update);
     };
@@ -1377,12 +1380,12 @@ function App() {
                 preload="auto"
                 onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
                 onPlay={() => setPlaying(true)}
-                onPause={() => setPlaying(false)}
+                onPause={(event) => { setTime(event.currentTarget.currentTime); setPlaying(false); }}
                 onEnded={() => move(1)}
                 onError={() => reportError("playback", "Audio playback failed", "Audio range could not be authenticated or downloaded.")}
               />
               <div className="stage-shade" />
-              <LyricOverlay events={events} time={time} presentation={opened.presentation} />
+              <LyricOverlay events={events} time={time} presentation={opened.presentation} mediaRef={audioRef} playing={playing} />
               <IconButton className="center-play" icon={playing ? "pause" : "play"} iconSize={28} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} />
             </>
           ) : (

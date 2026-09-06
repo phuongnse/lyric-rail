@@ -148,13 +148,17 @@ presentation values to its WebView. The v1 dynamic renderer supports the declare
 numeric geometry is bounded and colors are strict six-digit hex values. It consumes
 `slot`, `showRoleCue`, `roleCueReason`, `displayStart` and `vocalStart` from the
 authenticated render plan. It does not re-decide cue policy. The authenticated palette,
-reference geometry, line sizes and font scales remain authoritative. The Player's
-typeface and relative contour, shadow, spacing and circle dimensions are application
+reference geometry and timing remain authoritative. The Player's typeface, fixed
+reference size, contours, shadow, spacing and circle dimensions are application
 appearance policy: existing packages receive the current Be Vietnam Pro Medium look.
-Stored font-family/weight, cue-font-size, outline-width and shadow-offset hints remain
-valid v1 data for producers and other renderers but do not control these Player
-cosmetics. This display change neither rewrites package assets nor changes the v1
-wire schema or producer ASS output.
+Every sentence uses the same 96 px size on a 1080 px reference short side, without
+independent horizontal or vertical scaling. The Player measures that bundled face and
+paginates overlong events at grapheme-safe word boundaries into at most two rows per
+page; it preserves source text order and derives continuation timing only inside the
+source word interval. Stored font-family/weight/size/scale, cue-font-size,
+outline-width and shadow-offset hints remain valid v1 data for producers and other
+renderers but do not control these Player cosmetics. This display change neither
+rewrites package assets nor changes the v1 wire schema or producer ASS output.
 
 The authoritative text asset preserves the exact confirmed string, including blank
 lines, whitespace and line-ending choices; timing/render assets contain the derived

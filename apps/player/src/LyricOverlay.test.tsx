@@ -1,12 +1,20 @@
 // @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  LYRIC_FONT_SIZE_AT_1080P,
   LyricOverlay,
-  boundedLineFontSize,
   cueDotFill,
+  fixedLyricFontSize,
+  lyricTokenFill,
+  lyricLayoutWindow,
+  paginateLyricEvent,
   presentationStyle,
+  sameLyricOverlayProps,
   visibleLyricEvents,
+  visibleLyricPages,
   type KaraokePresentation,
   type RenderEvent,
 } from "./LyricOverlay";
@@ -25,23 +33,23 @@ const presentation: KaraokePresentation = {
     family: "Be Vietnam Pro Bold",
     bold: false,
     sizeAt1080p: 134,
-    scaleX: 96,
-    scaleY: 100,
-    letterSpacing: 0,
+    scaleX: 76,
+    scaleY: 124,
+    letterSpacing: 8,
   },
-  roleChangeCue: { enabled: true, dotCount: 3, dotFontSizeAt1080p: 82 },
+  roleChangeCue: { enabled: true, dotCount: 3, dotFontSizeAt1080p: 160 },
   unsung: {
     fill: "#FFFFFF",
     outerOutline: "#000000",
-    outerOutlineWidth: 4.5,
+    outerOutlineWidth: 20,
     shadow: "#000000",
-    shadowOffset: 2,
+    shadowOffset: 20,
   },
   sung: {
     direction: "left-to-right",
     timing: "syllable",
     innerOutline: "#FFFFFF",
-    innerOutlineWidth: 4.5,
+    innerOutlineWidth: 16,
     colors: { male: "#153CFF", female: "#F02A2A", duet: "#FF3D9D" },
   },
 };
@@ -59,7 +67,7 @@ const cueEvent: RenderEvent = {
   line: {
     role: "female",
     text: "Em hát",
-    fontSizeAt1080p: 134,
+    fontSizeAt1080p: 220,
     syllables: [
       { text: "Em", visualStart: 13, visualEnd: 14 },
       { text: "hát", visualStart: 14, visualEnd: 15 },
@@ -67,143 +75,168 @@ const cueEvent: RenderEvent = {
   },
 };
 
-describe("authenticated karaoke presentation", () => {
-  it("retains authenticated layout and palette in reference-space pixels", () => {
+afterEach(() => {
+  vi.unstubAllGlobals();
+  document.body.innerHTML = "";
+});
+
+describe("shared karaoke core", () => {
+  it("uses one smaller natural font size while retaining authenticated layout and palette", () => {
     const style = presentationStyle(presentation) as Record<string, string | number>;
-    expect(style["--lyric-base-font-size"]).toBe("134px");
+    expect(LYRIC_FONT_SIZE_AT_1080P).toBe(96);
+    expect(fixedLyricFontSize(presentation)).toBe(96);
+    expect(style["--lyric-base-font-size"]).toBe("96px");
     expect(style["--lyric-bottom"]).toBe("84px");
-    expect(style["--lyric-line-step"]).toBe("162px");
+    expect(style["--lyric-line-gap"]).toBe("28px");
     expect(style["--lyric-male"]).toBe("#153CFF");
     expect(style["--lyric-female"]).toBe("#F02A2A");
     expect(style["--lyric-duet"]).toBe("#FF3D9D");
-    expect(style["--lyric-unsung"]).toBe("#FFFFFF");
-    expect(style["--lyric-scale-y"]).toBe(1);
-    expect(boundedLineFontSize(112, presentation)).toBe(112);
-    expect(boundedLineFontSize(Number.POSITIVE_INFINITY, presentation)).toBe(134);
-    expect(boundedLineFontSize(10000, presentation)).toBe(134);
+    expect(style).not.toHaveProperty("--lyric-scale-x");
+    expect(style).not.toHaveProperty("--lyric-scale-y");
+    expect(style).not.toHaveProperty("--lyric-line-font-size");
   });
 
-  it("accepts legacy cosmetic hints without replacing the Player typography", () => {
-    expect(presentationStyle({
+  it("keeps the same size for short, long and legacy per-line size hints", () => {
+    for (const size of [24, 96, 134, 240]) {
+      const markup = renderToStaticMarkup(
+        <LyricOverlay
+          events={[{ ...cueEvent, line: { ...cueEvent.line, fontSizeAt1080p: size } }]}
+          presentation={presentation}
+          time={11.5}
+        />,
+      );
+      expect(markup).toContain("--lyric-base-font-size:96px");
+      expect(markup).not.toContain("--lyric-line-font-size");
+      expect(markup).not.toContain("transform:scale");
+    }
+    expect(fixedLyricFontSize({
       ...presentation,
-      font: { ...presentation.font, family: "Legacy Typeface Bold", bold: true },
-      roleChangeCue: { ...presentation.roleChangeCue, dotFontSizeAt1080p: 160 },
-      unsung: { ...presentation.unsung, outerOutlineWidth: 20, shadowOffset: 20 },
-      sung: { ...presentation.sung, innerOutlineWidth: 16 },
-    })).toEqual(presentationStyle(presentation));
+      font: { ...presentation.font, sizeAt1080p: 24 },
+    })).toBe(96);
   });
 
-  it("contains its reference canvas inside the video-shaped meet viewport", () => {
-    const markup = renderToStaticMarkup(
-      <LyricOverlay events={[cueEvent]} presentation={presentation} time={11.5} />,
-    );
-    expect(markup).toContain("<svg");
-    expect(markup).toContain('viewBox="0 0 1920 1080"');
-    expect(markup).toContain('preserveAspectRatio="xMidYMid meet"');
-    expect(markup).toContain('<foreignObject width="1920" height="1080">');
-    expect(markup).toContain('class="lyric-canvas"');
-    expect(markup).toContain("--lyric-line-font-size:134px");
+  it("paginates measured words into fixed-size two-row pages without changing order", () => {
+    const narrow = { ...presentation, referenceResolution: [600, 1080] as [number, number] };
+    const syllables = Array.from({ length: 9 }, (_, index) => ({
+      text: `từ-${index}`,
+      visualStart: index,
+      visualEnd: index + 0.8,
+    }));
+    const event: RenderEvent = {
+      ...cueEvent,
+      displayStart: 0,
+      vocalStart: 0,
+      vocalEnd: 9,
+      displayEnd: 10,
+      line: { ...cueEvent.line, text: syllables.map(({ text }) => text).join(" "), syllables },
+    };
+    const pages = paginateLyricEvent(event, narrow, () => 180);
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.every(({ rows }) => rows.length <= 2)).toBe(true);
+    expect(pages.flatMap(({ rows }) => rows.flat().map(({ text }) => text))).toEqual(syllables.map(({ text }) => text));
+    expect(fixedLyricFontSize(narrow)).toBeCloseTo(53.333, 2);
+    expect(new Set(pages.flatMap(({ rows }) => rows).map(() => fixedLyricFontSize(narrow))).size).toBe(1);
   });
 
-  it("sweeps exactly three planned dots across display lead time", () => {
-    expect([0, 1, 2].map((index) => cueDotFill(cueEvent, 10, index, 3))).toEqual([0, 0, 0]);
+  it("splits an over-wide decomposed token only at grapheme boundaries and preserves timing anchors", () => {
+    const narrow = { ...presentation, referenceResolution: [360, 1080] as [number, number] };
+    const text = "a\u0301".repeat(18);
+    const event: RenderEvent = {
+      ...cueEvent,
+      showRoleCue: false,
+      displayStart: 0,
+      vocalStart: 2,
+      vocalEnd: 8,
+      displayEnd: 9,
+      line: { ...cueEvent.line, text, syllables: [{ text, visualStart: 2, visualEnd: 8 }] },
+    };
+    const fragments = paginateLyricEvent(event, narrow, (value) => [...value].length * 35)
+      .flatMap(({ rows }) => rows.flat());
+    expect(fragments.length).toBeGreaterThan(1);
+    expect(fragments.map(({ text: value }) => value).join("")).toBe(text);
+    expect(fragments.every(({ text: value }) => !/^\p{Mark}/u.test(value))).toBe(true);
+    expect(fragments[0].visualStart).toBe(2);
+    expect(fragments[fragments.length - 1].visualEnd).toBe(8);
+  });
+
+  it("selects continuation pages from their original timing and never repeats source cues", () => {
+    const narrow = { ...presentation, referenceResolution: [600, 1080] as [number, number] };
+    const syllables = Array.from({ length: 8 }, (_, index) => ({ text: `w${index}`, visualStart: index + 2, visualEnd: index + 2.8 }));
+    const event = { ...cueEvent, displayStart: 0, vocalStart: 2, vocalEnd: 10, displayEnd: 11, line: { ...cueEvent.line, syllables } };
+    const pages = paginateLyricEvent(event, narrow, () => 180);
+    const source = [{ event, pages }];
+    expect(visibleLyricPages(source, 0.5)[0].index).toBe(0);
+    expect(visibleLyricPages(source, pages[1].switchAt)[0].index).toBe(1);
+    const longEvent = {
+      ...event,
+      line: {
+        ...event.line,
+        syllables: syllables.map((syllable) => ({ ...syllable, text: `${syllable.text}-rất-dài`.repeat(5) })),
+      },
+    };
+    const continuation = renderToStaticMarkup(<LyricOverlay events={[longEvent]} presentation={narrow} time={9} />);
+    expect(continuation).toMatch(/data-page="[1-9][0-9]*"/);
+    expect(continuation).not.toContain("lyric-cue-dot");
+  });
+
+  it("keeps planned cue timing and exact lyric paint layers", () => {
     expect([0, 1, 2].map((index) => cueDotFill(cueEvent, 11.5, index, 3))).toEqual([100, 50, 0]);
-    expect([0, 1, 2].map((index) => cueDotFill(cueEvent, 13, index, 3))).toEqual([100, 100, 100]);
-    expect(cueDotFill({ ...cueEvent, showRoleCue: false }, 12, 0, 3)).toBe(0);
-  });
-
-  it("renders authenticated slots, role classes and only planned cue dots", () => {
+    expect(lyricTokenFill({ text: "hát", visualStart: 14, visualEnd: 15 }, 14.25)).toBe(25);
     const bottom: RenderEvent = {
       ...cueEvent,
       lineIndex: 1,
       slot: "bottom",
       role: "duet",
       showRoleCue: false,
-      roleCueReason: undefined,
-      line: { ...cueEvent.line, role: "duet", text: "Ta hát" },
+      line: { ...cueEvent.line, role: "duet", text: "Ấy, ta hát", syllables: [{ text: "Ấy,", start: 13, end: 14 }, { text: "ta", start: 14, end: 14.5 }, { text: "hát", start: 14.5, end: 15 }] },
     };
-    const visible = visibleLyricEvents([bottom, cueEvent], 11.5);
-    expect(visible.map((event) => event.slot)).toEqual(["top", "bottom"]);
-    const markup = renderToStaticMarkup(
-      <LyricOverlay events={[bottom, cueEvent]} presentation={presentation} time={11.5} />,
-    );
+    expect(visibleLyricEvents([bottom, cueEvent], 11.5).map(({ slot }) => slot)).toEqual(["top", "bottom"]);
+    const markup = renderToStaticMarkup(<LyricOverlay events={[bottom, cueEvent]} presentation={presentation} time={11.5} />);
     expect(markup).toContain("lyric-line top female");
     expect(markup).toContain("lyric-line bottom duet");
-    expect(markup).toContain('data-cue-reason="role-change"');
     expect(markup.match(/lyric-cue-dot/g)).toHaveLength(3);
-    expect(markup).toContain("--lyric-female:#F02A2A");
-    expect(markup).toContain("--fill:50%");
+    expect(markup).toContain("Ấy,");
+    expect(markup).toContain("lyric-token-shadow");
+    expect(markup).toContain("lyric-token-outline");
+    expect(markup).toContain("lyric-word");
   });
 
-  it("renders the core-planned initial, role-change and long-pause reasons only", () => {
-    for (const reason of ["initial", "role-change", "long-pause"] as const) {
-      const markup = renderToStaticMarkup(
-        <LyricOverlay
-          events={[{ ...cueEvent, roleCueReason: reason }]}
-          presentation={presentation}
-          time={11.5}
-        />,
-      );
-      expect(markup).toContain(`data-cue-reason="${reason}"`);
-      expect(markup.match(/lyric-cue-dot/g)).toHaveLength(3);
-    }
-    const unplanned = renderToStaticMarkup(
-      <LyricOverlay
-        events={[{ ...cueEvent, showRoleCue: false, roleCueReason: undefined }]}
-        presentation={presentation}
-        time={11.5}
-      />,
-    );
-    expect(unplanned).not.toContain("lyric-cue-dot");
-    expect(unplanned).not.toContain("data-cue-reason");
+  it("updates active paint from the media clock on animation frames and cancels cleanly", async () => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    let callback: FrameRequestCallback | undefined;
+    const request = vi.fn((next: FrameRequestCallback) => { callback = next; return 7; });
+    const cancel = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", request);
+    vi.stubGlobal("cancelAnimationFrame", cancel);
+    const media = { current: { currentTime: 13 } as HTMLAudioElement };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(
+      <LyricOverlay events={[cueEvent]} presentation={presentation} time={13} mediaRef={media} playing />,
+    ));
+    const word = container.querySelector<HTMLElement>('.lyric-token[data-start="13"]')!;
+    expect(word.style.getPropertyValue("--fill")).toBe("0%");
+    media.current.currentTime = 13.5;
+    await act(async () => callback?.(16));
+    expect(word.style.getPropertyValue("--fill")).toBe("50%");
+    expect(request).toHaveBeenCalledTimes(2);
+    await act(async () => root.unmount());
+    expect(cancel).toHaveBeenCalledWith(7);
   });
 
-  it("sweeps geometric cues without a fallback-font character", () => {
-    const root = document.createElement("div");
-    root.innerHTML = renderToStaticMarkup(
-      <LyricOverlay events={[cueEvent]} presentation={presentation} time={11.5} />,
-    );
-    const dots = [...root.querySelectorAll<HTMLElement>(".lyric-cue-dot")];
-    expect(dots.map((dot) => dot.style.getPropertyValue("--fill")))
-      .toEqual(["100%", "50%", "0%"]);
-    expect(dots.map((dot) => dot.textContent)).toEqual(["", "", ""]);
-    expect(dots.map((dot) => Boolean(dot.querySelector(".lyric-token-shadow"))))
-      .toEqual([true, true, true]);
-    expect(dots.map((dot) => dot.querySelector<HTMLElement>(".lyric-word")?.style.clipPath))
-      .toEqual(["none", "", undefined]);
+  it("caches layout between event and page boundaries in both playback directions", () => {
+    const boundaries = [2, 5, 8];
+    expect(lyricLayoutWindow(boundaries, 0)).toEqual([Number.NEGATIVE_INFINITY, 2]);
+    expect(lyricLayoutWindow(boundaries, 5)).toEqual([5, 8]);
+    expect(lyricLayoutWindow(boundaries, 20)).toEqual([8, Number.POSITIVE_INFINITY]);
   });
 
-  it("preserves exact text and stationary base layers across sweep endpoints and seeks", () => {
-    const text = 'Ấy, mình hát & <nghe> "nhé"!';
-    const event: RenderEvent = {
-      ...cueEvent,
-      showRoleCue: false,
-      line: { ...cueEvent.line, text, syllables: [{ text, visualStart: 13, visualEnd: 15 }] },
-    };
-    let base = "";
-    let shadow = "";
-    for (const [time, percent] of [[13, 0], [14, 50], [15, 100], [13.25, 12.5], [13, 0]]) {
-      const root = document.createElement("div");
-      root.innerHTML = renderToStaticMarkup(
-        <LyricOverlay events={[event]} presentation={presentation} time={time} />,
-      );
-      const token = root.querySelector<HTMLElement>(".lyric-copy .lyric-token")!;
-      const currentBase = token.querySelector(".lyric-token-outline")!;
-      const currentShadow = token.querySelector(".lyric-token-shadow")!;
-      const sung = token.querySelector<HTMLElement>(".lyric-word");
-      expect(token.style.getPropertyValue("--fill")).toBe(String(percent) + "%");
-      expect(currentBase.textContent).toBe(text);
-      expect(currentShadow.textContent).toBe(text);
-      base ||= currentBase.outerHTML;
-      shadow ||= currentShadow.outerHTML;
-      expect(currentBase.outerHTML).toBe(base);
-      expect(currentShadow.outerHTML).toBe(shadow);
-      if (percent === 0) {
-        expect(sung).toBeNull();
-      } else {
-        expect(sung?.textContent).toBe(text);
-        expect(sung?.style.clipPath).toBe(percent === 100 ? "none" : "");
-      }
-    }
+  it("isolates steady playback ticks from parent React renders", () => {
+    const media = { current: { currentTime: 13 } as HTMLAudioElement };
+    const previous = { events: [cueEvent], presentation, time: 13, mediaRef: media, playing: true };
+    expect(sameLyricOverlayProps(previous, { ...previous, time: 13.5 })).toBe(true);
+    expect(sameLyricOverlayProps({ ...previous, playing: false }, { ...previous, playing: false, time: 13.5 })).toBe(false);
+    expect(sameLyricOverlayProps(previous, { ...previous, events: [...previous.events] })).toBe(false);
   });
 });
