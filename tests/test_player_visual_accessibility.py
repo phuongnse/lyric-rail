@@ -147,6 +147,8 @@ def test_player_honors_authenticated_karaoke_layout_palette_and_cues() -> None:
     assert "cqh" not in LYRICS
     assert "144px" not in CSS
     assert "font-size: var(--lyric-base-font-size)" in CSS
+    assert ".lyric-line.top { bottom: calc(2.49em + var(--lyric-line-gap))" in CSS
+    assert ".lyric-line.bottom { bottom: 0" in CSS
     assert "transform: scale(var(--lyric-scale-x)" not in CSS
     assert "shouldUpdateTransportClock(now, last)" in APP
     assert "now - last >= 33" not in APP

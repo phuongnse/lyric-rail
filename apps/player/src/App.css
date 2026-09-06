@@ -143,10 +143,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 
 .lyric-overlay { position: absolute; z-index: 2; inset: 0; display: block; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
 .lyric-canvas { position: relative; width: 100%; height: 100%; overflow: hidden; font-family: "Be Vietnam Pro", sans-serif; font-weight: 500; }
-.lyric-stack { position: absolute; right: max(var(--lyric-safe-x), calc((100% - var(--lyric-max-width)) / 2)); bottom: var(--lyric-bottom); left: max(var(--lyric-safe-x), calc((100% - var(--lyric-max-width)) / 2)); display: flex; flex-direction: column; gap: calc(var(--lyric-line-gap) + .15em); padding: 0 var(--lyric-paint-padding); }
-.lyric-line { --role: var(--lyric-male); display: flex; width: 100%; font-size: var(--lyric-base-font-size); line-height: 1.08; text-rendering: geometricPrecision; }
-.lyric-line.top { justify-content: flex-start; text-align: left; }
-.lyric-line.bottom { justify-content: flex-end; text-align: right; }
+.lyric-stack { position: absolute; right: max(var(--lyric-safe-x), calc((100% - var(--lyric-max-width)) / 2)); bottom: var(--lyric-bottom); left: max(var(--lyric-safe-x), calc((100% - var(--lyric-max-width)) / 2)); }
+.lyric-line { --role: var(--lyric-male); position: absolute; right: var(--lyric-paint-padding); left: var(--lyric-paint-padding); display: flex; font-size: var(--lyric-base-font-size); line-height: 1.08; text-rendering: geometricPrecision; }
+.lyric-line.top { bottom: calc(2.49em + var(--lyric-line-gap)); justify-content: flex-start; text-align: left; }
+.lyric-line.bottom { bottom: 0; justify-content: flex-end; text-align: right; }
 .lyric-line.female { --role: var(--lyric-female); }
 .lyric-line.duet { --role: var(--lyric-duet); }
 .lyric-line-content { display: flex; width: 100%; flex-direction: column; gap: .18em; }

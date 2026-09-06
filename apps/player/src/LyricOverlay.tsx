@@ -254,7 +254,12 @@ export function paginateLyricEvent(
   const source = event.line?.syllables?.length
     ? event.line.syllables
     : [{ text: event.line?.text ?? "", start: event.vocalStart, end: event.vocalEnd }];
-  const syllables = source.flatMap((syllable) => splitOverwideSyllable(syllable, maximumWidth, measureText));
+  const firstRowWidth = Math.max(fontSize, maximumWidth - cueWidth - (cueWidth ? gap : 0));
+  const syllables = source.flatMap((syllable, index) => splitOverwideSyllable(
+    syllable,
+    index === 0 ? firstRowWidth : maximumWidth,
+    measureText,
+  ));
   const pages: Syllable[][][] = [];
   let rows: Syllable[][] = [[]];
   let rowWidth = cueWidth;

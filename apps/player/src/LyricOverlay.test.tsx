@@ -159,6 +159,27 @@ describe("shared karaoke core", () => {
     expect(fragments[fragments.length - 1].visualEnd).toBe(8);
   });
 
+  it("reserves cue geometry before splitting the first over-wide token", () => {
+    const narrow = { ...presentation, referenceResolution: [600, 1080] as [number, number] };
+    const text = "a".repeat(20);
+    const event: RenderEvent = {
+      ...cueEvent,
+      displayStart: 0,
+      vocalStart: 2,
+      vocalEnd: 8,
+      displayEnd: 9,
+      line: { ...cueEvent.line, text, syllables: [{ text, visualStart: 2, visualEnd: 8 }] },
+    };
+    const measure = (value: string) => value.length * 30;
+    const first = paginateLyricEvent(event, narrow, measure)[0].rows[0][0];
+    const fontSize = fixedLyricFontSize(narrow);
+    const maximumWidth = 600 * 0.93 - 2 * fontSize * 0.11;
+    const gap = fontSize * 0.2414;
+    const cueWidth = 3 * fontSize * 0.2931 + 2 * gap;
+    expect(cueWidth + gap + measure(first.text)).toBeLessThanOrEqual(maximumWidth);
+    expect(first.text.length).toBeLessThan(text.length);
+  });
+
   it("selects continuation pages from their original timing and never repeats source cues", () => {
     const narrow = { ...presentation, referenceResolution: [600, 1080] as [number, number] };
     const syllables = Array.from({ length: 8 }, (_, index) => ({ text: `w${index}`, visualStart: index + 2, visualEnd: index + 2.8 }));
