@@ -1,6 +1,6 @@
 ---
-name: implement-change
-description: Implement the accepted plan or resolve blocking review findings without changing the contract implicitly.
+name: change-implement
+description: Implement the accepted plan or resolve blocking review findings when routed by deliver-change, without changing the contract implicitly.
 ---
 
 # Implement a change
@@ -16,6 +16,10 @@ without starting another cycle; review checks all registered participants.
 Implement only the current plan. Add focused regression coverage for deterministic
 defects and keep consumer-owned policy in the consumer. If review requested changes,
 resolve every blocking finding in the next cycle without renaming or dropping it.
+Follow every applicable **production-engineering** assessment and make its named work
+items produce the planned objective evidence. If implementation proves an
+applicability decision wrong, preserve the accepted contract and implement the
+required structure; the independent review records the corrected semantic result.
 
 Do not weaken an affected enforced readiness capability or silently change its pack,
 version, profile mapping, state, or gap. A planned-to-enforced transition must be an
@@ -25,4 +29,4 @@ gaps merely because they are listed.
 
 When evidence exposes a contract gap, stop and ask the project owner to supersede the
 contract. Do not make review prose into new scope. When implementation is ready,
-route to **verify-change**.
+route to **change-verify**.

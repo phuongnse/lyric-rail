@@ -1,5 +1,5 @@
 ---
-name: improve-process
+name: process-improve
 description: Change the shared process only in response to evidence from a real consumer and prefer removing complexity over adding governance.
 ---
 
@@ -45,6 +45,11 @@ to the owner. Open it only after explicit authorization:
       --title 'STABLE-KEY concise summary' \
       --body-file .process/runs/CHANGE_ID/process-improvement-issue.md
 
+When this handoff came from a pending schema-version 7 review, return the existing or
+newly owner-authorized issue's stable HTTPS URL to that review. It remains
+`review-pending`, and a `shared-process` disposition cannot submit without that
+`recordUrl`.
+
 Do not run issue creation from consumer CI, reuse a consumer or Renovate write token,
 or treat missing GitHub access as a blocker. Without authorized `gh` access, return
 the draft, the open-issue search URL containing the complete stable key, and then the
@@ -63,7 +68,7 @@ Find the smallest reusable correction. Prefer, in order:
 4. add a new gate only when the consumer evidence proves the other options cannot
    protect the required invariant.
 
-Use **run-change** for the actual work and require the same independent final review
+Use **deliver-change** for the actual work and require the same independent final review
 as any consumer change. Track cross-repository discussion in ordinary issues or pull
 requests; do not create a second lifecycle or evidence federation. The process never
 self-publishes or self-merges: the owner retains release and adoption authority, and
