@@ -266,7 +266,8 @@ export function paginateLyricEvent(
   for (const syllable of syllables) {
     const width = measureText(syllable.text);
     const spacing = rowWidth > 0 ? gap : 0;
-    if (rows[rows.length - 1].length === 0 || rowWidth + spacing + width <= maximumWidth) {
+    const rowIsEmpty = rows[rows.length - 1].length === 0;
+    if ((rowIsEmpty && rowWidth === 0) || rowWidth + spacing + width <= maximumWidth) {
       rows[rows.length - 1].push(syllable);
       rowWidth += spacing + width;
     } else if (rows.length < MAX_PAGE_ROWS) {

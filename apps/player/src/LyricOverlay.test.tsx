@@ -180,6 +180,21 @@ describe("shared karaoke core", () => {
     expect(first.text.length).toBeLessThan(text.length);
   });
 
+  it("moves an indivisible grapheme below a cue cluster when only the full row can hold it", () => {
+    const narrow = { ...presentation, referenceResolution: [600, 1080] as [number, number] };
+    const event: RenderEvent = {
+      ...cueEvent,
+      displayStart: 0,
+      vocalStart: 2,
+      vocalEnd: 3,
+      displayEnd: 4,
+      line: { ...cueEvent.line, text: "界", syllables: [{ text: "界", visualStart: 2, visualEnd: 3 }] },
+    };
+    const page = paginateLyricEvent(event, narrow, () => 500)[0];
+    expect(page.rows.map((row) => row.length)).toEqual([0, 1]);
+    expect(page.rows.flat().map(({ text }) => text).join("")).toBe("界");
+  });
+
   it("selects continuation pages from their original timing and never repeats source cues", () => {
     const narrow = { ...presentation, referenceResolution: [600, 1080] as [number, number] };
     const syllables = Array.from({ length: 8 }, (_, index) => ({ text: `w${index}`, visualStart: index + 2, visualEnd: index + 2.8 }));
