@@ -31,7 +31,7 @@ processctl verify --project-root . --profile python
 
 ## Change contract
 
-- Enter every non-trivial change through the managed `run-change` skill. Keep its
+- Enter every non-trivial change through the managed `deliver-change` skill. Keep its
   contract, plan, verification, and review evidence bound to the same clean Git
   checkpoint under `.process/runs/`.
 - Independent review must use a read-only actor and fresh context that did not

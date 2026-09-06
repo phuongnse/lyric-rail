@@ -1,6 +1,6 @@
 ---
-name: start-change
-description: Turn an accepted request into a bounded change contract before planning or implementation begins.
+name: change-start
+description: Turn an accepted request into a bounded change contract when deliver-change routes a new change to lifecycle start.
 ---
 
 # Start a change

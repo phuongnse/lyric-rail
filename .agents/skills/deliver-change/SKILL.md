@@ -1,9 +1,9 @@
 ---
-name: run-change
-description: Route a non-trivial repository change through the complete engineering process from an accepted contract to independently reviewed completion.
+name: deliver-change
+description: Drive a repository change through the governed engineering lifecycle, from an accepted contract to independently reviewed completion.
 ---
 
-# Run a change
+# Deliver a change
 
 Use this as the only entry point for delivery work. Run `processctl project validate
 --json` first. When readiness is present, report its stage, immutable pack versions,
@@ -11,21 +11,22 @@ enforced floor, and planned gaps. Planned gaps guide future work but do not beco
 scope of the current change unless the accepted request selects one; never choose the
 product roadmap autonomously.
 
-Inspect processctl change status when a change already exists, then route exactly one
-current phase:
+The six **change-*** skills are lifecycle routes selected here. Inspect processctl
+change status when a change already exists, then route exactly one current phase:
 
-1. No run: use **start-change**.
-2. specified: use **plan-change**.
-3. planned or changes-requested: use **implement-change**.
-4. implementing: use **verify-change**.
-5. verified or review-pending: use **review-change**; if the repository changed after
-   evidence was recorded, use **implement-change** to open a new cycle.
-6. approved: use **finish-change**; a later repository change also reopens through
-   **implement-change**.
+1. No run: use **change-start**.
+2. specified: use **change-plan**.
+3. planned or changes-requested: use **change-implement**.
+4. implementing: use **change-verify**.
+5. verified or review-pending: use **change-review**, resuming the existing assignment
+   when review is pending; if the repository changed after evidence was recorded,
+   use **change-implement** to open a new cycle.
+6. approved: use **change-complete**; a later repository change also reopens through
+   **change-implement**.
 7. blocked: stop. The current contract cannot merge; the owner may narrow or
    supersede it, but no correction-limit stop can waive independent review.
 
-When changing this process itself, first use **improve-process** to prove the request
+When changing this process itself, first use **process-improve** to prove the request
 came from a real consumer incident or need; the change still follows the same six
 phases afterward.
 

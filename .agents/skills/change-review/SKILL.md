@@ -1,14 +1,23 @@
 ---
-name: review-change
-description: Review the exact verified snapshot from an actor and context independent of its implementation.
+name: change-review
+description: Review the exact verified snapshot from an independent actor and context when routed by deliver-change.
 ---
 
 # Review a change
 
 The reviewer must not share either actor identity or execution context with an
-implementer in the current cycle. Start the assignment:
+implementer in the current cycle. Read `processctl change status --change-id ID`.
+When the phase is `verified`, start the assignment:
 
     processctl change review start --change-id ID --actor REVIEWER --context REVIEW_CONTEXT
+
+When the phase is `review-pending`, resume the existing assignment; do not run
+`change review start` again. Read `.process/runs/ID/run.json` for its `cycle` and
+`reviewAssignment`, including the assigned reviewer, checkpoint, and
+`reportSchemaVersion`. Continue with the assigned independent actor/context and the
+existing report path, `.process/runs/ID/review-CYCLE.json`. If that reviewer is
+unavailable, report the pending assignment as a blocker; never impersonate its
+identity or create a replacement assignment from another context.
 
 Review the accepted contract, plan, complete diff, focused tests, and verification
 evidence. The first pass is comprehensive within that frozen contract. Every finding
@@ -41,7 +50,7 @@ consider consumer evidence that the lifecycle cannot observe. Every schema-versi
 report classifies `processImprovement` as `none`, `consumer-specific`, or
 `shared-process` and gives a concrete rationale. Consumer-specific behavior stays in
 the consumer. For `shared-process`, keep the assignment `review-pending` and route the
-candidate through **improve-process**. Submit only after an existing or owner-authorized
+candidate through **process-improve**. Submit only after an existing or owner-authorized
 issue supplies the stable HTTPS `recordUrl`; the review itself remains read-only.
 
 Read the consumer readiness result and repository rules. Check the complete diff for
@@ -56,8 +65,8 @@ Validate and submit the report:
     processctl contract validate --kind review REPORT_PATH
     processctl change review submit --change-id ID --review REPORT_PATH
 
-Review is read-only. Requested changes route back to **implement-change**; approval
-routes to **finish-change**. Keep the same independent reviewer for corrections.
+Review is read-only. Requested changes route back to **change-implement**; approval
+routes to **change-complete**. Keep the same independent reviewer for corrections.
 Follow-up scope is only carried findings, remediation diffs, and regressions against
 the frozen contract. A new blocker must be either remediation-caused or a P0/P1 late
 violation with a rationale. After two correction cycles, another changes-requested

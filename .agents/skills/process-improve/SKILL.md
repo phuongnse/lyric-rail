@@ -1,5 +1,5 @@
 ---
-name: improve-process
+name: process-improve
 description: Change the shared process only in response to evidence from a real consumer and prefer removing complexity over adding governance.
 ---
 
@@ -68,7 +68,7 @@ Find the smallest reusable correction. Prefer, in order:
 4. add a new gate only when the consumer evidence proves the other options cannot
    protect the required invariant.
 
-Use **run-change** for the actual work and require the same independent final review
+Use **deliver-change** for the actual work and require the same independent final review
 as any consumer change. Track cross-repository discussion in ordinary issues or pull
 requests; do not create a second lifecycle or evidence federation. The process never
 self-publishes or self-merges: the owner retains release and adoption authority, and

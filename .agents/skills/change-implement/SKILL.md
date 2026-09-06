@@ -1,6 +1,6 @@
 ---
-name: implement-change
-description: Implement the accepted plan or resolve blocking review findings without changing the contract implicitly.
+name: change-implement
+description: Implement the accepted plan or resolve blocking review findings when routed by deliver-change, without changing the contract implicitly.
 ---
 
 # Implement a change
@@ -29,4 +29,4 @@ gaps merely because they are listed.
 
 When evidence exposes a contract gap, stop and ask the project owner to supersede the
 contract. Do not make review prose into new scope. When implementation is ready,
-route to **verify-change**.
+route to **change-verify**.
