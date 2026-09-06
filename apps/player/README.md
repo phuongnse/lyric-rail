@@ -59,6 +59,14 @@ Placement is automatic: top-center by default, bottom at the top viewport edge, 
 left/right aligned at the corresponding viewport edge. Visible-text actions do not
 emit redundant tooltips. No external UI or icon theme defines the product's appearance.
 
+Live karaoke uses the bundled Be Vietnam Pro Medium face. Its unsung base and short
+offset shadow stay fixed while the role color and inner outline sweep together over
+the exact timed text. Planned cue circles use the same paint layers and word gap;
+their geometry avoids the fallback-font circle missing from the bundled typeface.
+The Player appearance applies to existing packages while preserving their authenticated
+palette, layout and cue/timing policy, as specified in
+[the v1 presentation contract](../../docs/LRAIL_FORMAT_V1.md).
+
 ```text
 npm run dev:player
 npm run build:player

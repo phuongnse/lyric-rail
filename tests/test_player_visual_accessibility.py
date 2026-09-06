@@ -103,7 +103,7 @@ def test_fullscreen_icon_label_and_action_follow_live_state() -> None:
     assert "target.requestFullscreen()" in playback
 
 
-def test_player_honors_authenticated_karaoke_presentation_and_cues() -> None:
+def test_player_honors_authenticated_karaoke_layout_palette_and_cues() -> None:
     native = (ROOT / "apps/player/src-tauri/src/lib.rs").read_text(encoding="utf-8")
     assert 'from "./LyricOverlay"' in APP
     assert "presentation={opened.presentation}" in APP
@@ -127,13 +127,14 @@ def test_player_honors_authenticated_karaoke_presentation_and_cues() -> None:
         "event.showRoleCue",
         "event.roleCueReason",
         "cueDotFill(event, time, dotIndex, cueCount)",
-        'text="●"',
     ):
         assert token in LYRICS
     for selector in (
         ".lyric-line.top",
         ".lyric-line.bottom",
         ".lyric-token-outline",
+        ".lyric-token-shadow",
+        ".lyric-cue-dot > span",
         ".lyric-cue {",
     ):
         assert selector in CSS

@@ -115,7 +115,6 @@ export function boundedLineFontSize(
 }
 
 export function presentationStyle(presentation: KaraokePresentation): CSSProperties {
-  const browserFontFamily = presentation.font.family.replace(/ Bold$/, "");
   const lineStep = (
     presentation.font.sizeAt1080p * presentation.font.scaleY / 100
     + presentation.layout.lineGap
@@ -126,43 +125,41 @@ export function presentationStyle(presentation: KaraokePresentation): CSSPropert
     "--lyric-bottom": referencePixelValue(presentation.layout.bottomMargin),
     "--lyric-line-step": referencePixelValue(lineStep),
     "--lyric-base-font-size": referencePixelValue(presentation.font.sizeAt1080p),
-    "--lyric-cue-font-size": referencePixelValue(
-      presentation.roleChangeCue.dotFontSizeAt1080p,
-    ),
     "--lyric-letter-spacing": referencePixelValue(presentation.font.letterSpacing),
     "--lyric-scale-x": presentation.font.scaleX / 100,
     "--lyric-scale-y": presentation.font.scaleY / 100,
     "--lyric-unsung": presentation.unsung.fill,
     "--lyric-outer": presentation.unsung.outerOutline,
-    "--lyric-outer-width": referencePixelValue(
-      presentation.unsung.outerOutlineWidth + presentation.sung.innerOutlineWidth,
-    ),
     "--lyric-inner": presentation.sung.innerOutline,
-    "--lyric-inner-width": referencePixelValue(presentation.sung.innerOutlineWidth),
     "--lyric-shadow": presentation.unsung.shadow,
-    "--lyric-shadow-offset": referencePixelValue(presentation.unsung.shadowOffset),
     "--lyric-male": presentation.sung.colors.male,
     "--lyric-female": presentation.sung.colors.female,
     "--lyric-duet": presentation.sung.colors.duet,
-    fontFamily: `"${browserFontFamily}", sans-serif`,
-    fontWeight: presentation.font.bold ? 900 : 850,
   } as CSSProperties;
 }
 
 function KaraokeToken({
-  text,
+  text = "",
   fill,
   cue = false,
 }: {
-  text: string;
+  text?: string;
   fill: number;
   cue?: boolean;
 }) {
-  const style = { "--fill": `${clampPercent(fill)}%` } as CSSProperties;
+  const progress = clampPercent(fill);
+  const style = { "--fill": `${progress}%` } as CSSProperties;
   return (
-    <span className={`lyric-token ${cue ? "lyric-cue-dot" : ""}`} style={style}>
+    <span className={`lyric-token${cue ? " lyric-cue-dot" : ""}`} style={style}>
+      <span className="lyric-token-shadow" aria-hidden="true">{text}</span>
       <span className="lyric-token-outline">{text}</span>
-      <span className="lyric-word">{text}</span>
+      {progress > 0 && (
+        <span
+          className="lyric-word"
+          aria-hidden="true"
+          style={progress === 100 ? { clipPath: "none" } : undefined}
+        >{text}</span>
+      )}
     </span>
   );
 }
@@ -215,7 +212,6 @@ export function LyricOverlay({
                           cue
                           fill={cueDotFill(event, time, dotIndex, cueCount)}
                           key={`cue-${dotIndex}`}
-                          text="●"
                         />
                       ))}
                     </span>

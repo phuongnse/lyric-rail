@@ -147,8 +147,14 @@ presentation values to its WebView. The v1 dynamic renderer supports the declare
 `alternating-two-lines`, `top-left-bottom-right`, left-to-right syllable sweep contract;
 numeric geometry is bounded and colors are strict six-digit hex values. It consumes
 `slot`, `showRoleCue`, `roleCueReason`, `displayStart` and `vocalStart` from the
-authenticated render plan. It does not re-decide cue policy or replace the package style
-with application defaults.
+authenticated render plan. It does not re-decide cue policy. The authenticated palette,
+reference geometry, line sizes and font scales remain authoritative. The Player's
+typeface and relative contour, shadow, spacing and circle dimensions are application
+appearance policy: existing packages receive the current Be Vietnam Pro Medium look.
+Stored font-family/weight, cue-font-size, outline-width and shadow-offset hints remain
+valid v1 data for producers and other renderers but do not control these Player
+cosmetics. This display change neither rewrites package assets nor changes the v1
+wire schema or producer ASS output.
 
 The authoritative text asset preserves the exact confirmed string, including blank
 lines, whitespace and line-ending choices; timing/render assets contain the derived

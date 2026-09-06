@@ -2,7 +2,7 @@
   font-family: "Be Vietnam Pro";
   src: url("../../../assets/fonts/BeVietnamPro-Medium.ttf") format("truetype");
   font-display: swap;
-  font-weight: 400;
+  font-weight: 400 500;
 }
 
 @font-face {
@@ -142,21 +142,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .video-stage:hover .center-play, .center-play:focus-visible { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 
 .lyric-overlay { position: absolute; z-index: 2; inset: 0; display: block; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
-.lyric-canvas { position: relative; width: 100%; height: 100%; overflow: hidden; font-family: "Be Vietnam Pro", sans-serif; }
-.lyric-line { --role: var(--lyric-male); position: absolute; right: var(--lyric-safe-x); left: var(--lyric-safe-x); display: flex; align-items: baseline; font-size: var(--lyric-line-font-size, var(--lyric-base-font-size)); font-weight: 850; line-height: 1.08; letter-spacing: var(--lyric-letter-spacing); text-rendering: geometricPrecision; }
+.lyric-canvas { --lyric-word-gap: .2414em; --lyric-cue-size: .2931em; --lyric-outer-width: .1069em; --lyric-inner-width: .0724em; --lyric-shadow-x: .0425em; --lyric-shadow-y: .065em; position: relative; width: 100%; height: 100%; overflow: hidden; font-family: "Be Vietnam Pro", sans-serif; font-weight: 500; }
+.lyric-line { --role: var(--lyric-male); position: absolute; right: var(--lyric-safe-x); left: var(--lyric-safe-x); display: flex; align-items: baseline; font-size: var(--lyric-line-font-size, var(--lyric-base-font-size)); line-height: 1.08; letter-spacing: var(--lyric-letter-spacing); text-rendering: geometricPrecision; }
 .lyric-line.top { bottom: calc(var(--lyric-bottom) + var(--lyric-line-step)); justify-content: flex-start; text-align: left; }
 .lyric-line.bottom { bottom: var(--lyric-bottom); justify-content: flex-end; text-align: right; }
 .lyric-line.female { --role: var(--lyric-female); }
 .lyric-line.duet { --role: var(--lyric-duet); }
-.lyric-line-content { display: flex; max-width: var(--lyric-max-width); align-items: baseline; white-space: nowrap; transform: scale(var(--lyric-scale-x), var(--lyric-scale-y)); }
+.lyric-line-content { display: flex; max-width: var(--lyric-max-width); align-items: center; gap: var(--lyric-word-gap); white-space: nowrap; transform: scale(var(--lyric-scale-x), var(--lyric-scale-y)); }
 .lyric-line.top .lyric-line-content { transform-origin: left bottom; }
 .lyric-line.bottom .lyric-line-content { transform-origin: right bottom; }
-.lyric-copy, .lyric-cue { display: inline-flex; align-items: baseline; gap: .3em; white-space: nowrap; }
-.lyric-cue { flex: 0 0 auto; gap: .18em; margin-right: .38em; font-size: var(--lyric-cue-font-size); }
-.lyric-token { position: relative; display: inline-grid; flex: 0 0 auto; place-items: center; }
+.lyric-copy, .lyric-cue { display: inline-flex; align-items: center; gap: var(--lyric-word-gap); white-space: nowrap; }
+.lyric-cue { flex: 0 0 auto; }
+.lyric-token { position: relative; display: inline-grid; flex: 0 0 auto; place-items: center; isolation: isolate; }
 .lyric-token > span { grid-area: 1 / 1; }
-.lyric-token-outline { color: var(--lyric-unsung); paint-order: stroke fill; -webkit-text-stroke: var(--lyric-outer-width) var(--lyric-outer); text-shadow: var(--lyric-shadow-offset) var(--lyric-shadow-offset) 0 var(--lyric-shadow); }
-.lyric-word { position: relative; color: transparent; background: linear-gradient(90deg, var(--role) 0, var(--role) var(--fill, 0%), var(--lyric-unsung) var(--fill, 0%), var(--lyric-unsung) 100%); background-clip: text; paint-order: stroke fill; -webkit-background-clip: text; -webkit-text-stroke: var(--lyric-inner-width) var(--lyric-inner); -webkit-text-fill-color: transparent; }
+.lyric-token-shadow { z-index: -1; color: var(--lyric-shadow); paint-order: stroke fill; -webkit-text-stroke: var(--lyric-outer-width) var(--lyric-shadow); transform: translate(var(--lyric-shadow-x), var(--lyric-shadow-y)); }
+.lyric-token-outline { color: var(--lyric-unsung); paint-order: stroke fill; -webkit-text-stroke: var(--lyric-outer-width) var(--lyric-outer); }
+.lyric-word { color: var(--role); paint-order: stroke fill; -webkit-text-stroke: var(--lyric-inner-width) var(--lyric-inner); clip-path: inset(-1em calc(100% - var(--fill)) -1em -1em); }
+.lyric-cue-dot { width: var(--lyric-cue-size); height: var(--lyric-cue-size); }
+.lyric-cue-dot > span { width: 100%; height: 100%; border-radius: 50%; }
+.lyric-cue-dot .lyric-token-shadow { background: var(--lyric-shadow); box-shadow: 0 0 0 calc(var(--lyric-outer-width) / 2) var(--lyric-shadow); }
+.lyric-cue-dot .lyric-token-outline { background: var(--lyric-unsung); box-shadow: 0 0 0 calc(var(--lyric-outer-width) / 2) var(--lyric-outer); }
+.lyric-cue-dot .lyric-word { background: var(--role); box-shadow: 0 0 0 calc(var(--lyric-inner-width) / 2) var(--lyric-inner); }
 
 .transport { padding: 13px 16px 14px; box-shadow: none; }
 .timeline { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 10px; color: var(--muted); font-size: var(--font-small); font-variant-numeric: tabular-nums; }
