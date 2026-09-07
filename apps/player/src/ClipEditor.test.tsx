@@ -63,6 +63,10 @@ it("retains zero, duration and audio before delayed video", async () => {
   await blur("Section start time"); await blur("Section end time");
   expect(input("Drag section start").value).toBe("0");
   expect(input("Drag section end").value).toBe("1000");
+  await key("ArrowLeft");
+  expect(host.querySelector("audio")!.currentTime).toBe(0);
+  await key("ArrowRight");
+  expect(host.querySelector("audio")!.currentTime).toBeCloseTo(.30031, 6);
   await change("Drag section end", "200");
   await change("Drag section start", "50");
   await blur("Section start time"); await blur("Section end time");

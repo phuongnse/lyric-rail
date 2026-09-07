@@ -99,6 +99,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
   const step = (direction: -1 | 1) => {
     stop(); setReview(false);
     if (frames.length) {
+      if (position < boundaries[0]) { seek(direction > 0 ? frames[0] + .01 : position - 10); return; }
       const index = Math.max(0, Math.min(frames.length - 1, frameAt(boundaries, position) + direction));
       seek(frames[index] + .01);
     } else seek(position + direction * 10);
