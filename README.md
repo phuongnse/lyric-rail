@@ -66,15 +66,21 @@ Large queues keep a bounded Activity snapshot/count, while every queued row can 
 its stable task directly by ID for View task and Cancel; no active task is rejected or hidden
 from its action path merely because it falls outside the snapshot window.
 
-The Clip Editor supports millisecond Start/End entry, playhead capture, frame or 10 ms
-nudging and a selection loop. Users can add the whole file or only the selected timeline.
-Native ffprobe/ffmpeg are time/output bounded and restricted to local files plus a fixed
-demuxer allowlist. For consistent WebView playback across all supported inputs, native
-code derives a lightweight mono PCM preview into an anonymous delete-on-close handle and
-serves it through an opaque range endpoint. Leading/trailing silence preserves the exact
-source timeline even when its audio starts late or ends early. The selected source is
-identity-bound while the editor is open; preview, cancel and commit never rewrite or
-delete it. Selecting one `.lrail` package or multiple files keeps direct add behavior.
+The Clip Editor shows video with synchronized audio and supports up to 128 separately
+titled sections. Drag Start/End handles, scrub the playhead, use Left/Right for actual
+video frames (10 ms for audio), I/O to mark boundaries, and Space to play/pause.
+Review or loop the active section; reorder or remove songs before confirming.
+All sections appear at the top of Library & queue in editor order, waiting for each
+song's exact lyrics. Edit song opens title and lyric editing. Existing active processing continues.
+Full-source sidecar lyrics are never silently assigned to an extracted section.
+
+Native ffprobe/ffmpeg retain local-file/demuxer allowlists, identity guards and bounded
+anonymous preview handles. Video accepts sources up to 8K pixel count and uses a muted
+H264 proxy (up to 640x360, 2 GiB, five-minute
+encode limit), synchronized to the existing timeline-preserving PCM audio. Frame
+inspection is bounded to one million frames, 24 MiB and two minutes. Preview failure
+is explicit; original media is never modified. Selecting one `.lrail` package or
+multiple files keeps direct add behavior.
 
 If the app stops after a package is published but before its stage status is saved,
 Retry authenticates and binds that exact output to the job request, then continues

@@ -2438,6 +2438,7 @@ mod tests {
     #[test]
     fn local_clip_trim_is_propagated_to_the_existing_local_worker_request() {
         let item = CatalogItem {
+            section_id: None,
             id: "local-clip-item".into(),
             package_id: None,
             title: "Local clip".into(),
@@ -2532,6 +2533,7 @@ mod tests {
         )
         .unwrap();
         let item = CatalogItem {
+            section_id: None,
             id: "catalog-task-id".into(),
             package_id: None,
             title: "Song".into(),

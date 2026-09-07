@@ -39,13 +39,14 @@ current evidence for each claimed platform.
 - [x] The Clip Editor rejects links, unsupported/non-regular files, empty files and files
       over 8 GiB; local ffprobe/ffmpeg have fixed protocol/format allowlists plus output,
       duration and time bounds. Every format receives a bounded mono PCM preview in an
-      anonymous delete-on-close handle rather than relying on WebView source codecs;
+      anonymous delete-on-close handle, plus a bounded anonymous H264 proxy for video;
       PTS normalization and silence padding preserve the complete source timeline.
 - [x] Preview never rewrites or deletes selected source media; cancel and commit neither
       copy, rewrite nor delete it. Only one local clip session is live; it guards and
       rechecks platform file identity, size and change times before commit while its source
       path remains behind native code.
-- [x] Exact-stem UTF-8 sidecars pair deterministically; ambiguous/missing lyrics wait.
+- [x] Exact-stem UTF-8 sidecars pair deterministically for direct imports; extracted
+      sections always wait for their own lyrics and never inherit a whole-file sidecar.
 - [x] Supplied source lyric files are never modified or silently corrected.
 - [x] Explicit safe corrections re-align only affected lines; whitespace-only changes
       preserve timing and unsafe structural changes require local reprocessing.
@@ -87,7 +88,8 @@ current evidence for each claimed platform.
       positional reads, so concurrent requests cannot share a mutable file cursor.
 - [x] Multiple local sources use bounded, asynchronous, symlink-safe scans.
 - [x] Catalog paths, metadata, lyrics and search records are authenticated/encrypted at rest.
-- [x] Catalog v3 migrates v1/v2 media entries with Disk/no-trim defaults, retains local
+- [x] Catalog v4 migrates v1/v2/v3 media entries with absent section identities and
+      existing Disk/no-trim defaults, retains local
       clip trim metadata and setup-required state, and rejects future schemas.
 - [x] Drive cache contains versioned package ciphertext only and has deterministic limits.
 - [x] Repeated opens of one Drive object/version share one stable task and in-flight

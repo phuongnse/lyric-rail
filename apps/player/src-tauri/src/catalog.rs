@@ -14,7 +14,7 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-const CATALOG_SCHEMA: u16 = 3;
+const CATALOG_SCHEMA: u16 = 4;
 const CATALOG_DOMAIN: &str = "player-catalog-v1";
 const CATALOG_FILE: &str = "library.catalog.lrail-private";
 const CATALOG_KEY_SERVICE: &str = "com.lyricrail.private-state";
@@ -141,6 +141,8 @@ impl ItemLocation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<String>,
     pub id: String,
     pub package_id: Option<String>,
     pub title: String,
@@ -237,7 +239,7 @@ impl Default for CatalogDocument {
 
 fn migrate_catalog_document(mut document: CatalogDocument) -> Result<CatalogDocument, String> {
     match document.schema_version {
-        1 | 2 => document.schema_version = CATALOG_SCHEMA,
+        1..=3 => document.schema_version = CATALOG_SCHEMA,
         CATALOG_SCHEMA => {}
         version => return Err(format!("Unsupported private catalog schema {version}")),
     }
@@ -269,6 +271,7 @@ pub struct CatalogItemView {
     pub status_message: Option<String>,
     pub has_thumbnail: bool,
     pub can_process: bool,
+    pub can_rename: bool,
     pub sources: Vec<String>,
 }
 
@@ -285,6 +288,7 @@ impl From<&CatalogItem> for CatalogItemView {
             progress_percent: item.progress_percent,
             status_message: item.status_message.clone(),
             has_thumbnail: item.has_thumbnail,
+            can_rename: item.section_id.is_some() && item.status == ItemStatus::WaitingForLyrics,
             can_process: item
                 .locations
                 .iter()
@@ -314,6 +318,7 @@ struct SearchRecord {
     lyrics: String,
 }
 
+#[derive(Clone)]
 pub struct Catalog {
     path: PathBuf,
     document: CatalogDocument,
@@ -809,16 +814,17 @@ impl Catalog {
             .status_message
             .take()
             .map(|message| crate::tasks::redact_diagnostic_text(&message));
-        let match_index = incoming
-            .package_id
-            .as_deref()
-            .and_then(|package_id| self.package_lookup.get(package_id).copied())
-            .or_else(|| {
-                incoming
-                    .locations
-                    .iter()
-                    .find_map(|location| self.location_lookup.get(&location_key(location)).copied())
-            });
+        let match_index = self.item_lookup.get(&incoming.id).copied().or_else(|| {
+            incoming
+                .package_id
+                .as_deref()
+                .and_then(|package_id| self.package_lookup.get(package_id).copied())
+                .or_else(|| {
+                    incoming.locations.iter().find_map(|location| {
+                        self.location_lookup.get(&location_key(location)).copied()
+                    })
+                })
+        });
         if let Some(index) = match_index
             && has_matching_local_media(&self.document.items[index], &incoming)
         {
@@ -983,6 +989,59 @@ impl Catalog {
         Ok(())
     }
 
+    pub fn admit_sections(&mut self, items: Vec<CatalogItem>) -> Result<CatalogSnapshot, String> {
+        self.admit_sections_with(items, |candidate| candidate.save())
+    }
+
+    fn admit_sections_with(
+        &mut self,
+        items: Vec<CatalogItem>,
+        persist: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<CatalogSnapshot, String> {
+        if items.is_empty()
+            || items.len() > 128
+            || self.document.items.len() + items.len() > MAX_CATALOG_ITEMS
+        {
+            return Err("Section batch exceeds catalog capacity".into());
+        }
+        let mut ids = HashSet::new();
+        if items.iter().any(|item| {
+            item.section_id.is_none()
+                || !ids.insert(item.id.clone())
+                || self.item_lookup.contains_key(&item.id)
+                || !item.lyric_text.is_empty()
+        }) {
+            return Err("Section batch identity or lyrics are invalid".into());
+        }
+        let mut candidate = self.clone();
+        candidate.document.items.splice(0..0, items);
+        candidate.rebuild_indexes();
+        persist(&candidate)?;
+        *self = candidate;
+        Ok(self.snapshot())
+    }
+
+    pub fn rename_waiting_section(
+        &mut self,
+        id: &str,
+        title: &str,
+    ) -> Result<CatalogSnapshot, String> {
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > 200 || title.chars().any(char::is_control) {
+            return Err("Invalid song title".into());
+        }
+        let mut candidate = self.clone();
+        let item = candidate.item_mut(id).ok_or("Song no longer exists")?;
+        if item.section_id.is_none() || item.status != ItemStatus::WaitingForLyrics {
+            return Err("Only sections waiting for lyrics can be renamed".into());
+        }
+        item.title = title.into();
+        candidate.rebuild_indexes();
+        candidate.save()?;
+        *self = candidate;
+        Ok(self.snapshot())
+    }
+
     pub fn upsert_many(&mut self, items: Vec<CatalogItem>) -> Result<Vec<String>, String> {
         self.validate_upserts(items.iter())?;
         items.into_iter().map(|item| self.upsert(item)).collect()
@@ -1050,9 +1109,7 @@ impl Catalog {
         if let Some(package_id) = old.package_id {
             self.package_lookup.remove(&package_id);
         }
-        for location in &old.locations {
-            self.location_lookup.remove(&location_key(location));
-        }
+        self.location_lookup.retain(|_, current| *current != index);
         self.item_lookup.remove(&old.id);
         self.index_item(index);
     }
@@ -1063,8 +1120,10 @@ impl Catalog {
         if let Some(package_id) = &item.package_id {
             self.package_lookup.insert(package_id.clone(), index);
         }
-        for location in &item.locations {
-            self.location_lookup.insert(location_key(location), index);
+        if item.section_id.is_none() {
+            for location in &item.locations {
+                self.location_lookup.insert(location_key(location), index);
+            }
         }
         self.search
             .insert(item.id.clone(), SearchRecord::from(item));
@@ -1075,6 +1134,9 @@ impl Catalog {
 
     fn refresh_location_indexes(&mut self, index: usize) {
         self.location_lookup.retain(|_, current| *current != index);
+        if self.document.items[index].section_id.is_some() {
+            return;
+        }
         for location in &self.document.items[index].locations {
             self.location_lookup.insert(location_key(location), index);
         }
@@ -1344,6 +1406,7 @@ mod tests {
 
     fn item(id: usize) -> CatalogItem {
         CatalogItem {
+            section_id: None,
             id: id.to_string(),
             package_id: Some(format!("package-{id}")),
             title: if id == 7 {
@@ -1386,6 +1449,85 @@ mod tests {
         };
         catalog.rebuild_indexes();
         catalog
+    }
+
+    #[test]
+    fn section_batches_are_ordered_independent_and_rollback_on_persist_failure() {
+        let mut catalog = catalog(2);
+        let previous = catalog
+            .snapshot()
+            .items
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        let mut first = item(10);
+        first.section_id = Some(first.id.clone());
+        first.lyric_text.clear();
+        first.status = super::ItemStatus::WaitingForLyrics;
+        first.package_id = None;
+        first.locations = vec![super::ItemLocation::LocalMedia {
+            source_id: None,
+            path: PathBuf::from("shared.mp4"),
+            lyrics_path: None,
+            origin: super::MediaOrigin::Disk,
+            trim_start_millis: Some(0),
+            trim_end_millis: Some(100),
+            available: true,
+        }];
+        let mut second = first.clone();
+        second.id = "second-section".into();
+        second.section_id = Some(second.id.clone());
+        second.title = "Second".into();
+        let items = vec![first.clone(), second.clone()];
+        assert!(
+            catalog
+                .admit_sections_with(items.clone(), |_| Err("disk full".into()))
+                .is_err()
+        );
+        assert_eq!(
+            catalog
+                .snapshot()
+                .items
+                .iter()
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>(),
+            previous
+        );
+        let snapshot = catalog
+            .admit_sections_with(items.clone(), |candidate| {
+                let encoded = serde_json::to_vec(&candidate.document).unwrap();
+                let decoded: super::CatalogDocument = serde_json::from_slice(&encoded).unwrap();
+                assert_eq!(decoded.items[0].section_id, first.section_id);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            snapshot
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                first.id.as_str(),
+                second.id.as_str(),
+                previous[0].as_str(),
+                previous[1].as_str()
+            ]
+        );
+        assert!(
+            catalog
+                .admit_sections_with(items, |_| panic!("duplicate batch cannot persist"))
+                .is_err()
+        );
+        assert_eq!(catalog.items().len(), 4);
+        assert!(catalog.snapshot().items[0].can_rename);
+        let mut scan = first.clone();
+        scan.id = "whole-source".into();
+        scan.section_id = None;
+        catalog.upsert(scan).unwrap();
+        assert_eq!(catalog.item(&second.id).unwrap().title, "Second");
+        assert!(catalog.item(&first.id).is_some());
+        assert_eq!(catalog.items().len(), 5);
     }
 
     #[test]
@@ -1671,7 +1813,7 @@ mod tests {
 
     #[test]
     fn prior_catalog_schemas_migrate_but_future_schema_fails_closed() {
-        for schema_version in [1, 2] {
+        for schema_version in [1, 2, 3] {
             let document = CatalogDocument {
                 schema_version,
                 ..Default::default()

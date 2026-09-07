@@ -98,6 +98,7 @@ fn package_item(path: PathBuf) -> CatalogItem {
         Ok(vault) => vault,
         Err(error) => {
             return CatalogItem {
+                section_id: None,
                 id: path_item_id(&path),
                 package_id: None,
                 title: fallback_title,
@@ -159,6 +160,7 @@ fn package_item(path: PathBuf) -> CatalogItem {
                     .unwrap_or_default()
             };
             CatalogItem {
+                section_id: None,
                 id: package_id.clone(),
                 package_id: Some(package_id),
                 title,
@@ -183,6 +185,7 @@ fn package_item(path: PathBuf) -> CatalogItem {
             }
         }
         Err(error) => CatalogItem {
+            section_id: None,
             id: path_item_id(&path),
             package_id: None,
             title: fallback_title,
@@ -273,6 +276,7 @@ fn media_item(path: PathBuf) -> CatalogItem {
         .unwrap_or("Untitled media")
         .to_owned();
     CatalogItem {
+        section_id: None,
         id: path_item_id(&path),
         package_id: None,
         title,

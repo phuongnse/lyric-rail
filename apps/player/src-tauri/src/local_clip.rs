@@ -32,8 +32,8 @@ const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SOURCE_DURATION_MILLIS: u64 = 24 * 60 * 60 * 1000;
 const MAX_PROBE_BYTES: usize = 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
-const SAFE_INPUT_FORMATS: &str = "mov,matroska,webm,mp3,aac,wav,ogg,flac,avi,asf";
-const SAFE_INPUT_PROTOCOLS: &str = "file";
+pub(super) const SAFE_INPUT_FORMATS: &str = "mov,matroska,webm,mp3,aac,wav,ogg,flac,avi,asf";
+pub(super) const SAFE_INPUT_PROTOCOLS: &str = "file";
 const CLIP_TASK_ID: &str = "clip-preparation";
 type ClipProgressReporter = Arc<dyn Fn(u64, u64) + Send + Sync>;
 
@@ -51,6 +51,7 @@ struct LocalClipSession {
     source_identity: SourceIdentity,
     preview_file: Arc<fs::File>,
     preview_size_bytes: u64,
+    video: Option<(Arc<fs::File>, u64)>,
     duration_millis: u64,
 }
 
@@ -67,7 +68,10 @@ pub struct LocalClipPreview {
     size_bytes: u64,
     duration_millis: u64,
     frame_duration_millis: Option<f64>,
+    frame_times_millis: Vec<f64>,
+    video_offset_millis: f64,
     preview_url: String,
+    video_url: Option<String>,
 }
 
 struct PreparedLocalClip {
@@ -76,10 +80,13 @@ struct PreparedLocalClip {
     source_identity: SourceIdentity,
     preview_file: Arc<fs::File>,
     preview_size_bytes: u64,
+    video: Option<(Arc<fs::File>, u64)>,
     suggested_title: String,
     size_bytes: u64,
     duration_millis: u64,
     frame_duration_millis: Option<f64>,
+    frame_times_millis: Vec<f64>,
+    video_offset_millis: f64,
 }
 
 #[cfg(unix)]
@@ -123,12 +130,16 @@ struct ProbeOutput {
 #[derive(Default, Deserialize)]
 struct ProbeFormat {
     duration: Option<String>,
+    start_time: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ProbeStream {
     codec_type: Option<String>,
     avg_frame_rate: Option<String>,
+    start_time: Option<String>,
+    width: Option<u64>,
+    height: Option<u64>,
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
@@ -327,7 +338,11 @@ fn platform_read_at(file: &fs::File, buffer: &mut [u8], offset: u64) -> std::io:
     file.read(buffer)
 }
 
-fn read_exact_at(file: &fs::File, mut buffer: &mut [u8], mut offset: u64) -> Result<(), ()> {
+pub(super) fn read_exact_at(
+    file: &fs::File,
+    mut buffer: &mut [u8],
+    mut offset: u64,
+) -> Result<(), ()> {
     while !buffer.is_empty() {
         let read = platform_read_at(file, buffer, offset).map_err(|_| ())?;
         if read == 0 {
@@ -369,7 +384,7 @@ fn parse_frame_duration(rate: Option<&str>) -> Option<f64> {
         .then_some((1000.0 * denominator / numerator).clamp(1.0, 1000.0))
 }
 
-fn wait_bounded_child(
+pub(super) fn wait_bounded_child(
     child: &mut Child,
     timeout: Duration,
     timeout_message: &str,
@@ -443,11 +458,11 @@ fn report_command(command: &Command, report: &impl Fn(&str, &[String])) {
     report(&program, &arguments);
 }
 
-fn probe_media_with_report(
+pub(super) fn probe_media_with_report(
     ffprobe: &Path,
     path: &Path,
     report: &impl Fn(&str, &[String]),
-) -> Result<(u64, Option<f64>), String> {
+) -> Result<(u64, Option<f64>, Option<f64>), String> {
     let mut command = Command::new(ffprobe);
     command.args([
         "-v",
@@ -460,7 +475,7 @@ fn probe_media_with_report(
     ]);
     command.arg(path).args([
         "-show_entries",
-        "format=duration:stream=codec_type,avg_frame_rate",
+        "format=duration,start_time:stream=codec_type,avg_frame_rate,start_time,width,height",
         "-of",
         "json",
     ]);
@@ -490,15 +505,44 @@ fn probe_media_with_report(
     if !has_audio {
         return Err("Selected media contains no audio stream for karaoke preview".into());
     }
+    let video_offset = video
+        .map(|stream| {
+            let pixels = stream
+                .width
+                .zip(stream.height)
+                .and_then(|(width, height)| width.checked_mul(height))
+                .ok_or("Video dimensions unavailable")?;
+            if pixels == 0 || pixels > 7680 * 4320 {
+                return Err("Video exceeds the 8K preview bound");
+            }
+            let start = stream
+                .start_time
+                .as_deref()
+                .and_then(|value| value.parse::<f64>().ok())
+                .ok_or("Video start timestamp unavailable")?;
+            let origin = probe
+                .format
+                .start_time
+                .as_deref()
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let offset = (start - origin) * 1000.0;
+            if !offset.is_finite() || offset < -1.0 || offset >= duration_millis as f64 {
+                return Err("Video start timestamp is outside the timeline");
+            }
+            Ok(offset.max(0.0))
+        })
+        .transpose()?;
     Ok((
         duration_millis,
         video.and_then(|stream| parse_frame_duration(stream.avg_frame_rate.as_deref())),
+        video_offset,
     ))
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 fn probe_media_with_tool(ffprobe: &Path, path: &Path) -> Result<(u64, Option<f64>), String> {
-    probe_media_with_report(ffprobe, path, &|_, _| {})
+    probe_media_with_report(ffprobe, path, &|_, _| {}).map(|(duration, rate, _)| (duration, rate))
 }
 
 fn wav_header(data_bytes: u32) -> [u8; 44] {
@@ -727,7 +771,7 @@ fn prepare_source(
     }
     report("probe", "Probe duration and streams");
     let (ffprobe, ffmpeg) = resolve_media_tools()?;
-    let (duration_millis, frame_duration_millis) =
+    let (duration_millis, frame_duration_millis, video_offset) =
         probe_media_with_report(&ffprobe, &path, &report_command)?;
     verify_source_unchanged(&source_file, &path, &source_identity)?;
     report("portable-preview", "Build portable realtime preview");
@@ -739,6 +783,19 @@ fn prepare_source(
         &report_command,
         Arc::new(report_units),
     )?;
+    let (video, frame_times_millis) = if let Some(offset) = video_offset {
+        let (file, size, frames) = crate::clip_video::prepare(
+            &ffmpeg,
+            &ffprobe,
+            &path,
+            &preview_root,
+            duration_millis,
+            offset,
+        )?;
+        (Some((file, size)), frames)
+    } else {
+        (None, Vec::new())
+    };
     verify_source_unchanged(&source_file, &path, &source_identity)?;
     Ok(PreparedLocalClip {
         suggested_title: suggested_title(&path),
@@ -750,6 +807,9 @@ fn prepare_source(
         size_bytes,
         duration_millis,
         frame_duration_millis,
+        video,
+        frame_times_millis,
+        video_offset_millis: video_offset.unwrap_or(0.0),
     })
 }
 
@@ -876,6 +936,12 @@ pub async fn prepare(
         duration_millis: prepared.duration_millis,
         frame_duration_millis: prepared.frame_duration_millis,
         preview_url: preview_url(&clip_id),
+        video_url: prepared
+            .video
+            .as_ref()
+            .map(|_| format!("{}/video", preview_url(&clip_id))),
+        frame_times_millis: prepared.frame_times_millis,
+        video_offset_millis: prepared.video_offset_millis,
     };
     inner.preview = Some(LocalClipSession {
         clip_id,
@@ -884,6 +950,7 @@ pub async fn prepare(
         source_identity: prepared.source_identity,
         preview_file: prepared.preview_file,
         preview_size_bytes: prepared.preview_size_bytes,
+        video: prepared.video,
         duration_millis: prepared.duration_millis,
     });
     tasks::finish(
@@ -952,16 +1019,97 @@ pub fn commit(
     clipped_local_media_item_from_verified_path(path, title, start_millis, end_millis)
 }
 
-fn preview_file_response(
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipSection {
+    pub start_millis: u64,
+    pub end_millis: u64,
+    pub title: String,
+}
+
+fn section_items(
+    session: &LocalClipSession,
+    sections: &[ClipSection],
+) -> Result<Vec<CatalogItem>, String> {
+    if sections.is_empty() || sections.len() > 128 {
+        return Err("Choose between 1 and 128 sections".into());
+    }
+    for section in sections {
+        validate_title(&section.title)?;
+        if section.start_millis >= section.end_millis
+            || section.end_millis > session.duration_millis
+        {
+            return Err("Section range is outside the source timeline".into());
+        }
+    }
+    verify_source_unchanged(
+        &session.source_file,
+        &session.path,
+        &session.source_identity,
+    )?;
+    sections
+        .iter()
+        .map(|section| {
+            let mut item = clipped_local_media_item_from_verified_path(
+                session.path.clone(),
+                validate_title(&section.title)?,
+                section.start_millis,
+                section.end_millis,
+            )?;
+            item.id = Uuid::new_v4().to_string();
+            item.section_id = Some(item.id.clone());
+            item.lyric_text.clear();
+            item.first_lyric_line = None;
+            item.status = crate::catalog::ItemStatus::WaitingForLyrics;
+            item.status_message = None;
+            for location in &mut item.locations {
+                if let crate::catalog::ItemLocation::LocalMedia { lyrics_path, .. } = location {
+                    *lyrics_path = None;
+                }
+            }
+            Ok(item)
+        })
+        .collect()
+}
+
+pub fn commit_sections(
+    app: &AppHandle,
+    clip_id: &str,
+    sections: &[ClipSection],
+) -> Result<crate::catalog::CatalogSnapshot, String> {
+    validate_clip_id(clip_id)?;
+    let state = app.state::<LocalClipState>();
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Clip state lock is poisoned")?;
+    let session = inner
+        .preview
+        .as_ref()
+        .filter(|session| session.clip_id == clip_id)
+        .ok_or("Clip preview is no longer available")?;
+    let items = section_items(session, sections)?;
+    let snapshot = app
+        .state::<crate::CatalogState>()
+        .0
+        .lock()
+        .map_err(|_| "Catalog lock is poisoned")?
+        .admit_sections(items)?;
+    inner.preview = None;
+    Ok(snapshot)
+}
+
+fn preview_file_response_with_type(
     source: &fs::File,
     length: u64,
     method: &Method,
     range: Option<&str>,
+    content_type: &str,
 ) -> Response<Vec<u8>> {
     if method == Method::HEAD {
         return Response::builder()
             .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "audio/wav")
+            .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, length)
             .header(header::ACCEPT_RANGES, "bytes")
             .header(header::CACHE_CONTROL, "no-store")
@@ -989,7 +1137,7 @@ fn preview_file_response(
         } else {
             StatusCode::OK
         })
-        .header(header::CONTENT_TYPE, "audio/wav")
+        .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_LENGTH, bytes.len())
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "no-store")
@@ -1006,6 +1154,16 @@ fn preview_file_response(
         .expect("valid local clip preview response")
 }
 
+#[cfg(test)]
+fn preview_file_response(
+    source: &fs::File,
+    length: u64,
+    method: &Method,
+    range: Option<&str>,
+) -> Response<Vec<u8>> {
+    preview_file_response_with_type(source, length, method, range, "audio/wav")
+}
+
 pub fn preview_protocol(
     context: UriSchemeContext<'_, tauri::Wry>,
     request: Request<Vec<u8>>,
@@ -1016,7 +1174,10 @@ pub fn preview_protocol(
     if request.method() != Method::GET && request.method() != Method::HEAD {
         return error_response(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed");
     }
-    let clip_id = request.uri().path().trim_start_matches('/');
+    let route = request.uri().path().trim_start_matches('/');
+    let (clip_id, video) = route
+        .strip_suffix("/video")
+        .map_or((route, false), |id| (id, true));
     if validate_clip_id(clip_id).is_err() {
         return error_response(StatusCode::NOT_FOUND, "Not found");
     }
@@ -1031,7 +1192,13 @@ pub fn preview_protocol(
                 .preview
                 .as_ref()
                 .filter(|preview| preview.clip_id == clip_id)
-                .map(|preview| (preview.preview_file.clone(), preview.preview_size_bytes))
+                .and_then(|preview| {
+                    if video {
+                        preview.video.clone()
+                    } else {
+                        Some((preview.preview_file.clone(), preview.preview_size_bytes))
+                    }
+                })
         });
     let Some((file, length)) = descriptor else {
         return error_response(StatusCode::NOT_FOUND, "Not found");
@@ -1040,7 +1207,13 @@ pub fn preview_protocol(
         .headers()
         .get(header::RANGE)
         .and_then(|value| value.to_str().ok());
-    preview_file_response(&file, length, request.method(), range)
+    preview_file_response_with_type(
+        &file,
+        length,
+        request.method(),
+        range,
+        if video { "video/mp4" } else { "audio/wav" },
+    )
 }
 
 #[cfg(test)]
@@ -1133,6 +1306,7 @@ mod tests {
         let mut inner = LocalClipInner {
             preparing: false,
             preview: Some(LocalClipSession {
+                video: None,
                 clip_id: "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b".into(),
                 path: canonical,
                 source_file,
@@ -1147,6 +1321,73 @@ mod tests {
             "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b"
         ));
         assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn section_batches_validate_all_ranges_and_never_reuse_whole_file_lyrics() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.mp4");
+        fs::write(&path, b"synthetic source").unwrap();
+        let lyrics = directory.path().join("source.txt");
+        fs::write(&lyrics, b"Exact whole source lyrics").unwrap();
+        let source_file = Arc::new(fs::File::open(&path).unwrap());
+        let session = LocalClipSession {
+            clip_id: uuid::Uuid::new_v4().to_string(),
+            path: path.canonicalize().unwrap(),
+            source_identity: source_identity(&source_file).unwrap(),
+            source_file,
+            preview_file: Arc::new(tempfile::tempfile().unwrap()),
+            preview_size_bytes: 44,
+            video: Some((Arc::new(tempfile::tempfile().unwrap()), 100)),
+            duration_millis: 1000,
+        };
+        let section = super::ClipSection {
+            start_millis: 10,
+            end_millis: 500,
+            title: "First song".into(),
+        };
+        for invalid in [
+            Vec::new(),
+            vec![section.clone(); 129],
+            vec![
+                section.clone(),
+                super::ClipSection {
+                    end_millis: 1001,
+                    ..section.clone()
+                },
+            ],
+            vec![super::ClipSection {
+                title: "".into(),
+                ..section.clone()
+            }],
+        ] {
+            assert!(super::section_items(&session, &invalid).is_err());
+        }
+        let items = super::section_items(&session, &[section.clone(), section]).unwrap();
+        assert_ne!(items[0].id, items[1].id);
+        for item in items {
+            assert_eq!(item.status, crate::catalog::ItemStatus::WaitingForLyrics);
+            assert!(item.lyric_text.is_empty());
+            assert!(matches!(
+                item.locations[0],
+                crate::catalog::ItemLocation::LocalMedia {
+                    lyrics_path: None,
+                    trim_start_millis: Some(10),
+                    trim_end_millis: Some(500),
+                    ..
+                }
+            ));
+        }
+        assert_eq!(fs::read(&path).unwrap(), b"synthetic source");
+        assert_eq!(fs::read(&lyrics).unwrap(), b"Exact whole source lyrics");
+        let video = Arc::downgrade(&session.video.as_ref().unwrap().0);
+        let id = session.clip_id.clone();
+        let mut inner = LocalClipInner {
+            preparing: false,
+            preview: Some(session),
+        };
+        assert!(cancel_inner(&mut inner, &id));
+        assert!(video.upgrade().is_none());
     }
 
     #[test]

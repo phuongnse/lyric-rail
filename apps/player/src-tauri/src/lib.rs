@@ -1,4 +1,5 @@
 mod catalog;
+mod clip_video;
 #[cfg(target_os = "macos")]
 mod desktop_menu;
 mod google_drive;
@@ -595,6 +596,7 @@ fn catalog_item_from_reader(
             .unwrap_or_default()
     };
     CatalogItem {
+        section_id: None,
         id: package_id.clone(),
         package_id: Some(package_id),
         title,
@@ -1339,6 +1341,22 @@ fn commit_local_clip(
 }
 
 ipc_command! {
+fn commit_local_sections(app: tauri::AppHandle, clip_id: String, sections: Vec<local_clip::ClipSection>) -> Result<CatalogSnapshot, String> {
+    let snapshot = local_clip::commit_sections(&app, &clip_id, &sections)?;
+    let _ = app.emit("library-changed", snapshot.clone());
+    Ok(snapshot)
+}
+}
+
+ipc_command! {
+fn rename_waiting_section(app: tauri::AppHandle, item_id: String, title: String) -> Result<CatalogSnapshot, String> {
+    let snapshot = app.state::<CatalogState>().0.lock().map_err(|_| "Catalog lock is poisoned")?.rename_waiting_section(&item_id, &title)?;
+    let _ = app.emit("library-changed", snapshot.clone());
+    Ok(snapshot)
+}
+}
+
+ipc_command! {
 async fn rescan_local_sources(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
     let sources = app
         .state::<CatalogState>()
@@ -1567,6 +1585,7 @@ fn drive_catalog_item(
                 *available = false;
             }
             CatalogItem {
+                section_id: None,
                 id: format!("drive-{}", file.id),
                 package_id: None,
                 title: file.name,
@@ -2332,6 +2351,8 @@ pub fn run() {
             prepare_local_clip,
             cancel_local_clip,
             commit_local_clip,
+            commit_local_sections,
+            rename_waiting_section,
             rescan_local_sources,
             remove_library_source,
             provide_lyrics_file,
@@ -2570,6 +2591,7 @@ mod tests {
     #[test]
     fn retry_rebinds_lyrics_without_clearing_authenticated_job_identity() {
         let item = CatalogItem {
+            section_id: None,
             id: "local-item".into(),
             package_id: None,
             title: "Exact title".into(),
