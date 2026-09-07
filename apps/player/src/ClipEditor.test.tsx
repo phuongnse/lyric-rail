@@ -105,6 +105,18 @@ it("requires explicit compatibility before decoding media with an unsupported cl
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "local_clip_frames")).toBe(false);
 });
 
+it("stops extending a single-frame video with a long audio tail when timestamps do not advance", async () => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => command === "local_clip_frames"
+    ? { frameTimesMillis: [0], fromMillis: 0, toMillis: (args as { timeMillis: number }).timeMillis + 6000 } : true);
+  vi.mocked(invoke).mockClear();
+  await renderDirect(); await settleFrames(); await settleFrames(); await settleFrames();
+  expect(host.textContent).toContain("No nearby frame timestamps");
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "local_clip_frames")).toHaveLength(2);
+  expect(button("Next frame").disabled).toBe(true);
+  await act(async () => button("Retry frame details").click()); await settleFrames();
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "local_clip_frames")).toHaveLength(3);
+});
+
 it("opens direct media before frame inspection, cancels stale seeks and keeps only the latest frame window", async () => {
   const pending: Array<{ time: number; resolve: (value: unknown) => void }> = [];
   vi.mocked(invoke).mockImplementation((command, args) => {

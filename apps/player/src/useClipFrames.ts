@@ -51,7 +51,8 @@ export function useClipFrames(preview: LocalClipPreview, position: number, playi
               const frames = await invoke<FrameWindow>("local_clip_frames", { clipId: request.clipId, timeMillis: request.time, requestId });
               if (generation.current === request.generation) {
                 if (!frames.frameTimesMillis.length || (loaded && !ready && frames.frameTimesMillis.every((time) => loaded.frameTimesMillis.includes(time))
-                  && frames.fromMillis !== 0 && frames.toMillis !== preview.durationMillis)) setError("No nearby frame timestamps were found. Seek to another point or retry frame details.");
+                  && !(frames.fromMillis === 0 && loaded.fromMillis > 0)
+                  && !(frames.toMillis === preview.durationMillis && loaded.toMillis < preview.durationMillis))) setError("No nearby frame timestamps were found. Seek to another point or retry frame details.");
                 else {
                   setWindows((previous) => [...previous.slice(-1).filter((window) => window.clipId === request.clipId
                     && window.fromMillis <= frames.toMillis && window.toMillis >= frames.fromMillis), { ...frames, clipId: request.clipId }]);
