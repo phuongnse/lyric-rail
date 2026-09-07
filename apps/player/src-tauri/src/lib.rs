@@ -199,6 +199,25 @@ struct PlayerStatus {
     processing: processing::ProcessingStatus,
 }
 
+impl PlayerStatus {
+    fn new(
+        package_open: bool,
+        vault_available: bool,
+        mut processing: processing::ProcessingStatus,
+    ) -> Self {
+        processing.runtime_error = processing
+            .runtime_error
+            .map(|error| tasks::redact_diagnostic_text(&error));
+        Self {
+            version: env!("CARGO_PKG_VERSION"),
+            platform: std::env::consts::OS,
+            package_open,
+            vault_available,
+            processing,
+        }
+    }
+}
+
 fn error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
@@ -938,13 +957,11 @@ fn player_status(
     {
         issues::ensure(&app, issues::runtime_repair_issue(&error));
     }
-    PlayerStatus {
-        version: env!("CARGO_PKG_VERSION"),
-        platform: std::env::consts::OS,
-        package_open: player.loaded.lock().is_ok_and(|loaded| loaded.is_some()),
-        vault_available: load_vault_master().is_ok(),
-        processing: processing_status,
-    }
+    PlayerStatus::new(
+        player.loaded.lock().is_ok_and(|loaded| loaded.is_some()),
+        load_vault_master().is_ok(),
+        processing_status,
+    )
 }
 
 ipc_command! {
@@ -2340,6 +2357,28 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn player_status_projects_runtime_errors_at_the_return_boundary() {
+        let status = super::PlayerStatus::new(
+            false,
+            true,
+            crate::processing::ProcessingStatus {
+                worker_running: false,
+                pending_jobs: 2,
+                runtime_available: false,
+                runtime_error: Some("Runtime directory missing: C:/TOPSECRET/runtime".into()),
+            },
+        );
+        let payload = serde_json::to_value(status).unwrap();
+        assert!(!payload.to_string().contains("TOPSECRET"));
+        assert_eq!(
+            payload["processing"]["runtimeError"],
+            crate::tasks::redact_diagnostic_text("unknown")
+        );
+        assert_eq!(payload["processing"]["pendingJobs"], 2);
+        assert_eq!(payload["processing"]["runtimeAvailable"], false);
+        assert_eq!(payload["vaultAvailable"], true);
+    }
     use super::{
         bind_retry_lyrics_path, drive_download_task_id, is_supported_original_reference,
         parse_karaoke_presentation, parse_single_range, validate_presentation_asset_contract,

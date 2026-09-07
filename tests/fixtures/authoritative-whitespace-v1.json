@@ -1,0 +1,331 @@
+[
+  {
+    "text": "One\ttwo",
+    "semanticLines": [
+      "One\ttwo"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\t"
+  },
+  {
+    "text": "One\ntwo",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\n"
+  },
+  {
+    "text": "One\u000btwo",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u000b"
+  },
+  {
+    "text": "One\ftwo",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\f"
+  },
+  {
+    "text": "One\rtwo",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\r"
+  },
+  {
+    "text": "One\u001ctwo",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u001c"
+  },
+  {
+    "text": "One\u001dtwo",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u001d"
+  },
+  {
+    "text": "One\u001etwo",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u001e"
+  },
+  {
+    "text": "One\u001ftwo",
+    "semanticLines": [
+      "One\u001ftwo"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u001f"
+  },
+  {
+    "text": "One two",
+    "semanticLines": [
+      "One two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": " "
+  },
+  {
+    "text": "One\u0085two",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u0085"
+  },
+  {
+    "text": "One\u00a0two",
+    "semanticLines": [
+      "One\u00a0two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u00a0"
+  },
+  {
+    "text": "One\u1680two",
+    "semanticLines": [
+      "One\u1680two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u1680"
+  },
+  {
+    "text": "One\u2000two",
+    "semanticLines": [
+      "One\u2000two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2000"
+  },
+  {
+    "text": "One\u2001two",
+    "semanticLines": [
+      "One\u2001two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2001"
+  },
+  {
+    "text": "One\u2002two",
+    "semanticLines": [
+      "One\u2002two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2002"
+  },
+  {
+    "text": "One\u2003two",
+    "semanticLines": [
+      "One\u2003two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2003"
+  },
+  {
+    "text": "One\u2004two",
+    "semanticLines": [
+      "One\u2004two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2004"
+  },
+  {
+    "text": "One\u2005two",
+    "semanticLines": [
+      "One\u2005two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2005"
+  },
+  {
+    "text": "One\u2006two",
+    "semanticLines": [
+      "One\u2006two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2006"
+  },
+  {
+    "text": "One\u2007two",
+    "semanticLines": [
+      "One\u2007two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2007"
+  },
+  {
+    "text": "One\u2008two",
+    "semanticLines": [
+      "One\u2008two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2008"
+  },
+  {
+    "text": "One\u2009two",
+    "semanticLines": [
+      "One\u2009two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2009"
+  },
+  {
+    "text": "One\u200atwo",
+    "semanticLines": [
+      "One\u200atwo"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u200a"
+  },
+  {
+    "text": "One\u2028two",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2028"
+  },
+  {
+    "text": "One\u2029two",
+    "semanticLines": [
+      "One",
+      "two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u2029"
+  },
+  {
+    "text": "One\u202ftwo",
+    "semanticLines": [
+      "One\u202ftwo"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u202f"
+  },
+  {
+    "text": "One\u205ftwo",
+    "semanticLines": [
+      "One\u205ftwo"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u205f"
+  },
+  {
+    "text": "One\u3000two",
+    "semanticLines": [
+      "One\u3000two"
+    ],
+    "words": [
+      "One",
+      "two"
+    ],
+    "separator": "\u3000"
+  }
+]

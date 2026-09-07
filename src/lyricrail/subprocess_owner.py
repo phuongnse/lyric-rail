@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 
@@ -59,8 +60,7 @@ class OwnedProcess:
         try:
             # The helper cannot launch the target until its job assignment succeeds.
             self.process = subprocess.Popen(
-                [sys.executable, "-I" if sys.flags.isolated else "-s", "-X", "utf8",
-                 "-m", "lyricrail.subprocess_owner", *command],
+                [sys.executable, "-I", "-X", "utf8", str(Path(__file__).resolve()), *command],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )

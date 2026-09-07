@@ -3,6 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command: string) => {
   if (command === "catalog_snapshot") return { items: [{ id: "song", title: "Song", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: false, hasThumbnail: false }], localSources: [], driveSources: [] };
@@ -41,6 +43,19 @@ async function checkDialog(launcher: HTMLButtonElement) {
   expect(host.querySelector("#library-drawer")?.hasAttribute("inert")).toBe(true);
   const buttons = dialog.querySelectorAll<HTMLButtonElement>("button:not([disabled])");
   const first = buttons[0]; const last = buttons[buttons.length - 1];
+  vi.mocked(open).mockClear();
+  vi.mocked(invoke).mockClear();
+  for (const shortcut of [{ key: "o", ctrlKey: true }, { key: "o", metaKey: true }, { key: "o", ctrlKey: true, shiftKey: true }, { key: "F5" }]) {
+    await act(async () => {
+      first.focus();
+      const event = new KeyboardEvent("keydown", { ...shortcut, bubbles: true, cancelable: true });
+      first.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    });
+  }
+  expect(open).not.toHaveBeenCalled();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => ["prepare_local_clip", "rescan_library", "add_local_files", "add_local_folder"].includes(command))).toBe(false);
+  expect(host.querySelector('[role="dialog"]')).toBe(dialog);
   act(() => { last.focus(); last.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })); });
   expect(document.activeElement).toBe(first);
   act(() => { first.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })); });
@@ -63,4 +78,20 @@ it("contains the lyric editor and restores the selected song's edit button", asy
   await act(async () => { edit.focus(); edit.click(); });
   expect(document.activeElement?.tagName).toBe("TEXTAREA");
   await checkDialog(edit);
+});
+
+it("dismisses the clip editor before Activity and restores normal shortcuts", async () => {
+  const activity = host.querySelector<HTMLButtonElement>(".issues-toggle")!;
+  act(() => { activity.focus(); activity.click(); });
+  const pressOpen = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true }));
+  await act(async () => { pressOpen(); });
+  expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(activity.getAttribute("aria-expanded")).toBe("true");
+  await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(activity.getAttribute("aria-expanded")).toBe("true");
+  vi.mocked(open).mockClear();
+  await act(async () => { pressOpen(); });
+  expect(open).toHaveBeenCalledOnce();
+  expect(host.querySelector('[role="dialog"]')).not.toBeNull();
 });

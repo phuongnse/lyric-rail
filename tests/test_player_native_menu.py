@@ -51,6 +51,6 @@ def test_shortcuts_use_a_non_rendering_shared_command_registry() -> None:
         "toggle-fullscreen",
     ):
         assert f'"{command}"' in COMMANDS
-    assert "dispatchCommand(event, handlers)" in APP
+    assert "dispatchCommand(event, handlers, anyModalOpen)" in APP
     assert "event.preventDefault()" in COMMANDS
     assert "isEditableTarget(event.target)" in COMMANDS

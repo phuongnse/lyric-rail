@@ -51,6 +51,54 @@ class CommandContext:
 
 
 class PlayerTaskRuntimeTests(unittest.TestCase):
+    def test_worker_and_persistence_withhold_unsupported_diagnostic_objects(self) -> None:
+        private = {"message": Path("TOPSECRET/private.wav")}
+        output = io.StringIO()
+        with patch.object(cli.sys, "stdout", output):
+            cli._worker_emit({"kind": "lyricrail.worker.failed", "error": private})
+        self.assertNotIn("TOPSECRET", output.getvalue())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "song.mp4"
+            video.write_bytes(b"synthetic")
+            store = JobStore(root / "output")
+            job = store.create(video, PIPELINE, {"warnings": []}, upload=False,
+                lyrics_text="Exact words", lyrics_source_path=root / "lyrics.txt",
+                lyrics_sha256="fixture", lyrics_line_count=1, lyrics_word_count=2)
+            store.update_job(job["jobId"], error=private)
+            store.update_stage(job["jobId"], "probe", error=private)
+            self.assertNotIn("TOPSECRET", json.dumps(store.load(job["jobId"])))
+            self.assertNotIn("TOPSECRET", store.events_path(job["jobId"]).read_text())
+
+    def test_windows_owned_helper_ignores_shadow_cwd_and_pythonpath(self) -> None:
+        import os
+        from lyricrail.subprocess_owner import OwnedProcess
+        if os.name != "nt":
+            self.skipTest("Windows helper boundary")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shadow = root / "lyricrail"
+            shadow.mkdir()
+            (shadow / "__init__.py").write_text("")
+            (shadow / "subprocess_owner.py").write_text("print('SHADOW_HELPER_EXECUTED')")
+            (root / "sitecustomize.py").write_text("print('SHADOW_SITE_EXECUTED')")
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(os.environ, {"PYTHONPATH": str(root)}):
+                    owner = OwnedProcess([sys.executable, "-I", "-c", "print('EXPECTED_TARGET')"])
+                    try:
+                        owner.process.wait(timeout=5)
+                        self.assertEqual(owner.process.stdout.read().strip(), b"EXPECTED_TARGET")
+                        self.assertEqual(owner.process.stderr.read(), b"")
+                        self.assertEqual(owner.process.returncode, 0)
+                    finally:
+                        owner.close()
+                        owner.process.stdout.close()
+                        owner.process.stderr.close()
+            finally:
+                os.chdir(previous)
+
     def test_worker_json_replaces_nested_surrogates_before_utf8_output(self) -> None:
         output = io.StringIO()
         with patch.object(cli.sys, "stdout", output):
@@ -229,6 +277,8 @@ class PlayerTaskRuntimeTests(unittest.TestCase):
             def success(context: StageContext) -> list[dict[str, object]]:
                 context.progress(50, "halfway")
                 context.log(f"reading {Path.home() / 'private.mp4'} token=unsafe")
+                context.output_line(json.dumps({"kind": CONTRACT["progressKind"], "phase": "downloading", "completedBytes": 10**400}))
+                context.output_line("[" * 8000 + "]" * 8000)
                 return []
 
             final = PipelineRunner(

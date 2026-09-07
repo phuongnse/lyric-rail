@@ -160,13 +160,6 @@ class _DiagnosticBudget:
         return rendered
 
 
-def _diagnostic_key(value: Any, budget: _DiagnosticBudget) -> str:
-    try:
-        return budget.text(str(value))
-    except Exception:  # noqa: BLE001 - hostile diagnostic object boundary
-        return "<unprintable key>"
-
-
 def _sanitize_diagnostic_payload(
     value: Any, *, depth: int, budget: _DiagnosticBudget
 ) -> Any:
@@ -197,9 +190,9 @@ def _sanitize_diagnostic_payload(
                 if index >= MAX_DIAGNOSTIC_JSON_ITEMS:
                     result["<items truncated>"] = True
                     break
-                if key not in CONTRACT["diagnosticKeys"]:
+                if type(key) is not str or key not in CONTRACT["diagnosticKeys"]:
                     continue
-                rendered_key = _diagnostic_key(key, budget)
+                rendered_key = budget.text(key)
                 if rendered_key in result:
                     rendered_key = f"{rendered_key} <duplicate>"
                 result[rendered_key] = _sanitize_diagnostic_payload(
@@ -220,10 +213,7 @@ def _sanitize_diagnostic_payload(
         if len(value) > MAX_DIAGNOSTIC_JSON_ITEMS:
             result.append("<items truncated>")
         return result
-    try:
-        return budget.text(str(value))
-    except Exception:  # noqa: BLE001 - hostile diagnostic object boundary
-        return f"<unprintable {type(value).__name__}>"
+    return budget.text(CONTRACT["withheld"])
 
 
 def sanitize_diagnostic_payload(value: Any, *, _depth: int = 0) -> Any:
@@ -651,6 +641,8 @@ class JobStore:
 
     def update_job(self, reference: str, **changes: Any) -> dict[str, Any]:
         job_id = self.resolve_job_id(reference)
+        if "error" in changes:
+            changes["error"] = sanitize_diagnostic_payload(changes["error"])
         with self._lock(job_id):
             manifest = self.load(job_id)
             requested_status = changes.get("status")
@@ -663,7 +655,7 @@ class JobStore:
             for key, value in changes.items():
                 if key not in manifest:
                     raise ValueError(f"Cannot update unknown field: {key}")
-                manifest[key] = sanitize_diagnostic_payload(value) if key == "error" else value
+                manifest[key] = value
             manifest["updatedAt"] = now_iso()
             manifest["progressPercent"] = calculate_progress(manifest["stages"])
             manifest["durationSeconds"] = _duration_seconds(

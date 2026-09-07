@@ -9,6 +9,8 @@ CONTRACT = json.loads(files("lyricrail").joinpath("diagnostic_contract.json").re
 
 
 def project_diagnostic(value: str) -> str:
+    if type(value) is not str:
+        return CONTRACT["withheld"]
     if (value == CONTRACT["withheld"] or value in CONTRACT["messages"]
         or value in CONTRACT["phases"].values() or value in CONTRACT["stages"]
         or value in CONTRACT["stages"].values()):
@@ -17,7 +19,7 @@ def project_diagnostic(value: str) -> str:
         return CONTRACT["withheld"]
     try:
         item = json.loads(value)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return CONTRACT["withheld"]
     if not isinstance(item, dict) or item.get("kind") != CONTRACT["progressKind"]:
         return CONTRACT["withheld"]
@@ -31,7 +33,7 @@ def project_diagnostic(value: str) -> str:
     for field, maximum in CONTRACT["numericFields"].items():
         if field in item:
             number = item[field]
-            if type(number) not in (int, float) or not math.isfinite(number) or not 0 <= number <= maximum:
+            if type(number) not in (int, float) or not 0 <= number <= maximum or not math.isfinite(number):
                 return CONTRACT["withheld"]
             output[field] = number
     return json.dumps(output, ensure_ascii=False, separators=(",", ":"))

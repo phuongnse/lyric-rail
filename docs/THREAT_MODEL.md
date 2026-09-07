@@ -106,7 +106,9 @@ The product must not claim otherwise.
    stdout/stderr concurrently with bounded lines/channels and
    rotates projected durable logs. Cancellation continues during post-exit pipe drain;
    Unix process groups and guarded Windows Jobs own command descendants. A Windows
-   helper waits for Job assignment before launching the target. Post-exit draining
+   helper runs by absolute owned script path in isolated Python mode, ignoring cwd
+   and `PYTHONPATH` for helper imports, and waits for Job assignment before launching
+   the target. Post-exit draining
    has a five-second limit. The WebView virtualizes output and pausing its view
    never changes worker execution. Restarted status, stage, percentage and timestamps
    come from encrypted/authenticated catalog task evidence. Fixed-path bounded clear job
@@ -117,7 +119,10 @@ The product must not claim otherwise.
    while `src/lyricrail/diagnostic_contract.json` defines the closed shared diagnostic
    vocabulary and typed finite progress fields for Python, Rust and TypeScript.
    Arbitrary text and unknown fields are withheld before durable logging, native
-   ring/event storage, command-error IPC and clipboard output. Numeric progress and
+   ring/event storage, command-error/status IPC and clipboard output. Unsupported
+   diagnostic objects use a fixed sentinel without string conversion; only actual
+   string keys enter the closed vocabulary. Bounded malformed JSON and oversized
+   numeric fields cannot turn diagnostic projection into a processing failure. Numeric progress and
    fixed stage/status messages remain available; raw subprocess tails and argument
    values are not retained as safe diagnostics. Diagnostic traversal has global node/byte/depth limits,
    rejects non-finite/out-of-range numbers and preserves valid surrogate pairs. Worker

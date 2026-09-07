@@ -51,6 +51,16 @@ fn read_json_asset(reader: &mut PackageReader, name: &str) -> Result<Value, Stri
     serde_json::from_slice(&bytes).map_err(|error| format!("Invalid {name}: {error}"))
 }
 
+// Python's authoritative str.split also recognizes these four information separators.
+fn authoritative_whitespace(character: char) -> bool {
+    character.is_whitespace() || matches!(character, '\u{001c}'..='\u{001f}')
+}
+
+fn authoritative_words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(authoritative_whitespace)
+        .filter(|word| !word.is_empty())
+}
+
 fn semantic_lines(text: &str) -> Result<Vec<String>, String> {
     if text.len() > 1_000_000 || text.contains('\0') {
         return Err("Revised lyrics exceed the UTF-8 text bound".into());
@@ -60,7 +70,7 @@ fn semantic_lines(text: &str) -> Result<Vec<String>, String> {
             '\n', '\r', '\u{000b}', '\u{000c}', '\u{001c}', '\u{001d}', '\u{001e}', '\u{0085}',
             '\u{2028}', '\u{2029}',
         ])
-        .filter(|line| !line.trim().is_empty())
+        .filter(|line| authoritative_words(line).next().is_some())
         .map(str::to_owned)
         .collect::<Vec<_>>();
     if lines.is_empty() {
@@ -121,7 +131,7 @@ fn update_text_identical_timing(
             .iter()
             .map(|word| word.get("text").and_then(Value::as_str).unwrap_or(""))
             .collect::<Vec<_>>();
-        let revised_words = exact_text.split_whitespace().collect::<Vec<_>>();
+        let revised_words = authoritative_words(exact_text).collect::<Vec<_>>();
         if current_words != revised_words {
             acoustic_change = true;
         } else {
@@ -133,7 +143,7 @@ fn update_text_identical_timing(
     }
     let word_count = lines
         .iter()
-        .map(|line| line.split_whitespace().count())
+        .map(|line| authoritative_words(line).count())
         .sum::<usize>();
     object.insert("lineCount".into(), json!(display_texts.len()));
     if let Some(authoritative) = object
@@ -183,7 +193,7 @@ fn revision_display_texts(timing: &Value, lines: &[String]) -> Result<Vec<String
     }
     let mut result = Vec::new();
     for (rows, exact) in groups.iter().zip(lines) {
-        let words = exact.split_whitespace().collect::<Vec<_>>();
+        let words = authoritative_words(exact).collect::<Vec<_>>();
         let mut offset = 0;
         for row in rows {
             let text = row
@@ -199,7 +209,7 @@ fn revision_display_texts(timing: &Value, lines: &[String]) -> Result<Vec<String
                 .map(|word| word.get("text").and_then(Value::as_str))
                 .collect::<Option<Vec<_>>>()
                 .ok_or("Timing word is invalid")?;
-            if old_words.is_empty() || text.split_whitespace().collect::<Vec<_>>() != old_words {
+            if old_words.is_empty() || authoritative_words(text).collect::<Vec<_>>() != old_words {
                 return Err("Revision display text does not match authenticated words".into());
             }
             let revised = words.get(offset..offset + old_words.len()).ok_or(
@@ -215,7 +225,7 @@ fn revision_display_texts(timing: &Value, lines: &[String]) -> Result<Vec<String
                 let mut remaining = text;
                 for (old, new) in old_words.iter().zip(revised) {
                     let start = remaining
-                        .find(|character: char| !character.is_whitespace())
+                        .find(|character: char| !authoritative_whitespace(character))
                         .ok_or("Revision word mapping is invalid")?;
                     output.push_str(&remaining[..start]);
                     output.push_str(new);
@@ -497,7 +507,7 @@ pub fn revise(app: AppHandle, item_id: String, text: String) -> Result<(), Strin
     revise_render_plan(&mut render_plan, &timing)?;
     let word_count = lines
         .iter()
-        .map(|line| line.split_whitespace().count())
+        .map(|line| authoritative_words(line).count())
         .sum::<usize>();
     update_release_metadata(&mut release, &sha256, lines.len(), word_count);
     let mut metadata = reader.manifest.metadata.clone();
@@ -621,6 +631,42 @@ pub fn revise(app: AppHandle, item_id: String, text: String) -> Result<(), Strin
 mod tests {
     use super::{revise_render_plan, semantic_lines, update_text_identical_timing};
     use serde_json::json;
+
+    #[test]
+    fn shared_authoritative_whitespace_preserves_exact_rows_and_word_scopes() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/authoritative-whitespace-v1.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let text = case["text"].as_str().unwrap();
+            assert_eq!(json!(semantic_lines(text).unwrap()), case["semanticLines"]);
+            assert_eq!(
+                json!(super::authoritative_words(text).collect::<Vec<_>>()),
+                case["words"]
+            );
+            let mut timing = json!({"lines": [
+                {"referenceGroup":1,"text":text,"syllables":[{"text":"One"},{"text":"two"}]},
+                {"referenceGroup":1,"text":"three","syllables":[{"text":"three"}]}
+            ], "authoritativeLyrics":{}});
+            assert!(
+                !update_text_identical_timing(&mut timing, &["One two three".into()], "unchanged")
+                    .unwrap()
+            );
+            assert_eq!(timing["lines"][0]["text"], text);
+            assert_eq!(timing["authoritativeLyrics"]["wordCount"], 3);
+            let changed = vec!["One new three".into()];
+            assert_eq!(
+                super::revision_display_texts(&timing, &changed).unwrap(),
+                [
+                    format!("One{}new", case["separator"].as_str().unwrap()),
+                    "three".into()
+                ]
+            );
+            assert!(update_text_identical_timing(&mut timing, &changed, "changed").unwrap());
+        }
+        assert!(semantic_lines("\u{001f}").is_err());
+    }
 
     #[test]
     fn semantic_groups_keep_reflow_rows_and_word_scopes_authoritative() {

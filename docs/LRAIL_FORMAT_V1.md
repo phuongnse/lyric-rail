@@ -228,6 +228,10 @@ Low-level explicit-key APIs require callers to own their key/publication lifecyc
 Timing revisions map authenticated `referenceGroup` semantic phrases onto existing
 display rows and their word counts. Reflow and role splitting do not change the
 authoritative lyric line count; whitespace-only revisions retain display timing.
+Revision token boundaries follow the authoritative Python Unicode whitespace
+grammar, including U+001C through U+001F, without rewriting supplied bytes.
+`tests/fixtures/authoritative-whitespace-v1.json` binds Python and native revision
+mapping to the same accepted separators and semantic line boundaries.
 
 ## Request-bound publication recovery
 

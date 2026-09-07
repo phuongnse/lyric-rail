@@ -10,6 +10,19 @@ from lyricrail.revision_alignment import revision_display_texts
 import pytest
 
 
+def test_shared_authoritative_whitespace_and_reflow() -> None:
+    from lyricrail.lyric_input import normalize_authoritative_lyrics
+    cases = json.loads((Path(__file__).parent / "fixtures/authoritative-whitespace-v1.json").read_text())
+    for case in cases:
+        assert normalize_authoritative_lyrics(case["text"]) == (case["text"], tuple(case["semanticLines"]))
+        assert case["text"].split() == case["words"]
+        separator = case["separator"]
+        rows = [{"referenceGroup": 1, "text": case["text"], "syllables": [{"text": "One"}, {"text": "two"}]},
+                {"referenceGroup": 1, "text": "three", "syllables": [{"text": "three"}]}]
+        assert revision_display_texts(rows, ["One two three"]) == [case["text"], "three"]
+        assert revision_display_texts(rows, ["One new three"]) == [f"One{separator}new", "three"]
+
+
 def test_reflow_mapping_preserves_rows_and_rejects_changed_semantic_structure() -> None:
     rows = [
         {"referenceGroup": 1, "text": "One  two", "syllables": [{"text": "One"}, {"text": "two"}]},

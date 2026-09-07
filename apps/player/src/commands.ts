@@ -46,10 +46,12 @@ export function commandForKey(event: KeyboardEvent): AppCommand | undefined {
 export function dispatchCommand(
   event: KeyboardEvent,
   handlers: CommandHandlers,
+  blocked = false,
 ): boolean {
   const command = commandForKey(event);
   if (!command) return false;
   event.preventDefault();
+  if (blocked) return true;
   handlers[command]();
   return true;
 }

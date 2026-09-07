@@ -828,8 +828,6 @@ function App() {
           setLicenseConfirmed(false);
         }
         else if (aboutOpen) setAboutOpen(false);
-        else if (utilityOpen) setUtilityOpen(false);
-        else if (issuesOpen) setIssuesOpen(false);
         else if (lyricDialog) setLyricDialog(undefined);
         else if (clipDialogOpen) {
           if (clipBusy) return;
@@ -840,6 +838,8 @@ function App() {
           setClipBusy(false);
           if (native && clipId) invoke("cancel_local_clip", { clipId }).catch(() => undefined);
         }
+        else if (utilityOpen) setUtilityOpen(false);
+        else if (issuesOpen) setIssuesOpen(false);
         else setDrawerOpen(false);
       }
     };
@@ -1340,7 +1340,7 @@ function App() {
       "toggle-fullscreen": () => { void toggleFullscreen(); },
     };
     const onKey = (event: KeyboardEvent) => {
-      dispatchCommand(event, handlers);
+      dispatchCommand(event, handlers, anyModalOpen);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
