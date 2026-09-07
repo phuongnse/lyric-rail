@@ -151,14 +151,18 @@ authenticated render plan. It does not re-decide cue policy. The authenticated p
 reference geometry and timing remain authoritative. The Player's typeface, fixed
 reference size, contours, shadow, spacing and circle dimensions are application
 appearance policy: existing packages receive the current Be Vietnam Pro Medium look.
-Every sentence uses the same 96 px size on a 1080 px reference short side, without
+Every sentence uses the same 92 px size on a 1080 px reference short side, without
 independent horizontal or vertical scaling. The Player measures that bundled face and
 paginates overlong events at grapheme-safe word boundaries into at most two rows per
 page; it preserves source text order and derives continuation timing only inside the
 source word interval. Stored font-family/weight/size/scale, cue-font-size,
 outline-width and shadow-offset hints remain valid v1 data for producers and other
 renderers but do not control these Player cosmetics. This display change neither
-rewrites package assets nor changes the v1 wire schema or producer ASS output.
+rewrites package assets nor changes the v1 wire schema or producer ASS output. Cue
+colors interpolate continuously on the same frame clock as word paint, while a fixed
+font-metric baseline keeps their centers stable. For ordinary one-row slots, the
+top/bottom visual gap equals the lower safe margin; wrapped bottom pages reserve their
+second row before placing the top slot.
 
 The authoritative text asset preserves the exact confirmed string, including blank
 lines, whitespace and line-ending choices; timing/render assets contain the derived

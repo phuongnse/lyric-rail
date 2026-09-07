@@ -68,7 +68,9 @@ The shared renderer measures the real bundled face and paginates long events int
 bounded two-row pages without changing lyric order or using per-sentence scaling.
 Steady-state fill follows the authoritative audio clock on each animation frame by
 updating only the visible token paint; React changes layout only at event/page
-boundaries. The Player appearance applies to existing packages while preserving their
+boundaries. Cue dots blend color continuously and use one font-metric baseline; normal
+top/bottom spacing matches the lower safe margin. The Player appearance applies to
+existing packages while preserving their
 authenticated palette, layout and cue/timing policy, as specified in
 [the v1 presentation contract](../../docs/LRAIL_FORMAT_V1.md).
 

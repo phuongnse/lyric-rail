@@ -85,14 +85,14 @@ type LyricPage = {
 type PaginatedEvent = { event: RenderEvent; pages: LyricPage[] };
 type MeasureText = (text: string) => number;
 
-export const LYRIC_FONT_SIZE_AT_1080P = 96;
+export const LYRIC_FONT_SIZE_AT_1080P = 92;
 export const LYRIC_WORD_GAP_EM = 0.2414;
 export const LYRIC_CUE_SIZE_EM = 0.2931;
-const LYRIC_OUTER_WIDTH_EM = 0.1069;
-const LYRIC_INNER_WIDTH_EM = 0.0724;
+const LYRIC_OUTER_WIDTH_EM = 0.125;
+const LYRIC_INNER_WIDTH_EM = 0.085;
 const LYRIC_SHADOW_X_EM = 0.0425;
 const LYRIC_SHADOW_Y_EM = 0.065;
-const LYRIC_PAINT_PADDING_EM = 0.11;
+const LYRIC_PAINT_PADDING_EM = 0.12;
 const MAX_PAGE_ROWS = 2;
 
 function clampPercent(value: number): number {
@@ -321,6 +321,11 @@ export function lyricLayoutWindow(boundaries: number[], time: number): [number, 
   return [left, Number.POSITIVE_INFINITY];
 }
 
+export function lyricBottomSlotHeight(rows: number): number {
+  const count = Math.min(MAX_PAGE_ROWS, Math.max(1, Math.trunc(rows)));
+  return count * 1.08 + (count - 1) * 0.18;
+}
+
 function browserTextMeasurer(fontSize: number): MeasureText {
   if (typeof document === "undefined" || navigator.userAgent.includes("jsdom")) {
     return (text) => graphemes(text).length * fontSize * 0.56;
@@ -337,6 +342,7 @@ export function paintLyricToken(node: HTMLElement, time: number): void {
   if (!Number.isFinite(start) || !Number.isFinite(end)) return;
   const fill = end <= start ? (time >= end ? 100 : 0) : clampPercent((time - start) / (end - start) * 100);
   node.style.setProperty("--fill", `${fill}%`);
+  node.style.setProperty("--fill-ratio", `${fill / 100}`);
   node.classList.toggle("is-empty", fill <= 0);
   node.classList.toggle("is-full", fill >= 100);
 }
@@ -357,7 +363,7 @@ function KaraokeToken({
   const fill = start == null || end == null
     ? 0
     : end <= start ? (time >= end ? 100 : 0) : clampPercent((time - start) / (end - start) * 100);
-  const style = { "--fill": `${fill}%` } as CSSProperties;
+  const style = { "--fill": `${fill}%`, "--fill-ratio": fill / 100 } as CSSProperties;
   return (
     <span
       className={`lyric-token${cue ? " lyric-cue-dot" : ""}${fill <= 0 ? " is-empty" : ""}${fill >= 100 ? " is-full" : ""}`}
@@ -405,6 +411,10 @@ function LyricOverlayView({ events, time, presentation, mediaRef, playing = fals
   ]))].sort((left, right) => left - right), [paginated]);
   const displayTime = playing ? layoutTime : (mediaRef?.current?.currentTime ?? time);
   const active = visibleLyricPages(paginated, displayTime);
+  const bottomRows = active.find(({ event }) => event.slot !== "top")?.rows.length ?? 1;
+  const stackStyle = {
+    "--lyric-bottom-slot-height": `${lyricBottomSlotHeight(bottomRows)}em`,
+  } as CSSProperties;
   const layoutKey = active.map(({ id }) => id).join("|");
   layoutWindowRef.current = lyricLayoutWindow(layoutBoundaries, displayTime);
 
@@ -450,7 +460,7 @@ function LyricOverlayView({ events, time, presentation, mediaRef, playing = fals
     >
       <foreignObject width={referenceWidth} height={referenceHeight}>
         <div className="lyric-canvas" ref={rootRef} style={presentationStyle(presentation)}>
-          <div className="lyric-stack">
+          <div className="lyric-stack" style={stackStyle}>
             {active.map((page) => {
               const event = page.event;
               const role = event.line?.role ?? event.role;

@@ -10,6 +10,7 @@ import {
   fixedLyricFontSize,
   lyricTokenFill,
   lyricLayoutWindow,
+  lyricBottomSlotHeight,
   paginateLyricEvent,
   presentationStyle,
   sameLyricOverlayProps,
@@ -83,9 +84,11 @@ afterEach(() => {
 describe("shared karaoke core", () => {
   it("uses one smaller natural font size while retaining authenticated layout and palette", () => {
     const style = presentationStyle(presentation) as Record<string, string | number>;
-    expect(LYRIC_FONT_SIZE_AT_1080P).toBe(96);
-    expect(fixedLyricFontSize(presentation)).toBe(96);
-    expect(style["--lyric-base-font-size"]).toBe("96px");
+    expect(LYRIC_FONT_SIZE_AT_1080P).toBe(92);
+    expect(fixedLyricFontSize(presentation)).toBe(92);
+    expect(style["--lyric-base-font-size"]).toBe("92px");
+    expect(style["--lyric-outer-width"]).toBe("0.125em");
+    expect(style["--lyric-inner-width"]).toBe("0.085em");
     expect(style["--lyric-bottom"]).toBe("84px");
     expect(style["--lyric-line-gap"]).toBe("28px");
     expect(style["--lyric-male"]).toBe("#153CFF");
@@ -105,14 +108,14 @@ describe("shared karaoke core", () => {
           time={11.5}
         />,
       );
-      expect(markup).toContain("--lyric-base-font-size:96px");
+      expect(markup).toContain("--lyric-base-font-size:92px");
       expect(markup).not.toContain("--lyric-line-font-size");
       expect(markup).not.toContain("transform:scale");
     }
     expect(fixedLyricFontSize({
       ...presentation,
       font: { ...presentation.font, sizeAt1080p: 24 },
-    })).toBe(96);
+    })).toBe(92);
   });
 
   it("paginates measured words into fixed-size two-row pages without changing order", () => {
@@ -134,7 +137,7 @@ describe("shared karaoke core", () => {
     expect(pages.length).toBeGreaterThan(1);
     expect(pages.every(({ rows }) => rows.length <= 2)).toBe(true);
     expect(pages.flatMap(({ rows }) => rows.flat().map(({ text }) => text))).toEqual(syllables.map(({ text }) => text));
-    expect(fixedLyricFontSize(narrow)).toBeCloseTo(53.333, 2);
+    expect(fixedLyricFontSize(narrow)).toBeCloseTo(51.111, 2);
     expect(new Set(pages.flatMap(({ rows }) => rows).map(() => fixedLyricFontSize(narrow))).size).toBe(1);
   });
 
@@ -256,6 +259,7 @@ describe("shared karaoke core", () => {
     media.current.currentTime = 13.5;
     await act(async () => callback?.(16));
     expect(word.style.getPropertyValue("--fill")).toBe("50%");
+    expect(word.style.getPropertyValue("--fill-ratio")).toBe("0.5");
     expect(request).toHaveBeenCalledTimes(2);
     await act(async () => root.unmount());
     expect(cancel).toHaveBeenCalledWith(7);
@@ -266,6 +270,13 @@ describe("shared karaoke core", () => {
     expect(lyricLayoutWindow(boundaries, 0)).toEqual([Number.NEGATIVE_INFINITY, 2]);
     expect(lyricLayoutWindow(boundaries, 5)).toEqual([5, 8]);
     expect(lyricLayoutWindow(boundaries, 20)).toEqual([8, Number.POSITIVE_INFINITY]);
+  });
+
+  it("reserves one or two fixed rows before applying the same lower margin", () => {
+    expect(lyricBottomSlotHeight(0)).toBe(1.08);
+    expect(lyricBottomSlotHeight(1)).toBe(1.08);
+    expect(lyricBottomSlotHeight(2)).toBeCloseTo(2.34);
+    expect(lyricBottomSlotHeight(8)).toBeCloseTo(2.34);
   });
 
   it("isolates steady playback ticks from parent React renders", () => {
