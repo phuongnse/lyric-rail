@@ -832,7 +832,7 @@ fn list_children(
         }
         let query = format!("'{folder_id}' in parents and trashed = false");
         let url = format!("{}/files", tokens.config.endpoints.drive_api);
-        let fields = format!("nextPageToken,files({FILE_FIELDS})");
+        let fields = format!("nextPageToken,incompleteSearch,files({FILE_FIELDS})");
         let response = authorized_drive_response(
             tokens,
             |token| {
@@ -1171,6 +1171,8 @@ mod tests {
                     }
                     Err(error) => panic!("range fixture accept failed: {error}"),
                 };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
                 let request = String::from_utf8_lossy(&read_http_request(&mut stream)).into_owned();
                 let range = request
                     .lines()
