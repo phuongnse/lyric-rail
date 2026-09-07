@@ -148,6 +148,9 @@ jobs:
       - name: Validate Windows Rust environment (process 0.5.1 containment bridge)
         if: runner.os == 'Windows'
         run: processctl doctor --project-root . --profile rust
+      - name: Diagnose failed native Rust tests
+        if: failure() && runner.os != 'Windows'
+        run: cargo test --workspace --locked
       - name: Run Windows Rust formatting gate
         if: runner.os == 'Windows'
         run: cargo fmt --all --check
