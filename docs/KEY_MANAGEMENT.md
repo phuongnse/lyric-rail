@@ -39,6 +39,12 @@ encrypted manifest and authenticated asset chunks
   platform credential-store policy controls the protection of the library
   master.
 
+Player private state uses separate credential entries: `player-catalog-v1` encrypts
+the local source/search catalog, and the Google Drive connector stores its refresh
+token under a client-ID-derived account. Creating a catalog key never creates or
+overwrites the package library master, so a new device can still restore the correct
+master. Catalog keys and OAuth tokens cannot unwrap package DEKs.
+
 ## Recovery slot
 
 The native `lrail` CLI can add a second `recovery-v1` slot:
@@ -58,7 +64,7 @@ Recovery material is self-contained in the authenticated package envelope. The
 passphrase itself is the user's recovery secret. Losing both the active OS
 credential and every recovery passphrase is irreversible.
 
-Studio 0.8 creates OS-vault packages by default. A recovery-passphrase dialog is
+The local core creates OS-vault packages by default. A native recovery prompt is
 not rendered inside the WebView because secrets may not cross the JavaScript
 boundary; recovery-enabled per-package packaging currently uses the native CLI.
 
@@ -70,7 +76,7 @@ kernel.
 
 ## Offline library recovery bundle
 
-Studio exposes Export, Verify, and Restore actions that launch the signed native
+The Player exposes Export and Restore actions that launch the signed native
 `lrail` executable in a separate console. The native process reads the
 passphrase without echo; only selected filesystem paths cross frontend IPC.
 
@@ -84,7 +90,7 @@ different current key and is blocked during rotation. See
 
 ## Transactional library-master rotation
 
-Studio exposes a native folder-scoped rotation workflow. The selected library is
+The native core retains a folder-scoped rotation workflow. The selected library is
 inventoried before the operation starts; every package must authenticate with
 the current device key. Official device-vault packaging and rotation share a
 cross-process lock, so a new package cannot be committed under a stale master
@@ -124,8 +130,9 @@ one device-vault slot, minimizing permanent overhead.
 The following are stable-release gates, not current capabilities:
 
 - credential-store access conditioned on device biometric/user presence;
-- device authorization/revocation or a multi-device key service;
+- account-backed device authorization/revocation or an online key service;
 - secure crash-dump exclusion verified on every supported platform.
 
-Version 0.8 therefore targets a single-user personal offline library. It must
+Version 0.8 therefore targets one personal library across explicitly recovered
+devices, including read-only cloud storage. It must
 not be marketed as commercial DRM or hardware-backed key custody.

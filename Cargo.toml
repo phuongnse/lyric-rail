@@ -2,10 +2,7 @@
 resolver = "2"
 members = [
   "crates/lrail-format",
-  "crates/lrail-volume-security",
-  "apps/studio/src-tauri",
   "apps/player/src-tauri",
-  "apps/volume-broker",
 ]
 
 [workspace.package]

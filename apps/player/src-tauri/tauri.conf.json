@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LyricRail Player",
+  "productName": "LyricRail",
   "version": "0.8.0",
   "identifier": "com.lyricrail.player",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LyricRail Player",
+        "title": "LyricRail",
         "width": 1280,
         "height": 820,
         "minWidth": 960,
@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob: lrailmedia: http://lrailmedia.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'",
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob: lrailmedia: http://lrailmedia.localhost clippreview: http://clippreview.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'",
       "capabilities": ["player-main"]
     }
   },
@@ -29,8 +29,8 @@
     "active": true,
     "targets": "all",
     "category": "Music",
-    "shortDescription": "Authenticated private karaoke player",
-    "longDescription": "Plays encrypted LyricRail karaoke packages with dynamic lyrics and switchable Karaoke and Original Reference audio.",
+    "shortDescription": "Private karaoke library and player",
+    "longDescription": "Processes local media into encrypted LyricRail packages, then searches and plays local or user-selected cloud libraries.",
     "fileAssociations": [
       {
         "ext": ["lrail"],

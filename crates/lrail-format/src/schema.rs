@@ -39,6 +39,16 @@ pub struct AssetRequest {
     pub content_encoding: ContentEncoding,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageRevisionRequest {
+    #[serde(default)]
+    pub metadata: Option<Value>,
+    pub assets: Vec<AssetRequest>,
+    #[serde(default)]
+    pub producer: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContentEncoding {
@@ -131,4 +141,14 @@ pub struct VerificationReport {
     pub plaintext_bytes: u64,
     pub package_bytes: u64,
     pub cryptographic_overhead_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageRevisionReport {
+    pub package_id: Uuid,
+    pub replaced_assets: Vec<String>,
+    pub preserved_assets: usize,
+    pub preserved_ciphertext_bytes: u64,
+    pub package_bytes: u64,
 }

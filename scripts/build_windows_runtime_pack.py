@@ -20,7 +20,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Assemble, production-audit, sign, and verify a relocatable Windows "
-            "LyricRail Studio runtime pack."
+            "LyricRail local-core runtime pack."
         )
     )
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])

@@ -11,7 +11,8 @@
       {
         "id": "frontend-build",
         "run": [
-          "npm",
+          "python",
+          "scripts/npm_command.py",
           "run",
           "build"
         ],
@@ -20,7 +21,8 @@
       {
         "id": "frontend-tests",
         "run": [
-          "npm",
+          "python",
+          "scripts/npm_command.py",
           "test"
         ],
         "timeoutSeconds": 900
@@ -28,7 +30,8 @@
       {
         "id": "frontend-dependency-audit",
         "run": [
-          "npm",
+          "python",
+          "scripts/npm_command.py",
           "audit",
           "--audit-level=moderate"
         ],

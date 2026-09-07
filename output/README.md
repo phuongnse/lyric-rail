@@ -1,6 +1,6 @@
 # Output workspace
 
-LyricRail writes generated karaoke jobs, review media, delivery files, and
+LyricRail writes generated karaoke jobs, review media and
 encrypted `.lrail` packages to this directory when no separate
 `LYRICRAIL_DATA_HOME` is configured.
 

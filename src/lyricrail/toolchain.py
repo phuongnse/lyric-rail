@@ -11,7 +11,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import resolve_environment_path
 from .config import load_project_config
 from .model_provenance import verify_model_provenance
 from .validation import validate_project
@@ -190,15 +189,12 @@ def collect_doctor_report(root: Path, *, production: bool = False) -> dict[str, 
         _module_check("audio_separator", "audio_separator", True),
         _module_check("transformers", "transformers", True),
         _module_check("torchaudio", "torchaudio", True),
-        _module_check("yt_dlp", "yt_dlp", False),
         detect_torch_backend(),
         detect_onnx_backend(),
     ]
 
     project_files = (
         root / "config" / "pipeline.json",
-        root / "config" / "channel.json",
-        root / "config" / "metadata_rules.json",
         root / "config" / "model-manifest.json",
         root / "templates" / "karaoke-classic.json",
         root / "vendor" / "lyric-alignment" / "model_handling.py",
@@ -219,16 +215,18 @@ def collect_doctor_report(root: Path, *, production: bool = False) -> dict[str, 
         )
     )
 
-    oauth = resolve_environment_path(
-        "YOUTUBE_CLIENT_SECRET_PATH", root, "credentials/client_secret.json"
-    )
+    drive_configured = bool(os.environ.get("LYRICRAIL_GOOGLE_CLIENT_ID", "").strip())
     checks.append(
         Check(
-            name="youtube_oauth",
-            status="ok" if oauth.is_file() else "optional",
+            name="google_drive",
+            status="ok" if drive_configured else "optional",
             required=False,
-            detail="configured" if oauth.is_file() else "not configured; upload will be disabled",
-            path=str(oauth) if oauth.is_file() else "",
+            detail=(
+                "desktop Picker client configured"
+                if drive_configured
+                else "not configured; local library remains available"
+            ),
+            path="",
         )
     )
 

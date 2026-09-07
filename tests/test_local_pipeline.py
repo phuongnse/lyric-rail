@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -8,12 +9,15 @@ import numpy as np
 import soundfile as sf
 
 from lyricrail.local_pipeline import (
+    ROLE_INFERENCE_CHECKPOINTS,
     _original_audio_delivery_plan,
+    _ensure_request_bound_package,
     _guarded_lexical_cleanup_candidate,
     _extend_colead_across_speaker_transition,
     _restore_proven_speaker_transition_roles,
     _reconcile_backing_roles_from_word_majority,
     _resolve_short_semantic_group_roles,
+    _report_role_inference_checkpoint,
     _extend_seeded_colead_semantic_groups,
     _select_residual_consensus_intervals,
     _select_residual_consensus_words,
@@ -30,13 +34,14 @@ from lyricrail.local_pipeline import (
     gate_colead_groups_by_foreground_prominence,
     karaoke_timing_qc,
     lyric_font_size_policy,
-    load_vietnamese_punctuation_analyzer,
     promote_opposite_gender_colead_clauses,
     refine_lyric_leakage,
     reflow_aligned_lyric_lines,
     regularize_colead_to_sung_clause_boundaries,
-    resolve_ambiguous_semantic_clause_roles,
-    resolve_ambiguous_semantic_clause_roles_from_group_context,
+    resolve_ambiguous_semantic_clause_roles_from_group_embeddings,
+    resolve_ambiguous_semantic_clause_roles_from_line_consensus,
+    resolve_ambiguous_semantic_group_roles_from_pitch_consensus,
+    resolve_mixed_group_lines_from_unanimous_clause_roles,
     role_analysis_settings,
     select_backing_identity_candidates,
     smooth_roles_with_semantic_group_embeddings,
@@ -47,6 +52,79 @@ from lyricrail.local_pipeline import (
 
 
 class LocalPipelineTests(unittest.TestCase):
+    def test_package_publication_retry_adopts_only_after_bound_verification(self) -> None:
+        class Context:
+            def __init__(self) -> None:
+                self.progress_updates: list[tuple[float, str]] = []
+
+            def progress(self, percent: float, message: str = "") -> None:
+                self.progress_updates.append((percent, message))
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            request = root / "package-request.json"
+            output = root / "song.lrail"
+            request.write_text("{}", encoding="utf-8")
+            context = Context()
+
+            def interrupted_after_publish(_context, command, *, progress=None):
+                del progress
+                self.assertEqual(command[1], "pack")
+                output.write_bytes(b"published-and-preserved")
+                raise RuntimeError("simulated process interruption")
+
+            with patch(
+                "lyricrail.local_pipeline._run",
+                side_effect=interrupted_after_publish,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "interruption"):
+                    _ensure_request_bound_package(
+                        context, "lrail", request, output
+                    )
+            original = output.read_bytes()
+
+            commands: list[list[str]] = []
+
+            def verify_existing(_context, command, *, progress=None):
+                del progress
+                commands.append(command)
+
+            with patch("lyricrail.local_pipeline._run", side_effect=verify_existing):
+                _ensure_request_bound_package(context, "lrail", request, output)
+            self.assertEqual(
+                commands,
+                [["lrail", "verify-request", str(output), "--request", str(request)]],
+            )
+            self.assertEqual(output.read_bytes(), original)
+
+            with patch(
+                "lyricrail.local_pipeline._run",
+                side_effect=RuntimeError("request mismatch"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "mismatch"):
+                    _ensure_request_bound_package(context, "lrail", request, output)
+            self.assertEqual(output.read_bytes(), original)
+
+            output.unlink()
+            with patch(
+                "lyricrail.local_pipeline._run",
+                side_effect=RuntimeError("interrupted before publication"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "before publication"):
+                    _ensure_request_bound_package(context, "lrail", request, output)
+            self.assertFalse(output.exists())
+            commands.clear()
+
+            def publish_then_verify(_context, command, *, progress=None):
+                del progress
+                commands.append(command)
+                if command[1] == "pack":
+                    output.write_bytes(b"new package")
+
+            with patch("lyricrail.local_pipeline._run", side_effect=publish_then_verify):
+                _ensure_request_bound_package(context, "lrail", request, output)
+            self.assertEqual([command[1] for command in commands], ["pack", "verify-request"])
+
     def test_backing_adlib_tail_ends_sweep_when_lead_has_stopped(self) -> None:
         sample_rate = 1_000
         time = np.arange(3_000) / sample_rate
@@ -80,47 +158,175 @@ class LocalPipelineTests(unittest.TestCase):
             (False, 134, 134),
         )
 
-    def test_punctuation_analyzer_cache_is_initialized_before_model_loading(self) -> None:
-        with TemporaryDirectory() as temporary:
-            with self.assertRaisesRegex(
-                RuntimeError, "Pinned Vietnamese punctuation model is incomplete"
-            ):
-                load_vietnamese_punctuation_analyzer(Path(temporary))
-
-    def test_ambiguous_clause_requires_matching_voiceprint_and_pitch(self) -> None:
-        roles, report = resolve_ambiguous_semantic_clause_roles(
-            [None, None],
-            [
-                {"cluster": 1, "cosineMargin": 0.08},
-                {"cluster": 0, "cosineMargin": 0.08},
-            ],
-            [196.0, 220.0],
-            {"roleByCluster": {0: "female", 1: "male"}},
+    def test_ambiguous_clause_uses_only_accepted_authoritative_group_embedding(self) -> None:
+        clauses = [
+            {"referenceGroup": 4, "wordReferences": [{"line": 11, "word": 1}]},
+            {"referenceGroup": 5, "wordReferences": [{"line": 12, "word": 1}]},
+            {"referenceGroup": 6, "wordReferences": [{"line": 13, "word": 1}]},
+        ]
+        roles, report = resolve_ambiguous_semantic_clause_roles_from_group_embeddings(
+            [None, None, "male"],
+            clauses,
+            {4: "female", 5: "male", 6: "female"},
             {
-                "maleMaximumMedianHz": 235.0,
-                "femaleMinimumMedianHz": 275.0,
-                "minimumSemanticClausePitchResolutionMargin": 0.05,
+                4: {"role": "female", "cosineMargin": 0.22},
+                5: {"role": None, "cosineMargin": 0.03},
+                6: {"role": "female", "cosineMargin": 0.25},
             },
         )
-        self.assertEqual(roles, ["male", None])
-        self.assertEqual(report[0]["evidence"], "voiceprint-candidate-confirmed-by-absolute-pitch")
+        self.assertEqual(roles, ["female", None, "male"])
+        self.assertEqual(len(report), 1)
+        self.assertEqual(report[0]["referenceGroup"], 4)
+        self.assertEqual(report[0]["evidence"], "accepted-authoritative-group-voiceprint")
 
-    def test_ambiguous_short_clause_inherits_only_unanimous_group_identity(self) -> None:
-        roles, report = resolve_ambiguous_semantic_clause_roles_from_group_context(
-            [None, "female", None, "male", "female"],
-            [
-                {"referenceGroup": 3},
-                {"referenceGroup": 3},
-                {"referenceGroup": 8},
-                {"referenceGroup": 8},
-                {"referenceGroup": 8},
-            ],
+    def test_group_pitch_must_confirm_cluster_candidate_without_opposition(self) -> None:
+        roles, diagnostics, report = (
+            resolve_ambiguous_semantic_group_roles_from_pitch_consensus(
+                {4: None, 12: None, 13: None, 14: None},
+                {
+                    4: {"cluster": 0, "role": None, "cosineMargin": 0.0059},
+                    12: {"cluster": 0, "role": None, "cosineMargin": 0.089},
+                    13: {"cluster": 0, "role": None, "cosineMargin": 0.02},
+                    14: {"cluster": 1, "role": None, "cosineMargin": 0.01},
+                },
+                [196.79, 196.79, 245.09, 163.58, 180.0, 330.0, 180.0],
+                [4, 4, 12, 12, 13, 13, 14],
+                {"roleByCluster": {0: "male", 1: "female"}},
+                {
+                    "maleMaximumMedianHz": 235.0,
+                    "femaleMinimumMedianHz": 275.0,
+                    "minimumSemanticGroupPitchConsensusRatio": 0.5,
+                },
+            )
         )
-        self.assertEqual(roles, ["female", "female", None, "male", "female"])
+        self.assertEqual(roles, {4: "male", 12: "male", 13: None, 14: None})
+        self.assertEqual(diagnostics[4]["role"], "male")
+        self.assertEqual(diagnostics[12]["aggregatePitchHz"], 204.34)
+        self.assertEqual({item["referenceGroup"] for item in report}, {4, 12})
+        self.assertTrue(
+            all(
+                item["evidence"] == "group-pitch-confirmed-cluster-candidate"
+                for item in report
+            )
+        )
+
+    def test_ambiguous_clause_line_consensus_requires_every_line_and_margin(self) -> None:
+        clauses = [
+            {
+                "referenceGroup": 4,
+                "wordReferences": [
+                    {"line": 1, "word": 1},
+                    {"line": 1, "word": 2},
+                    {"line": 2, "word": 1},
+                ],
+            },
+            {
+                "referenceGroup": 5,
+                "wordReferences": [
+                    {"line": 2, "word": 1},
+                    {"line": 3, "word": 1},
+                ],
+            },
+            {
+                "referenceGroup": 6,
+                "wordReferences": [{"line": 4, "word": 1}],
+            },
+        ]
+        roles, report = resolve_ambiguous_semantic_clause_roles_from_line_consensus(
+            [None, None, None],
+            clauses,
+            ["female", "female", "male", "male"],
+            [
+                {"role": "female", "rawRole": "female", "cosineMargin": 0.20},
+                {"role": "female", "rawRole": "female", "cosineMargin": 0.08},
+                {"role": "male", "rawRole": "male", "cosineMargin": 0.30},
+                {"role": "male", "rawRole": "male", "cosineMargin": 0.01},
+            ],
+            minimum_margin=0.05,
+        )
+        self.assertEqual(roles, ["female", None, None])
+        self.assertEqual(len(report), 1)
+        self.assertEqual(report[0]["lineIndexes"], [1, 2])
         self.assertEqual(
             report[0]["evidence"],
-            "unambiguous-sibling-clause-in-authoritative-lyric-group",
+            "unanimous-confident-containing-line-voiceprints",
         )
+
+        smoothed, smoothed_report = (
+            resolve_ambiguous_semantic_clause_roles_from_line_consensus(
+                [None],
+                [clauses[0]],
+                ["male", "male"],
+                [
+                    {"role": "male", "rawRole": "female", "cosineMargin": 0.90},
+                    {"role": "male", "rawRole": "female", "cosineMargin": 0.85},
+                ],
+                minimum_margin=0.05,
+            )
+        )
+        self.assertEqual(smoothed, [None])
+        self.assertEqual(smoothed_report, [])
+
+    def test_mixed_display_lines_use_only_full_coverage_unanimous_clause_roles(self) -> None:
+        clauses = [
+            {
+                "referenceGroup": 12,
+                "wordReferences": [
+                    {"line": 1, "word": 1},
+                    {"line": 2, "word": 1},
+                ],
+            },
+            {
+                "referenceGroup": 13,
+                "wordReferences": [{"line": 3, "word": 1}],
+            },
+            {
+                "referenceGroup": 13,
+                "wordReferences": [{"line": 4, "word": 1}],
+            },
+        ]
+        roles, report = resolve_mixed_group_lines_from_unanimous_clause_roles(
+            ["male", "female", "male", "female"],
+            [12, 12, 13, 13],
+            clauses,
+            ["male", "male", "female"],
+            proven_transition_groups=set(),
+        )
+        self.assertEqual(roles[:2], ["male", "male"])
+        self.assertEqual(roles[2:], ["male", "female"])
+        self.assertEqual(len(report), 1)
+        self.assertEqual(report[0]["referenceGroup"], 12)
+        self.assertEqual(
+            report[0]["evidence"],
+            "unanimous-full-coverage-semantic-clause-roles",
+        )
+
+        preserved, preserved_report = (
+            resolve_mixed_group_lines_from_unanimous_clause_roles(
+                ["male", "female"],
+                [12, 12],
+                [clauses[0]],
+                ["male"],
+                proven_transition_groups={12},
+            )
+        )
+        self.assertEqual(preserved, ["male", "female"])
+        self.assertEqual(preserved_report, [])
+
+    def test_role_inference_checkpoints_are_named_monotonic_completions(self) -> None:
+        observed: list[tuple[float, str]] = []
+        for key, _, _ in ROLE_INFERENCE_CHECKPOINTS:
+            _report_role_inference_checkpoint(
+                lambda percent, message: observed.append((percent, message)), key
+            )
+        percentages = [percent for percent, _ in observed]
+        self.assertEqual(percentages, sorted(set(percentages)))
+        self.assertEqual(percentages[-1], 100.0)
+        self.assertTrue(all(message for _, message in observed))
+        mapped = [35.0 + 0.55 * percent for percent in percentages]
+        self.assertTrue(all(35.0 < percent <= 90.0 for percent in mapped))
+        with self.assertRaisesRegex(ValueError, "Unknown role inference checkpoint"):
+            _report_role_inference_checkpoint(lambda *_: None, "unknown")
 
     def test_semantic_clauses_ignore_arbitrary_display_line_boundaries(self) -> None:
         lines = [
@@ -599,6 +805,16 @@ class LocalPipelineTests(unittest.TestCase):
         )
         self.assertEqual([line["text"] for line in lines], [text])
         self.assertFalse(report["hardWordLimitUsed"])
+        self.assertTrue(report["authoritativeWordStreamPreserved"])
+        self.assertEqual(
+            report["semanticEvidence"],
+            "authoritative-punctuation+aligned-acoustic-pauses+"
+            "underthesea-pos+curated-lexical-units",
+        )
+        self.assertEqual(
+            [word["text"] for line in lines for word in line["syllables"]],
+            text.split(),
+        )
 
     def test_semantic_width_reflow_shrinks_to_keep_phrase_whole(self) -> None:
         text = "Từng câu nói yêu đương ngọt ngào"
@@ -2884,6 +3100,20 @@ class LocalPipelineTests(unittest.TestCase):
             name,
             "Xin Làm Người Xa Lạ - Đan Nguyên [Karaoke] abc123.lrail",
         )
+
+    def test_friendly_filenames_replace_only_invalid_surrogate_units(self) -> None:
+        metadata = {
+            "source": {
+                "songTitle": "Song\udc90",
+                "referenceArtist": "\ud83d\ude00 Singer",
+            }
+        }
+        delivery = friendly_delivery_filename(metadata, Path("source.mp4"))
+        package = friendly_package_filename(metadata, Path("source.mp4"), "job-abc123")
+        self.assertEqual(delivery, "Song\ufffd - 😀 Singer [Karaoke].mp4")
+        self.assertEqual(package, "Song\ufffd - 😀 Singer [Karaoke] abc123.lrail")
+        delivery.encode("utf-8", errors="strict")
+        package.encode("utf-8", errors="strict")
 
     def test_full_aac_source_uses_bitstream_copy_delivery(self) -> None:
         plan = _original_audio_delivery_plan(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,12 @@ def main() -> int:
     temporary_corpus = temporary_root / "corpus"
     try:
         shutil.copytree(SOURCE_CORPUS, temporary_corpus)
+        fuzzer_arguments = ["-runs=1000", "-max_len=512"]
+        if os.name == "nt":
+            # Windows sanitizer symbolization can leave llvm-symbolizer alive after
+            # a successful run. The smoke still exercises identical inputs and
+            # coverage; a failing artifact can be replayed with symbolization.
+            fuzzer_arguments.append("-symbolize=0")
         completed = subprocess.run(
             [
                 "cargo",
@@ -24,8 +31,7 @@ def main() -> int:
                 "package_open",
                 str(temporary_corpus),
                 "--",
-                "-runs=1000",
-                "-max_len=512",
+                *fuzzer_arguments,
             ],
             cwd=ROOT,
             check=False,

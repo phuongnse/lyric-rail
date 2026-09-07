@@ -15,20 +15,23 @@ from lyricrail.runner import StageContext
 
 
 class LyricInputTests(unittest.TestCase):
-    def test_normalization_preserves_words_punctuation_and_line_intent(self) -> None:
-        text, lines = normalize_authoritative_lyrics(
-            "  Mắt em buồn!  \r\n\r\nNhưng đêm nay gọi tên anh…  "
-        )
-        self.assertEqual(lines, ("Mắt em buồn!", "Nhưng đêm nay gọi tên anh…"))
-        self.assertEqual(text, "Mắt em buồn!\nNhưng đêm nay gọi tên anh…\n")
+    def test_validation_preserves_the_exact_authoritative_string(self) -> None:
+        supplied = "  Mắt em buồn!  \r\n\r\nNhưng đêm nay gọi tên anh…  "
+        text, lines = normalize_authoritative_lyrics(supplied)
+        self.assertEqual(lines, ("  Mắt em buồn!  ", "Nhưng đêm nay gọi tên anh…  "))
+        self.assertEqual(text, supplied)
 
-    def test_utf8_file_is_hashed_after_stable_normalization(self) -> None:
+    def test_utf8_file_is_hashed_without_normalizing_user_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "lyrics.txt"
-            path.write_text("Câu một\nCâu hai\n", encoding="utf-8")
+            path.write_bytes("Câu một\nCâu hai\n".encode("utf-8"))
             first = load_authoritative_lyrics(path)
             second = load_authoritative_lyrics(path)
             self.assertEqual(first.sha256, second.sha256)
+            self.assertEqual(
+                first.sha256,
+                hashlib.sha256("Câu một\nCâu hai\n".encode("utf-8")).hexdigest(),
+            )
             self.assertEqual(first.word_count, 4)
 
     def test_empty_lyrics_are_rejected(self) -> None:
@@ -77,13 +80,17 @@ class LyricInputTests(unittest.TestCase):
 
             _load_lyrics(context)
 
-            payload = json.loads(
-                (context.job_directory / "work" / "shared" / "authoritative-lyrics.json")
-                .read_text(encoding="utf-8")
-            )
+            payload_path = context.job_directory / "work" / "shared" / "authoritative-lyrics.json"
+            payload_bytes = payload_path.read_bytes()
+            payload = json.loads(payload_bytes.decode("utf-8", errors="strict"))
             self.assertEqual([item["text"] for item in payload["lines"]], list(lines))
             self.assertFalse(payload["detectedTextUsed"])
             self.assertFalse(payload["captionUsed"])
+            self.assertEqual(
+                (context.job_directory / "inputs" / "lyrics.txt").read_bytes(),
+                normalized.encode("utf-8"),
+            )
+            self.assertEqual(payload["sha256"], digest)
             self.assertEqual(build_local_handlers(root)["load_lyrics"], _load_lyrics)
 
 

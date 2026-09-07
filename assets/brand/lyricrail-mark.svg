@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 64 64" role="img" aria-labelledby="title description">
+  <title id="title">LyricRail</title>
+  <desc id="description">Two timed lyric rows exchange gold and cyan vocal roles across a diagonal playhead.</desc>
+  <defs>
+    <g id="top-row">
+      <rect x="9" y="16" width="16" height="12" rx="6"/>
+      <rect x="27" y="16" width="16" height="12" rx="6"/>
+      <rect x="45" y="16" width="10" height="12" rx="5"/>
+    </g>
+    <g id="bottom-row">
+      <rect x="9" y="36" width="12" height="12" rx="6"/>
+      <rect x="23" y="36" width="20" height="12" rx="6"/>
+      <rect x="45" y="36" width="10" height="12" rx="5"/>
+    </g>
+    <clipPath id="before-playhead">
+      <path d="M0 0H52L20 64H0Z"/>
+    </clipPath>
+    <clipPath id="after-playhead">
+      <path d="M52 0H64V64H20Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#before-playhead)">
+    <use href="#top-row" fill="#FFCC4D"/>
+    <use href="#bottom-row" fill="#5BD8D2"/>
+  </g>
+  <g clip-path="url(#after-playhead)">
+    <use href="#top-row" fill="#5BD8D2"/>
+    <use href="#bottom-row" fill="#FFCC4D"/>
+  </g>
+  <path id="playhead-gap" d="M44 10H50L28 54H22Z" fill="#0B0E15"/>
+</svg>

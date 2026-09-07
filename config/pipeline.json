@@ -30,25 +30,6 @@
     "upscale": false,
     "deinterlaceWhenNeeded": true,
     "sdrColorSpace": "bt709",
-    "youtubeUpload": {
-      "container": "mp4",
-      "videoCodec": "libx264",
-      "profile": "high",
-      "preset": "slow",
-      "crf": 16,
-      "pixelFormat": "yuv420p",
-      "colorPrimaries": "bt709",
-      "colorTransfer": "bt709",
-      "colorSpace": "bt709",
-      "colorRange": "tv",
-      "bFrames": 2,
-      "closedGop": true,
-      "fastStart": true,
-      "audioCodec": "aac",
-      "audioBitrate": "384k",
-      "audioSampleRate": 48000,
-      "audioChannels": 2
-    },
     "appPlayback": {
       "layout": "synchronized-encrypted-assets",
       "videoContainer": "mp4",
@@ -87,17 +68,6 @@
       "minimumVocalEnergyRatioDb": -24.0,
       "maximumVocalEnergyRatioDb": 3.0
     }
-  },
-  "audioOnlyVisuals": {
-    "enabled": true,
-    "strategy": "content-derived-semantic-landscape",
-    "provider": "mixkit",
-    "targetSceneSeconds": 15.0,
-    "minimumScenes": 10,
-    "maximumScenes": 24,
-    "crossfadeSeconds": 0.6,
-    "resolution": [1920, 1080],
-    "fps": 30
   },
   "lyrics": {
     "language": "vi",
@@ -242,10 +212,10 @@
     "minimumSpeakerPitchRatio": 1.2,
     "minimumBackingSpeakerMargin": 0.0,
     "minimumSemanticGroupSpeakerMargin": 0.1,
+    "minimumSemanticGroupPitchConsensusRatio": 0.5,
     "minimumSemanticClauseSpeakerMargin": 0.12,
-    "minimumSemanticClausePitchResolutionMargin": 0.05,
+    "minimumSemanticClauseLineConsensusMargin": 0.05,
     "minimumSemanticClauseSegmentSeconds": 0.75,
-    "failOnAmbiguousSemanticClauseRole": true,
     "minimumBackingIdentityCandidateWords": 2,
     "speakerPhraseMajorityRatio": 0.66,
     "minimumSpeakerWordMajorityCount": 3,
@@ -335,8 +305,7 @@
     "burnIn": false,
     "renderOnce": true,
     "tailFadeSeconds": 1.5,
-    "tailPaddingSeconds": 2.0,
-    "cleanupAfterUploadSuccess": true
+    "tailPaddingSeconds": 2.0
   },
   "package": {
     "enabled": true,
@@ -345,17 +314,6 @@
     "chunkBytes": 1048576,
     "dynamicLyrics": true,
     "includeRenderedFallback": false,
-    "includeSourceAttribution": true,
     "cleanupVerifiedIntermediates": true
-  },
-  "youtube": {
-    "enabled": false,
-    "resumableUpload": true,
-    "uploadPrivacy": "private",
-    "waitForProcessing": true,
-    "uploadThumbnail": true,
-    "addToPlaylist": true,
-    "publishWhenReady": false,
-    "requireVerifiedApiProjectForPublic": true
   }
 }

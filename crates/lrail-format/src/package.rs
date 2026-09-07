@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write, copy},
     path::{Path, PathBuf},
@@ -22,9 +22,57 @@ use crate::{
     header::{FORMAT_MAJOR, FORMAT_MINOR, HEADER_SIZE, Header},
     schema::{
         Asset, Chunk, KeyEnvelope, KeySlot, Manifest, PackageInspection, PackageRequest,
-        VerificationReport,
+        PackageRevisionReport, PackageRevisionRequest, VerificationReport,
     },
 };
+
+/// Bounded random-access input used by the authenticated package reader.
+///
+/// Implementations may be local files or read-through remote caches. They must
+/// either fill the complete requested buffer or fail; short reads are never
+/// interpreted as valid package bytes.
+pub trait RandomAccessSource: Send {
+    fn len(&self) -> Result<u64>;
+    fn is_empty(&self) -> Result<bool> {
+        Ok(self.len()? == 0)
+    }
+    fn read_exact_at(&mut self, offset: u64, output: &mut [u8]) -> Result<()>;
+    fn label(&self) -> &str;
+}
+
+struct FileRandomAccessSource {
+    file: File,
+    length: u64,
+    label: String,
+}
+
+impl FileRandomAccessSource {
+    fn open(path: &Path) -> Result<Self> {
+        let file = OpenOptions::new().read(true).open(path)?;
+        let length = file.metadata()?.len();
+        Ok(Self {
+            file,
+            length,
+            label: path.display().to_string(),
+        })
+    }
+}
+
+impl RandomAccessSource for FileRandomAccessSource {
+    fn len(&self) -> Result<u64> {
+        Ok(self.length)
+    }
+
+    fn read_exact_at(&mut self, offset: u64, output: &mut [u8]) -> Result<()> {
+        self.file.seek(SeekFrom::Start(offset))?;
+        self.file.read_exact(output)?;
+        Ok(())
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+}
 
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 const MAX_CHUNK_SIZE: usize = 8 * 1024 * 1024;
@@ -545,7 +593,7 @@ pub fn rewrap_package_for_vaults(
     // Authenticate every asset before creating a replacement. This prevents a
     // rotation from blessing pre-existing corruption with a fresh manifest.
     verify_package_with_vault_candidates(input, opening_keys)?;
-    let mut reader = PackageReader::open_with_vault_candidates(input, opening_keys)?;
+    let reader = PackageReader::open_with_vault_candidates(input, opening_keys)?;
     let old_header = reader.header.clone();
     let old_package_bytes = old_header.package_length;
     let old_asset_region_start = checked_end(
@@ -673,9 +721,10 @@ pub fn rewrap_package_for_vaults(
     let mut temporary = NamedTempFile::new_in(parent)?;
     temporary.write_all(&header_bytes)?;
     temporary.write_all(&envelope_bytes)?;
-    reader.file.seek(SeekFrom::Start(old_asset_region_start))?;
+    let mut source_file = File::open(input)?;
+    source_file.seek(SeekFrom::Start(old_asset_region_start))?;
     let copied = copy(
-        &mut Read::by_ref(&mut reader.file).take(media_ciphertext_bytes),
+        &mut Read::by_ref(&mut source_file).take(media_ciphertext_bytes),
         temporary.as_file_mut(),
     )?;
     if copied != media_ciphertext_bytes {
@@ -707,18 +756,448 @@ pub fn rewrap_package_for_vaults(
     })
 }
 
-type PackagePrefix = (File, Header, [u8; HEADER_SIZE], Vec<u8>, KeyEnvelope);
+const REVISION_ASSETS: [&str; 5] = [
+    "lyrics/authoritative.txt",
+    "lyrics/timing.json",
+    "lyrics/render-plan.json",
+    "metadata/release.json",
+    "artwork/thumbnail.webp",
+];
 
-fn read_header_and_envelope(path: &Path) -> Result<PackagePrefix> {
-    let mut file = OpenOptions::new().read(true).open(path)?;
-    let actual_length = file.metadata()?.len();
+fn revision_asset_matches(existing: &Asset, replacement: &crate::schema::AssetRequest) -> bool {
+    existing.logical_name == replacement.logical_name
+        && existing.media_type == replacement.media_type
+        && existing.kind == replacement.kind
+        && existing.track_name == replacement.track_name
+        && existing.language == replacement.language
+        && existing.default == replacement.default
+        && existing.content_encoding == replacement.content_encoding
+}
+
+fn encrypt_replacement_asset(
+    request: &crate::schema::AssetRequest,
+    package_id: &[u8; 16],
+    dek: &[u8; KEY_BYTES],
+    used_nonces: &mut HashSet<[u8; NONCE_BYTES]>,
+    output: &mut File,
+    current_file_offset: &mut u64,
+) -> Result<Asset> {
+    let metadata = fs::metadata(&request.path)?;
+    if !metadata.is_file() || metadata.len() > MAX_PACKAGE_SIZE {
+        return Err(Error::InvalidAsset(format!(
+            "replacement asset is not a bounded regular file: {}",
+            request.path.display()
+        )));
+    }
+    let expected_length = metadata.len();
+    let asset_id = Uuid::new_v4();
+    let mut input = File::open(&request.path)?;
+    let mut digest = Sha256::new();
+    let mut plaintext_offset = 0_u64;
+    let mut chunks = Vec::new();
+    let mut buffer = vec![0_u8; DEFAULT_CHUNK_SIZE];
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let plaintext = &buffer[..read];
+        digest.update(plaintext);
+        let nonce = fresh_nonce(used_nonces);
+        let index = chunks.len() as u64;
+        let plaintext_length = u32::try_from(read)
+            .map_err(|_| Error::InvalidAsset("replacement chunk exceeds u32".into()))?;
+        let aad = chunk_aad(
+            package_id,
+            &asset_id,
+            index,
+            plaintext_offset,
+            plaintext_length,
+            encoding_name(request.content_encoding),
+        );
+        let ciphertext = encrypt(dek, &nonce, &aad, plaintext)?;
+        let ciphertext_length = u32::try_from(ciphertext.len())
+            .map_err(|_| Error::InvalidAsset("replacement ciphertext exceeds u32".into()))?;
+        output.write_all(&ciphertext)?;
+        chunks.push(Chunk {
+            index,
+            plaintext_offset,
+            plaintext_length,
+            file_offset: *current_file_offset,
+            ciphertext_length,
+            nonce: nonce.to_vec(),
+        });
+        plaintext_offset = checked_end(plaintext_offset, read as u64, "replacement asset")?;
+        *current_file_offset = checked_end(
+            *current_file_offset,
+            ciphertext.len() as u64,
+            "replacement ciphertext",
+        )?;
+        if chunks.len() > MAX_CHUNKS {
+            return Err(Error::InvalidAsset(
+                "replacement exceeds the package chunk limit".into(),
+            ));
+        }
+    }
+    if plaintext_offset != expected_length {
+        return Err(Error::InvalidAsset(format!(
+            "replacement changed while reading: {}",
+            request.path.display()
+        )));
+    }
+    Ok(Asset {
+        asset_id,
+        logical_name: request.logical_name.clone(),
+        media_type: request.media_type.clone(),
+        kind: request.kind.clone(),
+        track_name: request.track_name.clone(),
+        language: request.language.clone(),
+        default: request.default,
+        content_encoding: request.content_encoding,
+        plaintext_length: plaintext_offset,
+        sha256: digest.finalize().to_vec(),
+        chunks,
+    })
+}
+
+/// Creates a new authenticated revision while copying every unchanged asset
+/// ciphertext byte-for-byte. The source remains untouched on every failure.
+pub fn revise_package_for_vault(
+    input: &Path,
+    output: &Path,
+    vault_master_key: &[u8; KEY_BYTES],
+    request: &PackageRevisionRequest,
+) -> Result<PackageRevisionReport> {
+    if request.assets.is_empty() {
+        return Err(Error::InvalidAsset(
+            "a package revision must replace at least one asset".into(),
+        ));
+    }
+    let validation_request = PackageRequest {
+        metadata: request
+            .metadata
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({})),
+        assets: request.assets.clone(),
+        producer: request
+            .producer
+            .clone()
+            .unwrap_or_else(|| "LyricRail revision".into()),
+        minimum_player_version: "0.8.0".into(),
+    };
+    validate_request(&validation_request)?;
+    if request
+        .assets
+        .iter()
+        .any(|asset| !REVISION_ASSETS.contains(&asset.logical_name.as_str()))
+    {
+        return Err(Error::InvalidAsset(
+            "a revision may change only lyric, release-metadata, or thumbnail assets".into(),
+        ));
+    }
+    if output.exists() {
+        return Err(Error::InvalidAsset(format!(
+            "refusing to overwrite existing output: {}",
+            output.display()
+        )));
+    }
+
+    verify_package_with_vault(input, vault_master_key)?;
+    let reader = PackageReader::open_with_vault(input, vault_master_key)?;
+    let (_source, old_header, _header_bytes, envelope_bytes, _envelope) =
+        read_header_and_envelope(input)?;
+    let mut replacements: HashMap<String, crate::schema::AssetRequest> = request
+        .assets
+        .iter()
+        .cloned()
+        .map(|asset| (asset.logical_name.clone(), asset))
+        .collect();
+    for replacement in replacements.values() {
+        if let Some(existing) = reader
+            .manifest
+            .assets
+            .iter()
+            .find(|asset| asset.logical_name == replacement.logical_name)
+        {
+            if !revision_asset_matches(existing, replacement) {
+                return Err(Error::InvalidAsset(format!(
+                    "revision changes the declared role of {}",
+                    replacement.logical_name
+                )));
+            }
+        } else {
+            let canonical_thumbnail = replacement.logical_name == "artwork/thumbnail.webp"
+                && replacement.media_type == "image/webp"
+                && replacement.kind == "thumbnail"
+                && replacement.track_name.is_none()
+                && replacement.language.is_none()
+                && !replacement.default;
+            let canonical_authoritative_lyrics = replacement.logical_name
+                == "lyrics/authoritative.txt"
+                && replacement.media_type == "text/plain; charset=utf-8"
+                && replacement.kind == "authoritative-lyrics"
+                && replacement.track_name.is_none()
+                && replacement.language.as_deref() == Some("vi")
+                && !replacement.default;
+            if !canonical_thumbnail && !canonical_authoritative_lyrics {
+                return Err(Error::InvalidAsset(
+                    "only canonical authoritative lyrics or thumbnail assets may be added".into(),
+                ));
+            }
+        }
+    }
+
+    let parent = output
+        .parent()
+        .ok_or_else(|| Error::InvalidAsset("revision output has no parent".into()))?;
+    fs::create_dir_all(parent)?;
+    let mut temporary = NamedTempFile::new_in(parent)?;
+    temporary.write_all(&[0_u8; HEADER_SIZE])?;
+    temporary.write_all(&envelope_bytes)?;
+    let mut current_file_offset = HEADER_SIZE as u64 + envelope_bytes.len() as u64;
+    let mut source_file = File::open(input)?;
+    let mut used_nonces = HashSet::from([old_header.manifest_nonce]);
+    for asset in &reader.manifest.assets {
+        for chunk in &asset.chunks {
+            let nonce: [u8; NONCE_BYTES] =
+                chunk.nonce.as_slice().try_into().map_err(|_| {
+                    Error::InvalidFormat("chunk nonce has an invalid length".into())
+                })?;
+            used_nonces.insert(nonce);
+        }
+    }
+
+    let mut revised_assets = Vec::with_capacity(
+        reader.manifest.assets.len()
+            + usize::from(replacements.contains_key("artwork/thumbnail.webp")),
+    );
+    let mut replaced_assets = Vec::new();
+    let mut preserved_assets = 0_usize;
+    let mut preserved_ciphertext_bytes = 0_u64;
+    for existing in &reader.manifest.assets {
+        if let Some(replacement) = replacements.remove(&existing.logical_name) {
+            let revised = encrypt_replacement_asset(
+                &replacement,
+                &old_header.package_id,
+                &reader.dek,
+                &mut used_nonces,
+                temporary.as_file_mut(),
+                &mut current_file_offset,
+            )?;
+            replaced_assets.push(revised.logical_name.clone());
+            revised_assets.push(revised);
+            continue;
+        }
+        let mut preserved = existing.clone();
+        for chunk in &mut preserved.chunks {
+            source_file.seek(SeekFrom::Start(chunk.file_offset))?;
+            let copied = copy(
+                &mut Read::by_ref(&mut source_file).take(chunk.ciphertext_length as u64),
+                temporary.as_file_mut(),
+            )?;
+            if copied != chunk.ciphertext_length as u64 {
+                return Err(Error::InvalidFormat(
+                    "source ended inside preserved ciphertext".into(),
+                ));
+            }
+            chunk.file_offset = current_file_offset;
+            current_file_offset =
+                checked_end(current_file_offset, copied, "preserved revision ciphertext")?;
+            preserved_ciphertext_bytes = checked_end(
+                preserved_ciphertext_bytes,
+                copied,
+                "preserved ciphertext total",
+            )?;
+        }
+        preserved_assets += 1;
+        revised_assets.push(preserved);
+    }
+    for replacement in replacements.into_values() {
+        let revised = encrypt_replacement_asset(
+            &replacement,
+            &old_header.package_id,
+            &reader.dek,
+            &mut used_nonces,
+            temporary.as_file_mut(),
+            &mut current_file_offset,
+        )?;
+        replaced_assets.push(revised.logical_name.clone());
+        revised_assets.push(revised);
+    }
+    if revised_assets.len() > MAX_ASSETS {
+        return Err(Error::InvalidAsset(
+            "revision exceeds the package asset limit".into(),
+        ));
+    }
+
+    let mut manifest = reader.manifest.clone();
+    manifest.assets = revised_assets;
+    if let Some(metadata) = &request.metadata {
+        validate_metadata(metadata)?;
+        manifest.metadata = metadata.clone();
+    }
+    if let Some(producer) = &request.producer {
+        validate_short_field(producer, "revision producer", false)?;
+        manifest.producer = producer.clone();
+    }
+    manifest.created_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| Error::InvalidFormat("system clock precedes Unix epoch".into()))?
+        .as_millis()
+        .try_into()
+        .map_err(|_| Error::InvalidFormat("timestamp exceeds u64".into()))?;
+
+    let manifest_plaintext = cbor_encode(&manifest)?;
+    let manifest_length = checked_end(
+        manifest_plaintext.len() as u64,
+        TAG_BYTES as u64,
+        "revision manifest length",
+    )?;
+    if manifest_length > MAX_MANIFEST_SIZE {
+        return Err(Error::InvalidFormat(
+            "revision manifest exceeds the v1 limit".into(),
+        ));
+    }
+    let manifest_nonce = fresh_nonce(&mut used_nonces);
+    let package_length = checked_end(current_file_offset, manifest_length, "revision package")?;
+    let header = Header {
+        flags: old_header.flags,
+        package_id: old_header.package_id,
+        envelope_offset: HEADER_SIZE as u64,
+        envelope_length: envelope_bytes.len() as u64,
+        manifest_offset: current_file_offset,
+        manifest_length,
+        manifest_nonce,
+        package_length,
+    };
+    let header_bytes = header.encode();
+    let mut manifest_aad = header_bytes.to_vec();
+    manifest_aad.extend_from_slice(&envelope_bytes);
+    let encrypted_manifest = encrypt(
+        &reader.dek,
+        &manifest_nonce,
+        &manifest_aad,
+        &manifest_plaintext,
+    )?;
+    temporary.write_all(&encrypted_manifest)?;
+    temporary.as_file_mut().seek(SeekFrom::Start(0))?;
+    temporary.write_all(&header_bytes)?;
+    temporary.as_file_mut().sync_all()?;
+    verify_package_with_vault(temporary.path(), vault_master_key)?;
+    temporary
+        .persist_noclobber(output)
+        .map_err(|error| Error::Io(error.error))?;
+
+    replaced_assets.sort();
+    Ok(PackageRevisionReport {
+        package_id: manifest.package_id,
+        replaced_assets,
+        preserved_assets,
+        preserved_ciphertext_bytes,
+        package_bytes: package_length,
+    })
+}
+
+#[cfg(windows)]
+fn commit_revision(original: &Path, replacement: &Path, backup: &Path) -> Result<()> {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    let wide = |path: &Path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let original = wide(original);
+    let replacement = wide(replacement);
+    let backup = wide(backup);
+    let replaced = unsafe {
+        ReplaceFileW(
+            original.as_ptr(),
+            replacement.as_ptr(),
+            backup.as_ptr(),
+            0,
+            ptr::null(),
+            ptr::null(),
+        )
+    };
+    if replaced == 0 {
+        return Err(Error::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn commit_revision(original: &Path, replacement: &Path, backup: &Path) -> Result<()> {
+    fs::hard_link(original, backup)?;
+    if let Err(error) = fs::rename(replacement, original) {
+        let _ = fs::remove_file(backup);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+/// Publishes a verified revision at the original path with a same-volume
+/// rollback copy. The rollback is removed only after the published package
+/// authenticates again under its final name.
+pub fn revise_package_in_place_for_vault(
+    input: &Path,
+    vault_master_key: &[u8; KEY_BYTES],
+    request: &PackageRevisionRequest,
+) -> Result<PackageRevisionReport> {
+    let parent = input
+        .parent()
+        .ok_or_else(|| Error::InvalidAsset("package has no parent directory".into()))?;
+    let name = input
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| Error::InvalidAsset("package file name is not UTF-8".into()))?;
+    let transaction = Uuid::new_v4();
+    let replacement = parent.join(format!(".{name}.{transaction}.revision.lrail"));
+    let backup = parent.join(format!(".{name}.{transaction}.rollback.lrail"));
+    let report = revise_package_for_vault(input, &replacement, vault_master_key, request)?;
+    if let Err(error) = commit_revision(input, &replacement, &backup) {
+        let _ = fs::remove_file(&replacement);
+        return Err(error);
+    }
+    if let Err(error) = verify_package_with_vault(input, vault_master_key) {
+        #[cfg(windows)]
+        {
+            let failed = parent.join(format!(".{name}.{transaction}.failed.lrail"));
+            let _ = fs::rename(input, &failed);
+            let _ = fs::rename(&backup, input);
+            let _ = fs::remove_file(failed);
+        }
+        #[cfg(unix)]
+        {
+            let _ = fs::rename(&backup, input);
+        }
+        return Err(error);
+    }
+    fs::remove_file(&backup)?;
+    Ok(report)
+}
+
+type PackagePrefix = (
+    Box<dyn RandomAccessSource>,
+    Header,
+    [u8; HEADER_SIZE],
+    Vec<u8>,
+    KeyEnvelope,
+);
+
+fn read_header_and_envelope_from_source(
+    mut source: Box<dyn RandomAccessSource>,
+) -> Result<PackagePrefix> {
+    let actual_length = source.len()?;
     if actual_length < HEADER_SIZE as u64 || actual_length > MAX_PACKAGE_SIZE {
         return Err(Error::InvalidFormat(
             "package length is outside v1 bounds".into(),
         ));
     }
     let mut header_bytes = [0_u8; HEADER_SIZE];
-    file.read_exact(&mut header_bytes)?;
+    source.read_exact_at(0, &mut header_bytes)?;
     let header = Header::decode(&header_bytes)?;
     if header.package_length != actual_length {
         return Err(Error::InvalidFormat(format!(
@@ -747,9 +1226,8 @@ fn read_header_and_envelope(path: &Path) -> Result<PackagePrefix> {
             "invalid manifest or envelope layout".into(),
         ));
     }
-    file.seek(SeekFrom::Start(header.envelope_offset))?;
     let mut envelope_bytes = vec![0_u8; header.envelope_length as usize];
-    file.read_exact(&mut envelope_bytes)?;
+    source.read_exact_at(header.envelope_offset, &mut envelope_bytes)?;
     let envelope: KeyEnvelope = cbor_decode_canonical(&envelope_bytes)?;
     if envelope.schema_version != 1 || envelope.slots.is_empty() || envelope.slots.len() > 16 {
         return Err(Error::InvalidFormat(
@@ -800,7 +1278,11 @@ fn read_header_and_envelope(path: &Path) -> Result<PackagePrefix> {
             ));
         }
     }
-    Ok((file, header, header_bytes, envelope_bytes, envelope))
+    Ok((source, header, header_bytes, envelope_bytes, envelope))
+}
+
+fn read_header_and_envelope(path: &Path) -> Result<PackagePrefix> {
+    read_header_and_envelope_from_source(Box::new(FileRandomAccessSource::open(path)?))
 }
 
 pub fn inspect_package(path: &Path) -> Result<PackageInspection> {
@@ -821,7 +1303,7 @@ pub fn inspect_package(path: &Path) -> Result<PackageInspection> {
 
 pub struct PackageReader {
     path: PathBuf,
-    file: File,
+    source: Box<dyn RandomAccessSource>,
     header: Header,
     dek: LockedSecret<KEY_BYTES>,
     pub manifest: Manifest,
@@ -847,8 +1329,46 @@ fn unwrap_dek(
 
 impl PackageReader {
     pub fn open(path: &Path, recovery_passphrase: &[u8]) -> Result<Self> {
-        let (file, header, header_bytes, envelope_bytes, envelope) =
+        let (source, header, header_bytes, envelope_bytes, envelope) =
             read_header_and_envelope(path)?;
+        Self::open_source_with_recovery_parts(
+            path.to_path_buf(),
+            source,
+            header,
+            header_bytes,
+            envelope_bytes,
+            envelope,
+            recovery_passphrase,
+        )
+    }
+
+    pub fn open_source(
+        source: Box<dyn RandomAccessSource>,
+        recovery_passphrase: &[u8],
+    ) -> Result<Self> {
+        let label = PathBuf::from(source.label());
+        let (source, header, header_bytes, envelope_bytes, envelope) =
+            read_header_and_envelope_from_source(source)?;
+        Self::open_source_with_recovery_parts(
+            label,
+            source,
+            header,
+            header_bytes,
+            envelope_bytes,
+            envelope,
+            recovery_passphrase,
+        )
+    }
+
+    fn open_source_with_recovery_parts(
+        path: PathBuf,
+        source: Box<dyn RandomAccessSource>,
+        header: Header,
+        header_bytes: [u8; HEADER_SIZE],
+        envelope_bytes: Vec<u8>,
+        envelope: KeyEnvelope,
+        recovery_passphrase: &[u8],
+    ) -> Result<Self> {
         let slot = envelope
             .slots
             .iter()
@@ -871,7 +1391,7 @@ impl PackageReader {
                 .ok_or_else(|| Error::InvalidFormat("recovery key slot is missing lanes".into()))?,
         )?;
         let dek = unwrap_dek(slot, &header.package_id, &kek)?;
-        Self::finish_open(path, file, header, header_bytes, envelope_bytes, dek)
+        Self::finish_open(path, source, header, header_bytes, envelope_bytes, dek)
     }
 
     pub fn open_with_vault(path: &Path, vault_master_key: &[u8; KEY_BYTES]) -> Result<Self> {
@@ -882,13 +1402,30 @@ impl PackageReader {
         path: &Path,
         vault_master_keys: &[&[u8; KEY_BYTES]],
     ) -> Result<Self> {
+        let source: Box<dyn RandomAccessSource> = Box::new(FileRandomAccessSource::open(path)?);
+        Self::open_source_with_vault_candidates(path.to_path_buf(), source, vault_master_keys)
+    }
+
+    pub fn open_source_with_vault(
+        source: Box<dyn RandomAccessSource>,
+        vault_master_key: &[u8; KEY_BYTES],
+    ) -> Result<Self> {
+        let label = PathBuf::from(source.label());
+        Self::open_source_with_vault_candidates(label, source, &[vault_master_key])
+    }
+
+    fn open_source_with_vault_candidates(
+        path: PathBuf,
+        source: Box<dyn RandomAccessSource>,
+        vault_master_keys: &[&[u8; KEY_BYTES]],
+    ) -> Result<Self> {
         if vault_master_keys.is_empty() {
             return Err(Error::InvalidAsset(
                 "at least one vault key candidate is required".into(),
             ));
         }
-        let (file, header, header_bytes, envelope_bytes, envelope) =
-            read_header_and_envelope(path)?;
+        let (source, header, header_bytes, envelope_bytes, envelope) =
+            read_header_and_envelope_from_source(source)?;
         let vault_slots: Vec<&KeySlot> = envelope
             .slots
             .iter()
@@ -918,20 +1455,19 @@ impl PackageReader {
             }
         }
         let dek = dek.ok_or(Error::KeyUnwrap)?;
-        Self::finish_open(path, file, header, header_bytes, envelope_bytes, dek)
+        Self::finish_open(path, source, header, header_bytes, envelope_bytes, dek)
     }
 
     fn finish_open(
-        path: &Path,
-        mut file: File,
+        path: PathBuf,
+        mut source: Box<dyn RandomAccessSource>,
         header: Header,
         header_bytes: [u8; HEADER_SIZE],
         envelope_bytes: Vec<u8>,
         dek: LockedSecret<KEY_BYTES>,
     ) -> Result<Self> {
-        file.seek(SeekFrom::Start(header.manifest_offset))?;
         let mut encrypted_manifest = vec![0_u8; header.manifest_length as usize];
-        file.read_exact(&mut encrypted_manifest)?;
+        source.read_exact_at(header.manifest_offset, &mut encrypted_manifest)?;
         let mut manifest_aad = header_bytes.to_vec();
         manifest_aad.extend_from_slice(&envelope_bytes);
         let manifest_plaintext = decrypt(
@@ -943,8 +1479,8 @@ impl PackageReader {
         let manifest: Manifest = cbor_decode_canonical(&manifest_plaintext)?;
         validate_manifest(&header, &manifest)?;
         Ok(Self {
-            path: path.to_path_buf(),
-            file,
+            path,
+            source,
             header,
             dek,
             manifest,
@@ -1027,9 +1563,9 @@ impl PackageReader {
     }
 
     fn decrypt_chunk(&mut self, asset: &Asset, chunk: &Chunk) -> Result<Zeroizing<Vec<u8>>> {
-        self.file.seek(SeekFrom::Start(chunk.file_offset))?;
         let mut ciphertext = vec![0_u8; chunk.ciphertext_length as usize];
-        self.file.read_exact(&mut ciphertext)?;
+        self.source
+            .read_exact_at(chunk.file_offset, &mut ciphertext)?;
         let nonce: [u8; NONCE_BYTES] = chunk
             .nonce
             .as_slice()
@@ -1185,6 +1721,90 @@ pub fn verify_package_with_vault_candidates(
         path,
         vault_master_keys,
     )?)
+}
+
+fn request_asset_sha256(
+    request: &crate::schema::AssetRequest,
+    expected_length: u64,
+) -> Result<Vec<u8>> {
+    let metadata = fs::metadata(&request.path)
+        .map_err(|error| Error::InvalidAsset(format!("{}: {error}", request.path.display())))?;
+    if !metadata.is_file() || metadata.len() > MAX_PACKAGE_SIZE || metadata.len() != expected_length
+    {
+        return Err(Error::InvalidAsset(format!(
+            "request asset is not the expected bounded regular file: {}",
+            request.path.display()
+        )));
+    }
+    let expected_length = metadata.len();
+    let mut source = File::open(&request.path)?;
+    let mut digest = Sha256::new();
+    let mut observed_length = 0_u64;
+    let mut buffer = vec![0_u8; DEFAULT_CHUNK_SIZE.min(MAX_CHUNK_SIZE)];
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+        observed_length = checked_end(observed_length, count as u64, "request asset identity")?;
+    }
+    if observed_length != expected_length || source.metadata()?.len() != expected_length {
+        return Err(Error::InvalidAsset(format!(
+            "request asset changed while verifying: {}",
+            request.path.display()
+        )));
+    }
+    Ok(digest.finalize().to_vec())
+}
+
+/// Fully authenticates a package and binds it to the exact deterministic pack request.
+pub fn verify_package_matches_request_with_vault(
+    path: &Path,
+    vault_master_key: &[u8; KEY_BYTES],
+    request: &PackageRequest,
+) -> Result<VerificationReport> {
+    validate_request(request)?;
+    let output_metadata = fs::symlink_metadata(path)?;
+    if output_metadata.file_type().is_symlink() || !output_metadata.is_file() {
+        return Err(Error::InvalidAsset(
+            "existing package output is not a regular file".into(),
+        ));
+    }
+    let reader = PackageReader::open_with_vault(path, vault_master_key)?;
+    let manifest = &reader.manifest;
+    if manifest.metadata != request.metadata
+        || manifest.producer != request.producer
+        || manifest.minimum_player_version != request.minimum_player_version
+        || manifest.assets.len() != request.assets.len()
+    {
+        return Err(Error::InvalidAsset(
+            "existing package manifest does not match the package request".into(),
+        ));
+    }
+    for (packaged, requested) in manifest.assets.iter().zip(&request.assets) {
+        if packaged.logical_name != requested.logical_name
+            || packaged.media_type != requested.media_type
+            || packaged.kind != requested.kind
+            || packaged.track_name != requested.track_name
+            || packaged.language != requested.language
+            || packaged.default != requested.default
+            || packaged.content_encoding != requested.content_encoding
+        {
+            return Err(Error::InvalidAsset(format!(
+                "existing package declaration does not match request asset {}",
+                requested.logical_name
+            )));
+        }
+        let sha256 = request_asset_sha256(requested, packaged.plaintext_length)?;
+        if packaged.sha256 != sha256 {
+            return Err(Error::InvalidAsset(format!(
+                "existing package content does not match request asset {}",
+                requested.logical_name
+            )));
+        }
+    }
+    verify_reader(reader)
 }
 
 fn verify_reader(mut reader: PackageReader) -> Result<VerificationReport> {

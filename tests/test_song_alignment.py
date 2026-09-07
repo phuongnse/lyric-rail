@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
@@ -9,6 +10,7 @@ import torch
 
 from lyricrail.song_alignment import (
     _Segment,
+    _ALIGNER_CACHE,
     _acoustic_token,
     _character_voice_evidence,
     evaluate_audio_consensus,
@@ -17,10 +19,27 @@ from lyricrail.song_alignment import (
     _trusted_line_endpoint,
     _trusted_word_consensus,
     force_align_full_song_lines,
+    get_vietnamese_song_aligner,
 )
 
 
 class SongAlignmentTests(unittest.TestCase):
+    def test_persistent_worker_reuses_the_loaded_aligner(self) -> None:
+        _ALIGNER_CACHE.clear()
+        fake = object()
+        config = {
+            "forcedAlignmentModel": "model",
+            "forcedAlignmentModelRevision": "a" * 40,
+        }
+        with patch.dict(os.environ, {"LYRICRAIL_PERSISTENT_WORKER": "1"}), patch(
+            "lyricrail.song_alignment.VietnameseSongAligner", return_value=fake
+        ) as constructor:
+            first = get_vietnamese_song_aligner(Path("."), config)
+            second = get_vietnamese_song_aligner(Path("."), config)
+        self.assertIs(first, second)
+        constructor.assert_called_once()
+        _ALIGNER_CACHE.clear()
+
     def test_snapshot_path_ignores_incomplete_weight_only_snapshot(self) -> None:
         with TemporaryDirectory() as directory:
             cache = Path(directory)

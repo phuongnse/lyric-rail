@@ -1,6 +1,7 @@
 # Security policy
 
-LyricRail is developing an authenticated encrypted package and native Player.
+LyricRail is developing an authenticated encrypted package, local processing core,
+and native Player with read-only progressive cloud sources.
 The current beta must not be described as commercial DRM or as resistant to an
 administrator controlling a playback device. The normative threat model, format,
 key lifecycle, and release gates are documented in:

@@ -106,7 +106,5 @@ def load_json(path: Path) -> dict[str, Any]:
 def load_project_config(root: Path) -> dict[str, dict[str, Any]]:
     config_dir = root / "config"
     return {
-        "channel": load_json(config_dir / "channel.json"),
         "pipeline": load_json(config_dir / "pipeline.json"),
-        "metadata": load_json(config_dir / "metadata_rules.json"),
     }

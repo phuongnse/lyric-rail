@@ -6,8 +6,10 @@ use std::{
 
 use lrail_format::{
     AssetRequest, ContentEncoding, Error, HEADER_SIZE, Header, PackageReader, PackageRequest,
-    inspect_package, pack, pack_for_vault, rewrap_package_for_vaults, verify_package,
-    verify_package_with_vault, verify_package_with_vault_candidates,
+    PackageRevisionRequest, RandomAccessSource, Result, inspect_package, pack, pack_for_vault,
+    revise_package_for_vault, revise_package_in_place_for_vault, rewrap_package_for_vaults,
+    verify_package, verify_package_matches_request_with_vault, verify_package_with_vault,
+    verify_package_with_vault_candidates,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -46,6 +48,40 @@ fn fixture() -> (tempfile::TempDir, PackageRequest) {
         ],
     };
     (directory, request)
+}
+
+#[test]
+fn request_bound_verification_adopts_only_the_exact_authenticated_package() {
+    let (directory, request) = fixture();
+    let package = directory.path().join("request-bound.lrail");
+    let vault = [0x6d_u8; 32];
+    pack_for_vault(&request, &package, &vault, None).unwrap();
+    let original_package = fs::read(&package).unwrap();
+    assert!(
+        verify_package_matches_request_with_vault(&package, &vault, &request)
+            .unwrap()
+            .valid
+    );
+
+    let mut wrong_metadata = request.clone();
+    wrong_metadata.metadata = json!({"song": {"title": "Different"}});
+    assert!(verify_package_matches_request_with_vault(&package, &vault, &wrong_metadata).is_err());
+    let mut wrong_role = request.clone();
+    wrong_role.assets[0].kind = "different-role".into();
+    assert!(verify_package_matches_request_with_vault(&package, &vault, &wrong_role).is_err());
+
+    fs::write(&request.assets[0].path, vec![0x33; 2_500_000]).unwrap();
+    assert!(verify_package_matches_request_with_vault(&package, &vault, &request).is_err());
+    fs::write(&request.assets[0].path, vec![0x5a; 2_500_000]).unwrap();
+
+    let reader = PackageReader::open_with_vault(&package, &vault).unwrap();
+    let offset = reader.manifest.assets[0].chunks[0].file_offset as usize;
+    let mut corrupt = original_package.clone();
+    corrupt[offset] ^= 0x80;
+    let corrupt_path = directory.path().join("request-bound-corrupt.lrail");
+    fs::write(&corrupt_path, corrupt).unwrap();
+    assert!(verify_package_matches_request_with_vault(&corrupt_path, &vault, &request).is_err());
+    assert_eq!(fs::read(&package).unwrap(), original_package);
 }
 
 fn asset_ciphertext(path: &std::path::Path) -> Vec<u8> {
@@ -174,6 +210,278 @@ fn package_round_trip_and_random_access() {
         .unwrap();
     assert_eq!(bytes.len(), 200_000);
     assert!(bytes.iter().all(|byte| *byte == 0x5a));
+}
+
+#[test]
+fn open_handle_survives_path_moves_and_live_ciphertext_corruption_fails_closed() {
+    let (directory, request) = fixture();
+    let source = directory.path().join("open-handle.lrail");
+    let moved = directory.path().join("moved.lrail");
+    let vault_master = [0x42_u8; 32];
+    pack_for_vault(&request, &source, &vault_master, None).unwrap();
+    let mut reader = PackageReader::open_with_vault(&source, &vault_master).unwrap();
+    fs::rename(&source, &moved).unwrap();
+    assert_eq!(
+        reader
+            .read_asset_range("media/main.mp4", 0, 32)
+            .unwrap()
+            .as_slice(),
+        &[0x5a; 32]
+    );
+
+    let corrupt = directory.path().join("corrupt-live.lrail");
+    pack_for_vault(&request, &corrupt, &vault_master, None).unwrap();
+    let mut reader = PackageReader::open_with_vault(&corrupt, &vault_master).unwrap();
+    let offset = reader.manifest.assets[0].chunks[0].file_offset;
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&corrupt)
+        .unwrap();
+    file.seek(SeekFrom::Start(offset)).unwrap();
+    let mut byte = [0_u8; 1];
+    file.read_exact(&mut byte).unwrap();
+    byte[0] ^= 0x80;
+    file.seek(SeekFrom::Start(offset)).unwrap();
+    file.write_all(&byte).unwrap();
+    file.sync_all().unwrap();
+    assert!(reader.read_asset_range("media/main.mp4", 0, 32).is_err());
+}
+
+struct MemorySource {
+    bytes: Vec<u8>,
+}
+
+impl RandomAccessSource for MemorySource {
+    fn len(&self) -> Result<u64> {
+        Ok(self.bytes.len() as u64)
+    }
+
+    fn read_exact_at(&mut self, offset: u64, output: &mut [u8]) -> Result<()> {
+        let start = usize::try_from(offset)
+            .map_err(|_| Error::InvalidFormat("memory offset exceeds usize".into()))?;
+        let end = start
+            .checked_add(output.len())
+            .ok_or_else(|| Error::InvalidFormat("memory range overflows".into()))?;
+        let source = self
+            .bytes
+            .get(start..end)
+            .ok_or_else(|| Error::InvalidFormat("memory range is out of bounds".into()))?;
+        output.copy_from_slice(source);
+        Ok(())
+    }
+
+    fn label(&self) -> &str {
+        "memory://fixture.lrail"
+    }
+}
+
+#[test]
+fn the_same_authenticated_reader_accepts_bounded_remote_style_sources() {
+    let (directory, request) = fixture();
+    let output = directory.path().join("remote-source.lrail");
+    let vault_master = [0x42_u8; 32];
+    pack_for_vault(&request, &output, &vault_master, None).unwrap();
+    let source = MemorySource {
+        bytes: fs::read(output).unwrap(),
+    };
+    let mut reader =
+        PackageReader::open_source_with_vault(Box::new(source), &vault_master).unwrap();
+    assert_eq!(reader.path().to_string_lossy(), "memory://fixture.lrail");
+    assert_eq!(
+        reader
+            .read_asset_range("lyrics/timing.json", 0, 10)
+            .unwrap()
+            .as_slice(),
+        br#"{"lines":["#
+    );
+}
+
+#[test]
+fn lyric_revision_is_transactional_and_preserves_media_ciphertext() {
+    let (directory, request) = fixture();
+    let source = directory.path().join("source-revision.lrail");
+    let revised = directory.path().join("revised.lrail");
+    let vault_master = [0x42_u8; 32];
+    pack_for_vault(&request, &source, &vault_master, None).unwrap();
+    let source_reader = PackageReader::open_with_vault(&source, &vault_master).unwrap();
+    let original_lyric_nonces = source_reader
+        .manifest
+        .assets
+        .iter()
+        .find(|asset| asset.logical_name == "lyrics/timing.json")
+        .unwrap()
+        .chunks
+        .iter()
+        .map(|chunk| chunk.nonce.clone())
+        .collect::<HashSet<_>>();
+    let source_bytes = fs::read(&source).unwrap();
+    let media = source_reader
+        .manifest
+        .assets
+        .iter()
+        .find(|asset| asset.logical_name == "media/main.mp4")
+        .unwrap();
+    let original_media_ciphertext = media
+        .chunks
+        .iter()
+        .flat_map(|chunk| {
+            source_bytes[chunk.file_offset as usize
+                ..(chunk.file_offset + u64::from(chunk.ciphertext_length)) as usize]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+
+    let lyrics = directory.path().join("corrected-lyrics.json");
+    let authoritative = directory.path().join("authoritative.txt");
+    let thumbnail = directory.path().join("thumbnail.webp");
+    fs::write(&lyrics, br#"{"lines":[{"text":"Xin chao ban"}]}"#).unwrap();
+    fs::write(&authoritative, "  Xin chào bạn\r\n").unwrap();
+    fs::write(&thumbnail, b"RIFF deterministic thumbnail fixture WEBP").unwrap();
+    let report = revise_package_for_vault(
+        &source,
+        &revised,
+        &vault_master,
+        &PackageRevisionRequest {
+            metadata: Some(json!({"song": {"title": "Fixture"}, "revision": 2})),
+            producer: Some("LyricRail revision test".into()),
+            assets: vec![
+                AssetRequest {
+                    logical_name: "lyrics/authoritative.txt".into(),
+                    path: authoritative,
+                    media_type: "text/plain; charset=utf-8".into(),
+                    kind: "authoritative-lyrics".into(),
+                    track_name: None,
+                    language: Some("vi".into()),
+                    default: false,
+                    content_encoding: ContentEncoding::Identity,
+                },
+                AssetRequest {
+                    logical_name: "lyrics/timing.json".into(),
+                    path: lyrics,
+                    media_type: "application/json".into(),
+                    kind: "lyrics".into(),
+                    track_name: None,
+                    language: Some("vi".into()),
+                    default: false,
+                    content_encoding: ContentEncoding::Identity,
+                },
+                AssetRequest {
+                    logical_name: "artwork/thumbnail.webp".into(),
+                    path: thumbnail,
+                    media_type: "image/webp".into(),
+                    kind: "thumbnail".into(),
+                    track_name: None,
+                    language: None,
+                    default: false,
+                    content_encoding: ContentEncoding::Identity,
+                },
+            ],
+        },
+    )
+    .unwrap();
+    assert_eq!(report.package_id, source_reader.manifest.package_id);
+    assert_eq!(
+        report.replaced_assets,
+        vec![
+            "artwork/thumbnail.webp",
+            "lyrics/authoritative.txt",
+            "lyrics/timing.json"
+        ]
+    );
+
+    let mut revised_reader = PackageReader::open_with_vault(&revised, &vault_master).unwrap();
+    assert_eq!(
+        revised_reader
+            .read_asset("lyrics/authoritative.txt")
+            .unwrap()
+            .as_slice(),
+        "  Xin chào bạn\r\n".as_bytes()
+    );
+    assert_eq!(
+        revised_reader
+            .read_asset("lyrics/timing.json")
+            .unwrap()
+            .as_slice(),
+        br#"{"lines":[{"text":"Xin chao ban"}]}"#
+    );
+    let revised_bytes = fs::read(&revised).unwrap();
+    let revised_media = revised_reader
+        .manifest
+        .assets
+        .iter()
+        .find(|asset| asset.logical_name == "media/main.mp4")
+        .unwrap();
+    let revised_lyric_nonces = revised_reader
+        .manifest
+        .assets
+        .iter()
+        .find(|asset| asset.logical_name == "lyrics/timing.json")
+        .unwrap()
+        .chunks
+        .iter()
+        .map(|chunk| chunk.nonce.clone())
+        .collect::<HashSet<_>>();
+    assert!(original_lyric_nonces.is_disjoint(&revised_lyric_nonces));
+    let revised_media_ciphertext = revised_media
+        .chunks
+        .iter()
+        .flat_map(|chunk| {
+            revised_bytes[chunk.file_offset as usize
+                ..(chunk.file_offset + u64::from(chunk.ciphertext_length)) as usize]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(revised_media_ciphertext, original_media_ciphertext);
+    assert!(
+        verify_package_with_vault(&revised, &vault_master)
+            .unwrap()
+            .valid
+    );
+}
+
+#[test]
+fn in_place_revision_publishes_only_after_verification_and_cleans_rollback() {
+    let (directory, request) = fixture();
+    let package = directory.path().join("in-place.lrail");
+    let lyrics = directory.path().join("in-place-lyrics.json");
+    let vault_master = [0x42_u8; 32];
+    pack_for_vault(&request, &package, &vault_master, None).unwrap();
+    fs::write(&lyrics, br#"{"lines":[{"text":"Xin chao lai"}]}"#).unwrap();
+    let original_id = inspect_package(&package).unwrap().package_id;
+    let report = revise_package_in_place_for_vault(
+        &package,
+        &vault_master,
+        &PackageRevisionRequest {
+            metadata: None,
+            producer: None,
+            assets: vec![AssetRequest {
+                logical_name: "lyrics/timing.json".into(),
+                path: lyrics,
+                media_type: "application/json".into(),
+                kind: "lyrics".into(),
+                track_name: None,
+                language: Some("vi".into()),
+                default: false,
+                content_encoding: ContentEncoding::Identity,
+            }],
+        },
+    )
+    .unwrap();
+    assert_eq!(report.package_id, original_id);
+    assert!(
+        verify_package_with_vault(&package, &vault_master)
+            .unwrap()
+            .valid
+    );
+    assert!(
+        fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .all(|entry| !entry.file_name().to_string_lossy().contains("rollback"))
+    );
 }
 
 #[test]

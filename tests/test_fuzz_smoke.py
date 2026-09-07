@@ -51,4 +51,8 @@ def test_fuzz_smoke_uses_disposable_corpus_and_cleans_it(monkeypatch, tmp_path) 
         "run",
         "package_open",
     ]
+    expected_fuzzer_arguments = ["-runs=1000", "-max_len=512"]
+    if module.os.name == "nt":
+        expected_fuzzer_arguments.append("-symbolize=0")
+    assert observed["command"][7:] == expected_fuzzer_arguments
     assert not temporary_root.exists()

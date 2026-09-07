@@ -1,124 +1,54 @@
-# LyricRail CLI contract
+# LyricRail local core CLI
 
-## Commands
+The production pipeline accepts regular local media only. Cloud objects and remote
+locators never enter these commands. The Player's Clip Editor passes the selected native
+path and optional Start/End values to this same worker without modifying the source.
 
 ```text
 lyricrail doctor [--production] [--json]
 lyricrail config [validate|show] [--json]
-lyricrail plan [SOURCE] --lyrics PATH [--start TIME] [--end TIME] [--title TITLE] [--artist ARTIST] [--upload|--no-upload] [--json]
-lyricrail run [SOURCE] --lyrics PATH [--start TIME] [--end TIME] [--title TITLE] [--artist ARTIST] [--upload|--no-upload] [--dry-run] [--json]
-lyricrail jobs [--status STATUS] [--limit N] [--json]
-lyricrail status [JOB_ID|latest] [--watch] [--json]
-lyricrail logs [JOB_ID|latest] [--stage STAGE] [--tail N] [--follow]
-lyricrail events [JOB_ID|latest] [--tail N] [--follow]
-lyricrail cancel [JOB_ID|latest] [--json]
-lyricrail retry [JOB_ID|latest] [--from-stage STAGE] [--run] [--json]
-lyricrail preview [JOB_ID|latest] [--start SEC] [--duration SEC] [--json]
+lyricrail plan [SOURCE] --lyrics PATH [--start TIME] [--end TIME]
+               [--title TITLE] [--artist ARTIST] [--composer COMPOSER] [--json]
+lyricrail run [SOURCE] --lyrics PATH [--start TIME] [--end TIME]
+              [--title TITLE] [--artist ARTIST] [--composer COMPOSER]
+              [--dry-run] [--json]
+lyricrail worker [--root PATH]
+lyricrail revision-align --audio FILE --timing JSON --lyrics TXT --output JSON [--root PATH]
+lyricrail jobs|status|logs|events|cancel|retry|preview ...
+lrail verify-request song.lrail --request package-request.json
 ```
 
-`SOURCE` is one YouTube/web URL or a local audio/video path. If omitted, `input\` must contain exactly one supported media file. Every command accepts `--root PATH`. When omitted, LyricRail checks `LYRICRAIL_HOME`, the current directory, and finally the source checkout.
+`--lyrics` is mandatory UTF-8 text with one semantic phrase per non-empty line.
+The job snapshots it before processing. Models align the supplied text and classify
+roles; they do not silently replace its words. Player-confirmed corrections create a
+new authoritative revision instead of modifying the source file.
 
-`--lyrics` is mandatory for `plan` and `run`. It must point to a UTF-8 plain-text file containing the exact lyrics, one semantic phrase per non-empty line. The file is snapshotted into the job before processing. No model, caption, or online source may add, remove, or replace lyric words.
+`worker` is the native Player's bounded JSON-lines interface. It loads and verifies the
+runtime once, processes requests sequentially, retains safe model caches in the worker
+process, emits weighted job/stage progress no faster than five times per second, streams
+structured stdout/stderr/progress output while tools run, and keeps every job's clear
+artifacts isolated. Subprocess pipes are drained concurrently with bounded lines and
+capture buffers; executable and argument arrays are recorded separately rather than
+reconstructed as a shell command. FFmpeg uses `-progress pipe:1` only when the output
+duration is declared; otherwise the stage remains honestly indeterminate. It is not a
+network service.
 
-`--start` and `--end` refer to the original source timeline and accept seconds, `MM:SS`, or `HH:MM:SS`. `--title` and `--artist` are recommended when selecting one song from a compilation so filenames and YouTube metadata describe the selected song rather than the source program.
+`revision-align` is an internal native-backend operation. It consumes exact confirmed
+text, packaged Original audio and existing timing, acoustically re-aligns only changed
+safe lines, and rejects unsafe word/line structure. It never repeats source separation
+or media encoding.
 
-## Recommended workflow
+Job state and retry semantics remain durable: manifests are atomically replaced,
+events are append-only, successful stages survive retry, and cancellation uses explicit
+checkpoints. A kernel-backed per-job run lease distinguishes a crashed worker from a
+still-live owner before an interrupted `running` manifest is resumed. Optional cleanup
+runs only after the final `.lrail` passes a second native
+full verification and never removes source media, shared model caches or another job.
+Pipeline/stage logs redact private absolute paths, remote query-bearing addresses and
+credential-shaped values, cap individual lines, and rotate at fixed byte ceilings.
 
-```text
-lyricrail config validate
-lyricrail doctor
-lyricrail doctor --production
-lyricrail plan "/path/to/Song - Artist.mp4" --lyrics "/path/to/lyrics.txt" --no-upload
-lyricrail run "/path/to/Song - Artist.flac" --lyrics "/path/to/lyrics.txt" --no-upload
-lyricrail run "https://www.youtube.com/watch?v=VIDEO_ID" --lyrics "/path/to/lyrics.txt" --upload
-lyricrail run "https://www.youtube.com/watch?v=VIDEO_ID" --lyrics "/path/to/lyrics.txt" --start 03:05 --end 06:32 --title "Song" --artist "Artist" --upload
-lyricrail status latest --watch
-lyricrail logs latest --follow
-```
-
-`plan` and `run --dry-run` do not create a job or write media output. `run` creates a durable job before starting the first stage.
-
-`doctor --production` additionally requires every configured model snapshot and
-checkpoint to match `config/model-manifest.json`, including full SHA-256 hashing
-of audio checkpoints. `run` applies the same model provenance gate before it
-downloads or processes the requested source.
-
-Use `preview` to render up to 120 seconds with the same karaoke scheduler and subtitle renderer as the final output:
-
-```text
-lyricrail preview latest --start 60 --duration 12
-```
-
-## Job status
-
-| Status | Meaning |
-|---|---|
-| `queued` | The job is durable and waiting for the runner |
-| `running` | At least one stage is active |
-| `cancelling` | Cooperative cancellation was requested |
-| `succeeded` | Every active stage completed |
-| `failed` | An engine or quality gate failed |
-| `blocked` | A required engine, credential, or external condition is missing |
-| `cancelled` | The job stopped by request |
-
-Stages additionally use `pending` and `skipped`. Skipped YouTube stages do not affect total progress.
-
-## Human and machine output
-
-The default output is optimized for terminals. `--json` emits UTF-8 JSON with stable discriminators:
-
-- `lyricrail.validation`
-- `lyricrail.plan`
-- `lyricrail.job`
-- `lyricrail.job-list`
-- `lyricrail.preview`
-- `lyricrail.error`
-
-`events.jsonl` is append-only NDJSON. Automation must use fields and schema versions rather than parsing terminal tables. `status --watch --json` emits one compact JSON object per line.
-
-## Karaoke render artifacts
-
-The subtitle stage publishes two auditable artifacts before the final video is rendered:
-
-- `karaoke-render-plan.json`: display schedule, visual timing, metrics, warnings, and quality-gate results.
-- `karaoke.ass`: renderer input generated from the validated plan.
-
-An invalid render plan stops the job. It is never downgraded to a warning during production rendering.
-
-For audio-only sources, `landscape-license-manifest.json` records the content-derived searches, selected stock pages, direct asset URLs, timing, and Mixkit license URL. Landscape clips are downloaded per job; the repository contains no reusable fixed clip set.
-
-## Exit codes
-
-| Code | Meaning |
-|---:|---|
-| `0` | Success |
-| `1` | `doctor` found an incomplete runtime |
-| `2` | Input, configuration, or CLI error |
-| `3` | Job blocked |
-| `4` | Job failed |
-| `130` | Cancelled or interrupted with Ctrl+C |
-
-## Durability and retries
-
-- `job.json` is written to a same-volume temporary file, flushed, and atomically replaced.
-- `events.jsonl` and stage logs are append-only.
-- Job updates use an exclusive lock; stale locks are recoverable.
-- Invalid job and stage transitions are rejected.
-- Engine exceptions become structured errors with stage, retryability, and traceback logs.
-- `retry` preserves successful stages and resets the selected stage and downstream stages.
-- Every `run` creates a fresh, isolated job. Source/model caches may be shared, but
-  stems, lyric alignment, role decisions, and render artifacts are never read from
-  another job.
-- Long-running handlers call cancellation checkpoints.
-
-## Cleanup contract
-
-Failed, blocked, and cancelled jobs retain their work files. For app packaging,
-automatic cleanup runs only after the final `.lrail` package passes a second
-native full verification. It removes only the current job's `work`, `inputs`,
-and `artifacts` directories, retains logs/manifests, and never removes source
-media, shared caches, or another job. Cleanup is ordinary filesystem deletion;
-it does not claim secure erasure on SSDs.
-
-The older YouTube path remains disabled by default. If explicitly enabled,
-upload cleanup is separately gated on a confirmed non-empty video ID.
+`lrail verify-request` is the package-stage recovery boundary. It authenticates the
+manifest and every encrypted chunk, compares metadata/producer/minimum-player version,
+and streams every current request asset to match its declared role, length and SHA-256.
+The worker uses it to adopt a deterministic output left by an interrupted pack; it does
+not overwrite, rename or delete a mismatched existing file.

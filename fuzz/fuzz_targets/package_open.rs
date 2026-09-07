@@ -4,12 +4,39 @@ use std::{fs, io::Write, sync::OnceLock};
 
 use libfuzzer_sys::fuzz_target;
 use lrail_format::{
-    AssetRequest, ContentEncoding, PackageReader, PackageRequest, inspect_package, pack_for_vault,
+    AssetRequest, ContentEncoding, Error, PackageReader, PackageRequest, RandomAccessSource,
+    Result, inspect_package, pack_for_vault,
 };
 use serde_json::json;
 
 const MAX_FUZZ_INPUT: usize = 64 * 1024 * 1024;
 const FUZZ_VAULT: [u8; 32] = [0u8; 32];
+
+struct FuzzSource(Vec<u8>);
+
+impl RandomAccessSource for FuzzSource {
+    fn len(&self) -> Result<u64> {
+        Ok(self.0.len() as u64)
+    }
+
+    fn read_exact_at(&mut self, offset: u64, output: &mut [u8]) -> Result<()> {
+        let start = usize::try_from(offset)
+            .map_err(|_| Error::InvalidFormat("fuzz offset exceeds usize".into()))?;
+        let end = start
+            .checked_add(output.len())
+            .ok_or_else(|| Error::InvalidFormat("fuzz range overflows".into()))?;
+        let bytes = self
+            .0
+            .get(start..end)
+            .ok_or_else(|| Error::InvalidFormat("fuzz range is out of bounds".into()))?;
+        output.copy_from_slice(bytes);
+        Ok(())
+    }
+
+    fn label(&self) -> &str {
+        "fuzz://package"
+    }
+}
 
 fn valid_seed_package() -> &'static [u8] {
     static PACKAGE: OnceLock<Vec<u8>> = OnceLock::new();
@@ -69,6 +96,13 @@ fuzz_target!(|data: &[u8]| {
         let offset = selector % length;
         let count = usize::try_from((selector >> 32) % (length - offset + 1)).unwrap_or(0);
         let _ = reader.read_asset_range("media/seed.bin", offset, count);
+    }
+
+    if let Ok(mut reader) =
+        PackageReader::open_source_with_vault(Box::new(FuzzSource(package_bytes)), &FUZZ_VAULT)
+    {
+        let length = reader.manifest.assets[0].plaintext_length;
+        let _ = reader.read_asset_range("media/seed.bin", 0, length.min(4096) as usize);
     }
 
     // Exercise the early length/header rejection path independently of the

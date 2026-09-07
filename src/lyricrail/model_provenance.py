@@ -3,11 +3,28 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
+from urllib.parse import urlsplit
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_MAX_MODEL_FILE_BYTES = 8 * 1024 * 1024 * 1024
+_AUDIO_RELEASE_PATH = (
+    "/nomadkaraoke/python-audio-separator/releases/download/model-configs/"
+)
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "CLOCK$",
+    "CONIN$",
+    "CONOUT$",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
+_WINDOWS_FORBIDDEN_CHARACTERS = set('<>:"/\\|?*')
 
 
 def _nested_value(data: dict[str, Any], path: str) -> Any:
@@ -25,6 +42,89 @@ def _sha256(path: Path) -> str:
         while chunk := handle.read(8 * 1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def valid_pinned_audio_filename(value: str) -> bool:
+    if (
+        not value
+        or value in {".", ".."}
+        or len(value.encode("utf-8")) > 240
+        or value.endswith((" ", "."))
+        or any(
+            character in _WINDOWS_FORBIDDEN_CHARACTERS
+            or ord(character) < 32
+            or ord(character) == 127
+            for character in value
+        )
+    ):
+        return False
+    path = PureWindowsPath(value)
+    stem = value.split(".", 1)[0].upper()
+    return (
+        not path.drive
+        and not path.root
+        and len(path.parts) == 1
+        and path.name == value
+        and stem not in _WINDOWS_RESERVED_NAMES
+    )
+
+
+def valid_pinned_audio_url(value: str, filename: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "github.com"
+        and port is None
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.path == _AUDIO_RELEASE_PATH + filename
+    )
+
+
+def _validate_audio_downloads(
+    key: str,
+    model: dict[str, Any],
+    expected_files: set[str],
+    errors: list[str],
+) -> bool:
+    urls = model.get("downloadUrls")
+    sizes = model.get("fileSizeBytes")
+    valid = True
+    if not isinstance(urls, dict) or set(map(str, urls)) != expected_files:
+        errors.append(
+            f"Manifest model {key!r} downloadUrls must cover exactly {sorted(expected_files)}"
+        )
+        valid = False
+        urls = {}
+    if not isinstance(sizes, dict) or set(map(str, sizes)) != expected_files:
+        errors.append(
+            f"Manifest model {key!r} fileSizeBytes must cover exactly {sorted(expected_files)}"
+        )
+        valid = False
+        sizes = {}
+    for filename in sorted(expected_files):
+        if not valid_pinned_audio_filename(filename):
+            errors.append(f"Manifest model {key!r} has unsafe download filename {filename!r}")
+            valid = False
+        url = str(urls.get(filename, ""))
+        if not valid_pinned_audio_url(url, filename):
+            errors.append(
+                f"Manifest model {key!r} has an invalid pinned HTTPS URL for {filename!r}"
+            )
+            valid = False
+        size = sizes.get(filename)
+        if isinstance(size, bool) or not isinstance(size, int) or not (0 < size <= _MAX_MODEL_FILE_BYTES):
+            errors.append(
+                f"Manifest model {key!r} has an invalid byte size for {filename!r}"
+            )
+            valid = False
+    return valid
 
 
 def load_model_manifest(root: Path) -> dict[str, Any]:
@@ -155,20 +255,38 @@ def verify_model_provenance(
             )
             continue
         if kind == "audio-separator-checkpoint":
+            filename = str(model.get("filename", ""))
             expected = str(model.get("sha256", "")).lower()
             if not _SHA256.fullmatch(expected):
                 errors.append(f"Manifest model {key!r} has an invalid SHA-256")
                 configured = False
-            path = root / "models" / "audio-separator" / str(model.get("filename", ""))
+            associated_manifest = model.get("associatedFileSha256", {})
+            if not isinstance(associated_manifest, dict):
+                errors.append(f"Manifest model {key!r} associatedFileSha256 must be an object")
+                associated_manifest = {}
+                configured = False
+            expected_files = {filename, *map(str, associated_manifest)}
+            downloads_pinned = _validate_audio_downloads(
+                key, model, expected_files, errors
+            )
+            configured = configured and downloads_pinned
+            safe_filename = (
+                filename if valid_pinned_audio_filename(filename) else "invalid-model-name"
+            )
+            path = root / "models" / "audio-separator" / safe_filename
             present = path.is_file()
             actual = _sha256(path) if present and verify_hashes else ""
             hash_matches = bool(actual and actual == expected) if verify_hashes else None
             associated_hashes: dict[str, dict[str, Any]] = {}
-            for filename, associated_expected_value in model.get(
-                "associatedFileSha256", {}
-            ).items():
+            for filename, associated_expected_value in associated_manifest.items():
+                filename = str(filename)
                 associated_expected = str(associated_expected_value).lower()
-                associated_path = path.parent / str(filename)
+                safe_associated = (
+                    filename
+                    if valid_pinned_audio_filename(filename)
+                    else "invalid-associated-name"
+                )
+                associated_path = path.parent / safe_associated
                 associated_present = associated_path.is_file()
                 associated_actual = (
                     _sha256(associated_path)
@@ -195,7 +313,7 @@ def verify_model_provenance(
                         f"Model configuration hash mismatch for {key!r}/{filename}: "
                         f"expected {associated_expected}, got {associated_actual}"
                     )
-                associated_hashes[str(filename)] = {
+                associated_hashes[filename] = {
                     "present": associated_present,
                     "expectedSha256": associated_expected,
                     "actualSha256": associated_actual or None,
@@ -225,6 +343,7 @@ def verify_model_provenance(
                     "expectedSha256": expected,
                     "actualSha256": actual or None,
                     "associatedFileHashes": associated_hashes,
+                    "downloadsPinned": downloads_pinned,
                 }
             )
             continue

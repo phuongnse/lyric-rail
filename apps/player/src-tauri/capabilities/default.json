@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "player-main",
-  "description": "Minimal read-only capability for the LyricRail Player main window",
+  "description": "Minimal dialog capability for the LyricRail main window; processing, keys, OAuth and media remain native",
   "windows": ["main"],
   "permissions": [
     "core:default",
