@@ -147,7 +147,7 @@ def test_player_honors_authenticated_karaoke_layout_palette_and_cues() -> None:
     assert "cqh" not in LYRICS
     assert "144px" not in CSS
     assert "font-size: var(--lyric-base-font-size)" in CSS
-    assert ".lyric-line.top { bottom: calc(var(--lyric-bottom-slot-height) + var(--lyric-bottom))" in CSS
+    assert ".lyric-line.top { bottom: calc(var(--lyric-bottom-slot-height) + var(--lyric-bottom) + var(--lyric-outer-width) / 2)" in CSS
     assert ".lyric-line.bottom { bottom: 0" in CSS
     assert '"--fill-ratio"' in LYRICS
     assert "opacity: var(--fill-ratio)" in CSS
