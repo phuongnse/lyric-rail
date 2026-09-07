@@ -1041,6 +1041,7 @@ fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<bool, String> {
             Ok(true)
         }
         tasks::TaskKind::ModelInstall => model_installer::cancel_active(&app),
+        tasks::TaskKind::ClipPreparation => local_clip::cancel_preparation(&app, None),
         _ => Err("This task cannot be cancelled".into()),
     }
 }
@@ -1300,9 +1301,29 @@ ipc_command! {
 async fn prepare_local_clip(
     app: tauri::AppHandle,
     path: PathBuf,
-) -> Result<local_clip::LocalClipPreview, String> {
+    request_id: String,
+    compatible: Option<bool>,
+) -> Result<Option<local_clip::LocalClipPreview>, String> {
     let scheduler = app.state::<CloudState>().scheduler.clone();
-    local_clip::prepare(app, scheduler, path).await
+    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false)).await
+}
+}
+
+ipc_command! {
+fn cancel_clip_preparation(app: tauri::AppHandle, request_id: String) -> Result<bool, String> {
+    local_clip::cancel_preparation(&app, Some(&request_id))
+}
+}
+
+ipc_command! {
+async fn local_clip_frames(app: tauri::AppHandle, clip_id: String, time_millis: u64, request_id: String) -> Result<local_clip::FrameWindow, String> {
+    local_clip::frames(app, clip_id, time_millis, request_id).await
+}
+}
+
+ipc_command! {
+fn cancel_clip_frames(app: tauri::AppHandle, request_id: String) -> Result<bool, String> {
+    local_clip::cancel_frames(&app, &request_id)
 }
 }
 
@@ -2349,6 +2370,9 @@ pub fn run() {
             add_local_files,
             add_local_folder,
             prepare_local_clip,
+            cancel_clip_preparation,
+            local_clip_frames,
+            cancel_clip_frames,
             cancel_local_clip,
             commit_local_clip,
             commit_local_sections,

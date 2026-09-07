@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type RefObject, type KeyboardEvent } from "react";
 import { formatTimecodeMillis, parseTimecodeMillis } from "./clipSelection";
 import "./clipEditor.css";
+import { useClipFrames } from "./useClipFrames";
 
 export type LocalClipPreview = {
-  clipId: string; suggestedTitle: string; sizeBytes: number; durationMillis: number;
+  direct?: boolean; clipId: string; suggestedTitle: string; sizeBytes: number; durationMillis: number;
   frameDurationMillis?: number; frameTimesMillis?: number[]; previewUrl: string; videoUrl?: string; videoOffsetMillis?: number;
 };
 export type ClipSection = { startMillis: number; endMillis: number; title: string };
@@ -22,9 +23,9 @@ export function validSections(sections: ClipSection[], duration: number): boolea
     && section.startMillis >= 0 && section.endMillis <= duration && section.startMillis < section.endMillis);
 }
 
-export default function ClipEditor({ preview, busy, containerRef, onClose, onCommit, onPlay }: {
+export default function ClipEditor({ preview, busy, containerRef, onClose, onCommit, onPlay, onCompatible }: {
   preview: LocalClipPreview; busy: boolean; containerRef: RefObject<HTMLDivElement | null>;
-  onClose: () => void; onCommit: (sections: ClipSection[]) => Promise<void>; onPlay: () => void;
+  onClose: () => void; onCommit: (sections: ClipSection[]) => Promise<void>; onPlay: () => void; onCompatible?: () => void;
 }) {
   const [sections, setSections] = useState<Section[]>([{ id: 1, startMillis: 0, endMillis: preview.durationMillis, title: preview.suggestedTitle }]);
   const [selected, setSelected] = useState(1);
@@ -38,10 +39,14 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
   const nextId = useRef(2);
   const audio = useRef<HTMLAudioElement>(null), video = useRef<HTMLVideoElement>(null);
   const active = sections.find((section) => section.id === selected)!;
-  const frames = preview.frameTimesMillis ?? [];
+  const frameData = useClipFrames(preview, position, playing);
+  const frames = frameData.frames;
+  const hasVideo = Boolean(preview.videoUrl);
+  const [mediaError, setMediaError] = useState(false);
+  useEffect(() => { setMediaError(false); setError(""); }, [preview.clipId]);
   // Native trim ranges use integer milliseconds. Quantize once, including for lookup,
   // so a displayed boundary never snaps back to the preceding fractional frame.
-  const boundaries = useMemo(() => (preview.frameTimesMillis ?? []).map(Math.floor), [preview.frameTimesMillis]);
+  const boundaries = useMemo(() => frames.map(Math.floor), [frames]);
   const duration = preview.durationMillis;
   const pendingSections = sections.map((section) => {
     const result = { ...section };
@@ -75,17 +80,23 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
   const clearDraft = (endpoint: Endpoint) => setDrafts((current) => {
     const next = { ...current }; delete next[`${selected}-${endpoint}`]; return next;
   });
-  const snap = (time: number) => time >= duration ? duration : boundaries.length && time >= boundaries[0]
+  const snap = (time: number) => time >= duration ? duration : frameData.covers(time) && boundaries.length && time >= boundaries[0]
     ? boundaries[frameAt(boundaries, time)] : Math.round(time);
   const boundary = (endpoint: Endpoint, time: number) => {
     const snapped = snap(time);
     const value = endpoint === "startMillis" ? Math.max(0, Math.min(snapped, active.endMillis - 1)) : Math.min(duration, Math.max(active.startMillis + 1, snapped));
     patch({ [endpoint]: value }); clearDraft(endpoint); return value;
   };
+  const mark = (endpoint: Endpoint) => {
+    if (hasVideo && !frameData.ready) return;
+    boundary(endpoint, position);
+  };
   const handleBoundaryKey = (event: KeyboardEvent<HTMLInputElement>, endpoint: Endpoint) => {
     if (busy || event.ctrlKey || event.metaKey || event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     event.preventDefault(); event.stopPropagation(); stop();
+    if (event.key === "Home" || event.key === "End") { seek(boundary(endpoint, event.key === "Home" ? 0 : duration)); return; }
     const current = active[endpoint];
+    if (hasVideo && (!frameData.covers(current) || !frames.length)) { seek(current); frameData.retry(); return; }
     const forward = event.key === "ArrowRight" || event.key === "ArrowUp";
     let time = current + (forward ? 10 : -10);
     if (boundaries.length && current >= boundaries[0]) {
@@ -98,6 +109,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
   };
   const step = (direction: -1 | 1) => {
     stop(); setReview(false);
+    if (hasVideo && (!frameData.ready || !frames.length)) return;
     if (frames.length) {
       if (position < boundaries[0]) { seek(direction > 0 ? frames[0] + .01 : position - 10); return; }
       const index = Math.max(0, Math.min(frames.length - 1, frameAt(boundaries, position) + direction));
@@ -111,7 +123,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
     try {
       await Promise.all([audio.current?.play(), position >= Math.floor(videoOffset) ? video.current?.play() : undefined]);
       setPlaying(true);
-    } catch { stop(); setError("Preview could not play. Try seeking and playing again."); }
+    } catch { stop(); setMediaError(true); setError("Preview could not play on this device."); }
   };
   useEffect(() => {
     if (!playing) return;
@@ -144,23 +156,23 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
   return <div ref={containerRef} className="clip-dialog clip-workbench panel" tabIndex={-1} onKeyDown={(event) => {
     if (busy || (event.target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); step(event.key === "ArrowLeft" ? -1 : 1); }
-    if (event.key.toLowerCase() === "i" || event.key.toLowerCase() === "o") { event.preventDefault(); boundary(event.key.toLowerCase() === "i" ? "startMillis" : "endMillis", position); }
+    if (event.key.toLowerCase() === "i" || event.key.toLowerCase() === "o") { event.preventDefault(); mark(event.key.toLowerCase() === "i" ? "startMillis" : "endMillis"); }
     if (event.code === "Space" && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); if (playing) stop(); else void play(false); }
   }}>
     <header><div><p className="eyebrow">Local media · {sections.length} {sections.length === 1 ? "song" : "songs"}</p><h2 id="clip-editor-title">Choose your songs</h2><p>Select a section, fine-tune its edges, then add every song to your queue.</p></div><button aria-label="Close clip editor" onClick={onClose} disabled={busy}>✕</button></header>
     <div className="clip-workspace">
       <section className="clip-viewer" aria-label="Section player">
         <div className="clip-screen" tabIndex={0} aria-label="Preview player. Left and Right step frames. I sets Start, O sets End, Space plays.">
-          {preview.videoUrl ? <video ref={video} src={preview.videoUrl} style={{ visibility: position < Math.floor(videoOffset) ? "hidden" : "visible" }} muted playsInline preload="auto" onError={() => { stop(); setError("Video preview could not be decoded on this device."); }} />
+          {preview.videoUrl ? <video ref={video} src={preview.videoUrl} style={{ visibility: position < Math.floor(videoOffset) ? "hidden" : "visible" }} muted playsInline preload="metadata" onError={() => { stop(); setMediaError(true); setError("Video preview could not be decoded on this device."); }} />
             : <div className="clip-audio-art"><span>♫</span><strong>Audio preview</strong><p>{preview.suggestedTitle}</p></div>}
-          <audio ref={audio} src={preview.previewUrl} preload="auto" onEnded={() => { if (review && loop) void play(true); else stop(); }} onError={() => { stop(); setError("Audio preview is unavailable."); }} />
+          <audio ref={audio} src={preview.previewUrl} preload="metadata" onEnded={() => { if (review && loop) void play(true); else stop(); }} onError={() => { stop(); setMediaError(true); setError("Audio preview is unavailable."); }} />
           <span className="clip-time-badge">{formatTimecodeMillis(position)}</span>
         </div>
         <div className="clip-transport">
-          <button aria-label={frames.length ? "Previous frame" : "Back 10 milliseconds"} onClick={() => step(-1)} disabled={busy}>←</button>
+          <button aria-label={hasVideo ? "Previous frame" : "Back 10 milliseconds"} onClick={() => step(-1)} disabled={busy || (hasVideo && (!frameData.ready || !frames.length))}>←</button>
           <button className="primary" onClick={() => playing ? stop() : void play(false)} disabled={busy}>{playing ? "Pause" : "Play"}</button>
-          <button aria-label={frames.length ? "Next frame" : "Forward 10 milliseconds"} onClick={() => step(1)} disabled={busy}>→</button>
-          <span>{formatTimecodeMillis(position)} / {formatTimecodeMillis(duration)}{frames.length > 0 && <small>Frame {frameAt(boundaries, position) + 1} / {frames.length}</small>}</span>
+          <button aria-label={hasVideo ? "Next frame" : "Forward 10 milliseconds"} onClick={() => step(1)} disabled={busy || (hasVideo && (!frameData.ready || !frames.length))}>→</button>
+          <span>{formatTimecodeMillis(position)} / {formatTimecodeMillis(duration)}{frames.length > 0 && <small>{preview.direct ? "Nearby frame" : "Frame"} {frameAt(boundaries, position) + 1} / {frames.length}</small>}</span>
           <button onClick={() => void play(true)} disabled={busy}>▶ Review section</button>
           <label className="clip-volume"><span>Volume</span><input aria-label="Preview volume" type="range" min={0} max={1} step={.05} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
         </div>
@@ -176,8 +188,8 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
         <div className="clip-boundaries">{(["startMillis", "endMillis"] as const).map((endpoint) => <label key={endpoint}><span>{endpoint === "startMillis" ? "Start · I" : "End · O"}</span><input key={`${selected}-${active[endpoint]}`} aria-label={endpoint === "startMillis" ? "Section start time" : "Section end time"} value={drafts[`${selected}-${endpoint}`] ?? formatTimecodeMillis(active[endpoint])} disabled={busy} aria-invalid={!validDrafts} onChange={(event) => setDrafts({ ...drafts, [`${selected}-${endpoint}`]: event.target.value })} onBlur={() => {
           const pending = pendingSections.find((section) => section.id === selected)!;
           if (validSections([pending], duration)) { patch({ startMillis: pending.startMillis, endMillis: pending.endMillis }); setDrafts((current) => { const next = { ...current }; delete next[`${selected}-startMillis`]; delete next[`${selected}-endMillis`]; return next; }); }
-        }} /><button disabled={busy} onClick={() => boundary(endpoint, position)}>Set at playhead</button></label>)}</div>
-        <div className="clip-help"><label><input type="checkbox" checked={loop} onChange={(event) => setLoop(event.target.checked)} /> Loop section</label><span><kbd>←</kbd> <kbd>→</kbd> {frames.length ? "one frame" : "10 ms"} · <kbd>I</kbd> Start · <kbd>O</kbd> End · <kbd>Space</kbd> play</span></div>
+        }} /><button disabled={busy || (hasVideo && !frameData.ready)} onClick={() => mark(endpoint)}>Set at playhead</button></label>)}</div>
+        <div className="clip-help"><label><input type="checkbox" checked={loop} onChange={(event) => setLoop(event.target.checked)} /> Loop section</label><span><kbd>←</kbd> <kbd>→</kbd> {hasVideo ? "one frame" : "10 ms"} · <kbd>I</kbd> Start · <kbd>O</kbd> End · <kbd>Space</kbd> play</span></div>
       </section>
       <aside className="clip-sections" aria-label="Songs to add">
         <div className="clip-section-heading"><h3>Your songs <span>{sections.length}</span></h3><p>Each section becomes a separate song.</p></div>
@@ -194,6 +206,8 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
         <p className="clip-queue-note">Added to the top of Library & queue in this order. Add each song’s lyrics there to start processing.</p>
       </aside>
     </div>
+    {preview.direct && hasVideo && !frameData.ready && !playing && <p className="clip-help" role="status">{frameData.error || "Loading nearby frames… Playback and seeking are ready."}{frameData.error && <button onClick={frameData.retry}>Retry frame details</button>}</p>}
+    {preview.direct && mediaError && onCompatible && <p className="clip-help">This device may need a compatible preview. Preparing the whole file can take minutes; you can cancel it.<button disabled={busy} onClick={() => { stop(); onCompatible(); }}>Prepare compatible preview</button></p>}
     {(!validDrafts || error) && <p className="clip-error" role="alert">{!validDrafts ? "Enter valid times within this file. End must be later than Start." : error}</p>}
     <footer><span>Your original file stays unchanged.</span><button onClick={onClose} disabled={busy}>Cancel</button><button className="primary" disabled={busy || !validDrafts} onClick={() => { stop(); setError(""); void onCommit(pendingSections.map(({ startMillis, endMillis, title }) => ({ startMillis, endMillis, title }))).catch(() => setError("Songs could not be added. Your sections are kept here; try again or open Activity after closing this editor.")); }}>{busy ? "Adding songs…" : `Add ${sections.length} ${sections.length === 1 ? "song" : "songs"} to queue`}</button></footer>
   </div>;

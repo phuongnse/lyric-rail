@@ -87,11 +87,18 @@ The product must not claim otherwise.
    rejects links and unsupported/non-regular files, canonicalizes the path, bounds file
    size, and guards platform file identity/change metadata from probe through commit.
    ffprobe/ffmpeg use local-file and fixed-demuxer allowlists plus time/output limits.
-   A bounded 16 kHz mono PCM preview lives only in an anonymous delete-on-close handle;
-   normalized PTS plus leading/trailing silence bind its playhead to the source duration.
-   The main WebView receives a random opaque session identifier and positional range
-   bytes. Video sources are bounded to 8K pixel count. Video adds an anonymous muted
-   H264 proxy capped at 2 GiB/300 seconds,
+   Initial preview reads metadata and serves the pinned source, rechecking identity at
+   each opaque positional range request (maximum 2 MiB). It does not transcode or decode
+   the full file. Nearby frame inspection uses decoded source PTS normalized by format
+   start time, with a nine-second requested interval, 1 MiB/16,384-frame/20-second bounds;
+   seeking may start at an earlier keyframe. One active query and one replaceable UI
+   destination bound rapid seeking; request IDs scope cancellation and stale rejection.
+   Preparation is cancellable from its modal and Activity, including scheduler wait,
+   subprocess work and the final publication boundary. Owned children are killed/reaped.
+   Video sources are bounded to 8K pixel count. Unsupported webview codecs expose an
+   explicit whole-file compatibility fallback, never an automatic long conversion.
+   That fallback uses anonymous delete-on-close 16 kHz mono PCM with normalized PTS and
+   leading/trailing silence, plus an anonymous muted H264 proxy capped at 2 GiB/300 seconds,
    with passthrough presentation timestamps and a bounded one-million-frame/24 MiB/
    120-second frame inspection. Audio remains the source-timeline clock. Frame trim
    boundaries are floored once to native integer milliseconds (less than 1 ms early);

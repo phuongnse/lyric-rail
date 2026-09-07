@@ -31,6 +31,17 @@ pub struct PriorityPermit<'a> {
 
 impl PriorityScheduler {
     pub fn acquire(&self, priority: IoPriority) -> Result<PriorityPermit<'_>, String> {
+        self.acquire_cancellable(priority, &std::sync::atomic::AtomicBool::new(false))
+    }
+
+    pub fn acquire_cancellable(
+        &self,
+        priority: IoPriority,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<PriorityPermit<'_>, String> {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("Clip preparation cancelled".into());
+        }
         let foreground = priority != IoPriority::Background;
         let mut state = self
             .state
@@ -38,12 +49,18 @@ impl PriorityScheduler {
             .map_err(|_| "I/O scheduler lock is poisoned".to_string())?;
         if foreground {
             state.foreground_waiting += 1;
-            state = self
-                .changed
-                .wait_while(state, |state| {
-                    state.background_active || state.foreground_active >= MAX_FOREGROUND_ACTIVE
-                })
-                .map_err(|_| "I/O scheduler wait failed".to_string())?;
+            while state.background_active || state.foreground_active >= MAX_FOREGROUND_ACTIVE {
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    state.foreground_waiting -= 1;
+                    self.changed.notify_all();
+                    return Err("Clip preparation cancelled".into());
+                }
+                state = self
+                    .changed
+                    .wait_timeout(state, std::time::Duration::from_millis(20))
+                    .map_err(|_| "I/O scheduler wait failed".to_string())?
+                    .0;
+            }
             state.foreground_waiting -= 1;
             state.foreground_active += 1;
         } else {

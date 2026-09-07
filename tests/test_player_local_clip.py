@@ -58,7 +58,7 @@ def test_removed_remote_import_surface_cannot_be_reached() -> None:
 def test_single_local_media_opens_clip_editor_while_other_file_flows_stay_direct() -> None:
     for text in (
         "shouldOpenClipEditor(paths)",
-        'invoke<LocalClipPreview>("prepare_local_clip"',
+        'invoke<LocalClipPreview | null>("prepare_local_clip"',
         'invoke("cancel_local_clip"',
         'invoke<CatalogSnapshot>("commit_local_sections"',
     ):

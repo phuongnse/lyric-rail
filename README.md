@@ -74,11 +74,19 @@ All sections appear at the top of Library & queue in editor order, waiting for e
 song's exact lyrics. Edit song opens title and lyric editing. Existing active processing continues.
 Full-source sidecar lyrics are never silently assigned to an extracted section.
 
-Native ffprobe/ffmpeg retain local-file/demuxer allowlists, identity guards and bounded
-anonymous preview handles. Video accepts sources up to 8K pixel count and uses a muted
-H264 proxy (up to 640x360, 2 GiB, five-minute
-encode limit), synchronized to the existing timeline-preserving PCM audio. Frame
-inspection is bounded to one million frames, 24 MiB and two minutes. Preview failure
+Opening media probes metadata and streams the guarded source through opaque bounded
+ranges, without converting the whole file. Nearby measured frames load separately
+when paused or seeking; exact frame controls wait for that evidence while playback
+and seeking remain available. Rapid seeks replace pending frame work. Preparation has
+Cancel and close, and running preparation can also be cancelled from Activity.
+
+If the device cannot decode a source, explicitly choose Prepare compatible preview.
+This cancellable fallback converts the whole file to anonymous PCM/H264 previews
+(video up to 640x360, 2 GiB and five minutes); it can take minutes on long media.
+Native ffprobe/ffmpeg retain local-file/demuxer allowlists and identity guards. Direct
+frame queries inspect a nearby nine-second interval, bounded to 1 MiB, 16,384 frames
+and 20 seconds; fallback frame inspection retains its one-million-frame/24 MiB/two-minute
+bound. Video sources are bounded to 8K pixel count. Preview failure
 is explicit; original media is never modified. Selecting one `.lrail` package or
 multiple files keeps direct add behavior.
 

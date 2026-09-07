@@ -3,6 +3,8 @@ import { act, createRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import ClipEditor, { frameAt, validSections, type ClipSection } from "./ClipEditor";
+import { invoke } from "@tauri-apps/api/core";
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 let host: HTMLDivElement, root: Root;
 const commit = vi.fn(async (_sections: ClipSection[]) => {}), close = vi.fn(), play = vi.fn();
@@ -38,6 +40,35 @@ const renderFrames = async (frames: number[]) => {
     previewUrl: "http://fixture/audio", videoUrl: frames.length ? "http://fixture/video" : undefined,
     videoOffsetMillis: frames[0] ?? 0, frameTimesMillis: frames }} busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
 };
+
+it("opens direct media before frame inspection, cancels stale seeks and keeps only the latest frame window", async () => {
+  const pending: Array<{ time: number; resolve: (value: unknown) => void }> = [];
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "cancel_clip_frames") return Promise.resolve(true);
+    return new Promise((resolve) => pending.push({ time: (args as { timeMillis: number }).timeMillis, resolve }));
+  });
+  await act(async () => root.render(<ClipEditor preview={{ direct: true, clipId: "direct", suggestedTitle: "Long song", sizeBytes: 100, durationMillis: 120000,
+    previewUrl: "http://fixture/source", videoUrl: "http://fixture/source/video" }} busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
+  expect(host.querySelector("video")?.getAttribute("src")).toBe("http://fixture/source/video");
+  expect(button("Play").disabled).toBe(false);
+  expect(button("Next frame").disabled).toBe(true);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 180)); });
+  expect(pending.map((request) => request.time)).toEqual([0]);
+  await change("Seek preview", "50000");
+  await change("Seek preview", "90000");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 180)); });
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "cancel_clip_frames")).toBe(true);
+  expect(pending).toHaveLength(1);
+  await act(async () => pending[0].resolve({ frameTimesMillis: [0, 40], fromMillis: 0, toMillis: 6000 }));
+  expect(pending.map((request) => request.time)).toEqual([0, 90000]);
+  expect(button("Next frame").disabled).toBe(true);
+  await act(async () => pending[1].resolve({ frameTimesMillis: [89990, 90023.367, 90080], fromMillis: 87000, toMillis: 96000 }));
+  expect(button("Next frame").disabled).toBe(false);
+  await key("ArrowRight");
+  expect(host.querySelector("audio")!.currentTime).toBeCloseTo(90.023377, 6);
+  await change("Drag section end", "110000");
+  expect(input("Drag section end").value).toBe("110000");
+});
 
 it("round-trips fractional boundaries through marking, blur, dragging and adding", async () => {
   await renderFrames([0, 33.367, 100.1, 200.2]);

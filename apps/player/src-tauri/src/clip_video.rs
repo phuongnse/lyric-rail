@@ -1,7 +1,5 @@
 //! Bounded anonymous video proxy; source presentation timestamps own frame stepping.
-use super::local_clip::{
-    SAFE_INPUT_FORMATS, SAFE_INPUT_PROTOCOLS, read_exact_at, wait_bounded_child,
-};
+use super::local_clip::{SAFE_INPUT_FORMATS, SAFE_INPUT_PROTOCOLS, read_exact_at};
 use std::{
     fs,
     io::{Read, Write},
@@ -53,6 +51,7 @@ pub(super) fn parse_frames(bytes: &[u8], duration: u64) -> Result<Vec<f64>, Stri
     Ok(frames)
 }
 
+#[cfg(test)]
 pub(super) fn prepare(
     ffmpeg: &Path,
     ffprobe: &Path,
@@ -61,6 +60,29 @@ pub(super) fn prepare(
     duration: u64,
     offset_millis: f64,
 ) -> Result<(Arc<fs::File>, u64, Vec<f64>), String> {
+    prepare_cancellable(
+        ffmpeg,
+        ffprobe,
+        source,
+        root,
+        duration,
+        offset_millis,
+        &AtomicBool::new(false),
+    )
+}
+
+pub(super) fn prepare_cancellable(
+    ffmpeg: &Path,
+    ffprobe: &Path,
+    source: &Path,
+    root: &Path,
+    duration: u64,
+    offset_millis: f64,
+    cancelled: &AtomicBool,
+) -> Result<(Arc<fs::File>, u64, Vec<f64>), String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Clip preparation cancelled".into());
+    }
     fs::create_dir_all(root).map_err(|_| "Unable to prepare video cache")?;
     let file =
         tempfile::tempfile_in(root).map_err(|_| "Unable to create anonymous video preview")?;
@@ -164,11 +186,12 @@ pub(super) fn prepare(
         }
         result
     });
-    let status = wait_bounded_child(
+    let status = crate::local_clip::wait_cancellable_child(
         &mut child,
         Duration::from_secs(300),
         "Video preview exceeded five minutes",
         Some(&aborted),
+        Some(cancelled),
     );
     let size = writer.join().map_err(|_| "Video preview writer failed")??;
     if !status?.success() || size == 0 {
@@ -234,11 +257,12 @@ pub(super) fn prepare(
             .read_to_end(&mut bytes)
             .map(|_| bytes)
     });
-    let status = wait_bounded_child(
+    let status = crate::local_clip::wait_cancellable_child(
         &mut child,
         Duration::from_secs(120),
         "Frame inspection exceeded two minutes",
         None,
+        Some(cancelled),
     );
     let fed = feeder.join().map_err(|_| "Frame probe input failed")?;
     let bytes = reader

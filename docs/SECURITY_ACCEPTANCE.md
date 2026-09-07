@@ -38,9 +38,11 @@ current evidence for each claimed platform.
       Start/End values.
 - [x] The Clip Editor rejects links, unsupported/non-regular files, empty files and files
       over 8 GiB; local ffprobe/ffmpeg have fixed protocol/format allowlists plus output,
-      duration and time bounds. Every format receives a bounded mono PCM preview in an
-      anonymous delete-on-close handle, plus a bounded anonymous H264 proxy for video;
-      PTS normalization and silence padding preserve the complete source timeline.
+      duration and time bounds. Direct preview serves the guarded source through opaque
+      capped ranges, with bounded nearby decoded-frame queries. Explicit compatible
+      preparation retains anonymous PCM/H264 handles and source-timeline normalization.
+      Preparation and frame workers have request-scoped cancellation, kill/reap and
+      publication checks; cancelled or superseded results cannot reopen the editor.
 - [x] Preview never rewrites or deletes selected source media; cancel and commit neither
       copy, rewrite nor delete it. Only one local clip session is live; it guards and
       rechecks platform file identity, size and change times before commit while its source

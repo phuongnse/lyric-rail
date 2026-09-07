@@ -95,3 +95,21 @@ it("dismisses the clip editor before Activity and restores normal shortcuts", as
   expect(open).toHaveBeenCalledOnce();
   expect(host.querySelector('[role="dialog"]')).not.toBeNull();
 });
+
+it("shows cancellation before preparation resolves and never reopens a cancelled preview", async () => {
+  let complete: (value: unknown) => void = () => {};
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args, options) => command === "prepare_local_clip"
+    ? new Promise((resolve) => { complete = resolve; }) : original(command, args, options));
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true })));
+  expect(host.querySelector("#clip-preparing-title")?.textContent).toBe("Opening local media");
+  const cancel = [...host.querySelectorAll("button")].find((button) => button.textContent === "Cancel and close")!;
+  expect(cancel.disabled).toBe(false);
+  await act(async () => cancel.click());
+  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "cancel_clip_preparation")).toBe(true);
+  await act(async () => complete({ clipId: "late", suggestedTitle: "Late", sizeBytes: 1, durationMillis: 1000, previewUrl: "late" }));
+  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["cancel_local_clip", { clipId: "late" }]);
+  vi.mocked(invoke).mockImplementation(original);
+});
