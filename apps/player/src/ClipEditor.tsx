@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject, type KeyboardEvent } from "react";
 import { formatTimecodeMillis, parseTimecodeMillis } from "./clipSelection";
 import "./clipEditor.css";
 
@@ -8,6 +8,7 @@ export type LocalClipPreview = {
 };
 export type ClipSection = { startMillis: number; endMillis: number; title: string };
 type Section = ClipSection & { id: number };
+type Endpoint = "startMillis" | "endMillis";
 
 export function frameAt(frames: number[], time: number): number {
   let low = 0, high = frames.length;
@@ -33,34 +34,72 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
   const [error, setError] = useState("");
   const [review, setReview] = useState(false);
   const [volume, setVolume] = useState(.8);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const nextId = useRef(2);
   const audio = useRef<HTMLAudioElement>(null), video = useRef<HTMLVideoElement>(null);
   const active = sections.find((section) => section.id === selected)!;
   const frames = preview.frameTimesMillis ?? [];
+  // Native trim ranges use integer milliseconds. Quantize once, including for lookup,
+  // so a displayed boundary never snaps back to the preceding fractional frame.
+  const boundaries = useMemo(() => (preview.frameTimesMillis ?? []).map(Math.floor), [preview.frameTimesMillis]);
   const duration = preview.durationMillis;
+  const pendingSections = sections.map((section) => {
+    const result = { ...section };
+    for (const endpoint of ["startMillis", "endMillis"] as const) {
+      const draft = drafts[`${section.id}-${endpoint}`];
+      if (draft !== undefined) { try { result[endpoint] = parseTimecodeMillis(draft); } catch { result[endpoint] = NaN; } }
+    }
+    return result;
+  });
+  const validDrafts = validSections(pendingSections, duration);
   const videoOffset = preview.videoOffsetMillis ?? 0;
+  const videoTime = (time: number) => {
+    const index = frameAt(boundaries, time);
+    const presentation = boundaries[index] === time ? frames[index] + .01 : time;
+    return Math.max(0, presentation - videoOffset) / 1000;
+  };
   useEffect(() => { if (audio.current) audio.current.volume = volume; }, [volume]);
   const stop = () => {
     audio.current?.pause(); video.current?.pause();
     const time = (audio.current?.currentTime ?? 0) * 1000;
-    if (video.current) video.current.currentTime = Math.max(0, time - videoOffset) / 1000;
+    if (video.current) video.current.currentTime = videoTime(time);
     setPosition(time); setPlaying(false);
   };
   const seek = (time: number) => {
     const bounded = Math.max(0, Math.min(duration, time));
     if (audio.current) audio.current.currentTime = bounded / 1000;
-    if (video.current) video.current.currentTime = Math.max(0, bounded - videoOffset) / 1000;
+    if (video.current) video.current.currentTime = videoTime(bounded);
     setPosition(bounded);
   };
   const patch = (change: Partial<ClipSection>) => setSections((items) => items.map((item) => item.id === selected ? { ...item, ...change } : item));
-  const boundary = (endpoint: "startMillis" | "endMillis", time: number) => {
-    const snapped = frames.length ? Math.floor(frames[frameAt(frames, time)]) : Math.round(time);
-    patch({ [endpoint]: endpoint === "startMillis" ? Math.min(snapped, active.endMillis - 1) : Math.max(active.startMillis + 1, time >= duration ? duration : snapped) });
+  const clearDraft = (endpoint: Endpoint) => setDrafts((current) => {
+    const next = { ...current }; delete next[`${selected}-${endpoint}`]; return next;
+  });
+  const snap = (time: number) => time >= duration ? duration : boundaries.length && time >= boundaries[0]
+    ? boundaries[frameAt(boundaries, time)] : Math.round(time);
+  const boundary = (endpoint: Endpoint, time: number) => {
+    const snapped = snap(time);
+    const value = endpoint === "startMillis" ? Math.max(0, Math.min(snapped, active.endMillis - 1)) : Math.min(duration, Math.max(active.startMillis + 1, snapped));
+    patch({ [endpoint]: value }); clearDraft(endpoint); return value;
+  };
+  const handleBoundaryKey = (event: KeyboardEvent<HTMLInputElement>, endpoint: Endpoint) => {
+    if (busy || event.ctrlKey || event.metaKey || event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation(); stop();
+    const current = active[endpoint];
+    const forward = event.key === "ArrowRight" || event.key === "ArrowUp";
+    let time = current + (forward ? 10 : -10);
+    if (boundaries.length && current >= boundaries[0]) {
+      const index = frameAt(boundaries, current);
+      time = forward ? boundaries[index + 1] ?? duration : boundaries[index] < current ? boundaries[index] : boundaries[index - 1] ?? 0;
+    } else if (forward && boundaries.length) time = Math.min(time, boundaries[0]);
+    if (event.key === "Home") time = 0;
+    if (event.key === "End") time = duration;
+    seek(boundary(endpoint, time));
   };
   const step = (direction: -1 | 1) => {
     stop(); setReview(false);
     if (frames.length) {
-      const index = Math.max(0, Math.min(frames.length - 1, frameAt(frames, position) + direction));
+      const index = Math.max(0, Math.min(frames.length - 1, frameAt(boundaries, position) + direction));
       seek(frames[index] + .01);
     } else seek(position + direction * 10);
   };
@@ -69,7 +108,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
     if (selection) seek(active.startMillis);
     else if (position >= duration) seek(0);
     try {
-      await Promise.all([audio.current?.play(), position >= videoOffset ? video.current?.play() : undefined]);
+      await Promise.all([audio.current?.play(), position >= Math.floor(videoOffset) ? video.current?.play() : undefined]);
       setPlaying(true);
     } catch { stop(); setError("Preview could not play. Try seeking and playing again."); }
   };
@@ -85,7 +124,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
         setPosition(time);
         if (video.current) {
           const videoTime = Math.max(0, time - videoOffset) / 1000;
-          if (time < videoOffset) video.current.pause();
+          if (time < Math.floor(videoOffset)) video.current.pause();
           else if (video.current.paused && !video.current.ended) void video.current.play().catch(() => { stop(); setError("Video preview could not play."); });
           if (Math.abs(video.current.currentTime - videoTime) > .08) video.current.currentTime = videoTime;
         }
@@ -111,7 +150,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
     <div className="clip-workspace">
       <section className="clip-viewer" aria-label="Section player">
         <div className="clip-screen" tabIndex={0} aria-label="Preview player. Left and Right step frames. I sets Start, O sets End, Space plays.">
-          {preview.videoUrl ? <video ref={video} src={preview.videoUrl} style={{ visibility: position < videoOffset ? "hidden" : "visible" }} muted playsInline preload="auto" onError={() => { stop(); setError("Video preview could not be decoded on this device."); }} />
+          {preview.videoUrl ? <video ref={video} src={preview.videoUrl} style={{ visibility: position < Math.floor(videoOffset) ? "hidden" : "visible" }} muted playsInline preload="auto" onError={() => { stop(); setError("Video preview could not be decoded on this device."); }} />
             : <div className="clip-audio-art"><span>♫</span><strong>Audio preview</strong><p>{preview.suggestedTitle}</p></div>}
           <audio ref={audio} src={preview.previewUrl} preload="auto" onEnded={() => { if (review && loop) void play(true); else stop(); }} onError={() => { stop(); setError("Audio preview is unavailable."); }} />
           <span className="clip-time-badge">{formatTimecodeMillis(position)}</span>
@@ -120,7 +159,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
           <button aria-label={frames.length ? "Previous frame" : "Back 10 milliseconds"} onClick={() => step(-1)} disabled={busy}>←</button>
           <button className="primary" onClick={() => playing ? stop() : void play(false)} disabled={busy}>{playing ? "Pause" : "Play"}</button>
           <button aria-label={frames.length ? "Next frame" : "Forward 10 milliseconds"} onClick={() => step(1)} disabled={busy}>→</button>
-          <span>{formatTimecodeMillis(position)} / {formatTimecodeMillis(duration)}{frames.length > 0 && <small>Frame {frameAt(frames, position) + 1} / {frames.length}</small>}</span>
+          <span>{formatTimecodeMillis(position)} / {formatTimecodeMillis(duration)}{frames.length > 0 && <small>Frame {frameAt(boundaries, position) + 1} / {frames.length}</small>}</span>
           <button onClick={() => void play(true)} disabled={busy}>▶ Review section</button>
           <label className="clip-volume"><span>Volume</span><input aria-label="Preview volume" type="range" min={0} max={1} step={.05} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
         </div>
@@ -130,10 +169,13 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
         </div>
         <div className="clip-trim-track" style={{ "--clip-start": `${active.startMillis / duration * 100}%`, "--clip-end": `${active.endMillis / duration * 100}%` } as React.CSSProperties}>
           <div className="clip-selected-range" />
-          <input aria-label="Drag section start" type="range" min={0} max={duration} step={1} value={active.startMillis} disabled={busy} onChange={(event) => { stop(); boundary("startMillis", Number(event.target.value)); seek(Number(event.target.value)); }} />
-          <input aria-label="Drag section end" type="range" min={0} max={duration} step={1} value={active.endMillis} disabled={busy} onChange={(event) => { stop(); boundary("endMillis", Number(event.target.value)); seek(Number(event.target.value)); }} />
+          <input aria-label="Drag section start" type="range" min={0} max={duration} step={1} value={active.startMillis} disabled={busy} onKeyDown={(event) => handleBoundaryKey(event, "startMillis")} onChange={(event) => { stop(); seek(boundary("startMillis", Number(event.target.value))); }} />
+          <input aria-label="Drag section end" type="range" min={0} max={duration} step={1} value={active.endMillis} disabled={busy} onKeyDown={(event) => handleBoundaryKey(event, "endMillis")} onChange={(event) => { stop(); seek(boundary("endMillis", Number(event.target.value))); }} />
         </div>
-        <div className="clip-boundaries">{(["startMillis", "endMillis"] as const).map((endpoint) => <label key={endpoint}><span>{endpoint === "startMillis" ? "Start · I" : "End · O"}</span><input key={`${selected}-${active[endpoint]}`} aria-label={endpoint === "startMillis" ? "Section start time" : "Section end time"} defaultValue={formatTimecodeMillis(active[endpoint])} disabled={busy} onBlur={(event) => { try { const time = parseTimecodeMillis(event.target.value); if (time > duration) throw Error(); boundary(endpoint, time); setError(""); } catch { setError("Enter a time within this file, such as 01:23.500."); } }} /><button disabled={busy} onClick={() => boundary(endpoint, position)}>Set at playhead</button></label>)}</div>
+        <div className="clip-boundaries">{(["startMillis", "endMillis"] as const).map((endpoint) => <label key={endpoint}><span>{endpoint === "startMillis" ? "Start · I" : "End · O"}</span><input key={`${selected}-${active[endpoint]}`} aria-label={endpoint === "startMillis" ? "Section start time" : "Section end time"} value={drafts[`${selected}-${endpoint}`] ?? formatTimecodeMillis(active[endpoint])} disabled={busy} aria-invalid={!validDrafts} onChange={(event) => setDrafts({ ...drafts, [`${selected}-${endpoint}`]: event.target.value })} onBlur={() => {
+          const pending = pendingSections.find((section) => section.id === selected)!;
+          if (validSections([pending], duration)) { patch({ startMillis: pending.startMillis, endMillis: pending.endMillis }); setDrafts((current) => { const next = { ...current }; delete next[`${selected}-startMillis`]; delete next[`${selected}-endMillis`]; return next; }); }
+        }} /><button disabled={busy} onClick={() => boundary(endpoint, position)}>Set at playhead</button></label>)}</div>
         <div className="clip-help"><label><input type="checkbox" checked={loop} onChange={(event) => setLoop(event.target.checked)} /> Loop section</label><span><kbd>←</kbd> <kbd>→</kbd> {frames.length ? "one frame" : "10 ms"} · <kbd>I</kbd> Start · <kbd>O</kbd> End · <kbd>Space</kbd> play</span></div>
       </section>
       <aside className="clip-sections" aria-label="Songs to add">
@@ -144,14 +186,14 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
           <div className="clip-section-actions"><button aria-label={`Move section ${index + 1} up`} onClick={() => reorder(index, -1)} disabled={busy || index === 0}>↑</button><button aria-label={`Move section ${index + 1} down`} onClick={() => reorder(index, 1)} disabled={busy || index === sections.length - 1}>↓</button><button aria-label={`Remove section ${index + 1}`} disabled={busy || sections.length === 1} onClick={() => { const remaining = sections.filter((item) => item.id !== section.id); setSections(remaining); if (selected === section.id) choose(remaining[Math.min(index, remaining.length - 1)]); }}>Remove</button></div>
         </li>)}</ol>
         <button className="clip-add-section" disabled={busy || sections.length >= 128} onClick={() => {
-          const startMillis = Math.min(duration - 1, Math.floor(position));
+          const startMillis = Math.min(duration - 1, snap(position));
           const section = { id: nextId.current++, title: `${preview.suggestedTitle.slice(0, 185)} · ${sections.length + 1}`, startMillis, endMillis: Math.min(duration, startMillis + 30000) };
           setSections([...sections, section]); choose(section);
         }}>＋ Add section at playhead</button>
         <p className="clip-queue-note">Added to the top of Library & queue in this order. Add each song’s lyrics there to start processing.</p>
       </aside>
     </div>
-    {error && <p className="clip-error" role="alert">{error}</p>}
-    <footer><span>Your original file stays unchanged.</span><button onClick={onClose} disabled={busy}>Cancel</button><button className="primary" disabled={busy || !validSections(sections, duration)} onClick={() => { stop(); setError(""); void onCommit(sections.map(({ startMillis, endMillis, title }) => ({ startMillis, endMillis, title }))).catch(() => setError("Songs could not be added. Your sections are kept here; try again or open Activity after closing this editor.")); }}>{busy ? "Adding songs…" : `Add ${sections.length} ${sections.length === 1 ? "song" : "songs"} to queue`}</button></footer>
+    {(!validDrafts || error) && <p className="clip-error" role="alert">{!validDrafts ? "Enter valid times within this file. End must be later than Start." : error}</p>}
+    <footer><span>Your original file stays unchanged.</span><button onClick={onClose} disabled={busy}>Cancel</button><button className="primary" disabled={busy || !validDrafts} onClick={() => { stop(); setError(""); void onCommit(pendingSections.map(({ startMillis, endMillis, title }) => ({ startMillis, endMillis, title }))).catch(() => setError("Songs could not be added. Your sections are kept here; try again or open Activity after closing this editor.")); }}>{busy ? "Adding songs…" : `Add ${sections.length} ${sections.length === 1 ? "song" : "songs"} to queue`}</button></footer>
   </div>;
 }

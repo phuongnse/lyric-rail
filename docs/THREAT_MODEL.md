@@ -93,12 +93,17 @@ The product must not claim otherwise.
    bytes. Video sources are bounded to 8K pixel count. Video adds an anonymous muted
    H264 proxy capped at 2 GiB/300 seconds,
    with passthrough presentation timestamps and a bounded one-million-frame/24 MiB/
-   120-second frame inspection. Audio remains the source-timeline clock. No raw source
+   120-second frame inspection. Audio remains the source-timeline clock. Frame trim
+   boundaries are floored once to native integer milliseconds (less than 1 ms early);
+   frame preview seeks retain measured presentation timestamps. Explicit time entry
+   accepts source milliseconds, including audio before video begins, without resnapping.
+   Invalid drafts block batch admission. No raw source
    path is served. Batches validate every range/title and source identity before one
    encrypted catalog publication; a save failure retains the prior catalog and preview.
    Successful admission consumes the locked session so retries cannot duplicate songs.
    Typed optional section identity prevents path-based rescan deduplication from merging
-   independent songs. Each section waits for its own exact lyrics. Cancel and commit
+   independent songs, including after processing completion and package refresh.
+   Each section waits for its own exact lyrics. Cancel and commit
    close session state but never mutate the source.
    Catalog v4 reads/migrates v1-v3 with absent section identities. Its version prevents
    older Players from opening and silently merging independently admitted sections;

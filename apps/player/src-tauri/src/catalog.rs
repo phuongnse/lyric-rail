@@ -804,6 +804,7 @@ impl Catalog {
             }
         }
         package.id = original_id;
+        package.section_id = self.document.items[index].section_id.clone();
         package.locations = locations;
         self.replace_at(index, package);
         Ok(true)
@@ -875,6 +876,7 @@ impl Catalog {
             if self.document.items[index].status != ItemStatus::Processing {
                 incoming.locations = merged_locations;
                 incoming.id = self.document.items[index].id.clone();
+                incoming.section_id = self.document.items[index].section_id.clone();
                 if incoming.processing_job_id.is_none() {
                     incoming.processing_job_id =
                         self.document.items[index].processing_job_id.clone();
@@ -1528,6 +1530,72 @@ mod tests {
         assert_eq!(catalog.item(&second.id).unwrap().title, "Second");
         assert!(catalog.item(&first.id).is_some());
         assert_eq!(catalog.items().len(), 5);
+    }
+
+    #[test]
+    fn section_identity_survives_completion_rescans_and_reload() {
+        let mut catalog = catalog(0);
+        let mut sections = Vec::new();
+        for id in 10..12 {
+            let mut section = item(id);
+            section.section_id = Some(section.id.clone());
+            section.package_id = None;
+            section.lyric_text.clear();
+            section.status = ItemStatus::WaitingForLyrics;
+            section.locations = vec![ItemLocation::LocalMedia {
+                source_id: None,
+                path: PathBuf::from("shared.mp4"),
+                lyrics_path: None,
+                origin: MediaOrigin::Disk,
+                trim_start_millis: Some((id as u64 - 10) * 100),
+                trim_end_millis: Some((id as u64 - 9) * 100),
+                available: true,
+            }];
+            sections.push(section);
+        }
+        catalog
+            .admit_sections_with(sections.clone(), |_| Ok(()))
+            .unwrap();
+        for id in 10..12 {
+            let mut package = item(id);
+            package.id = format!("scanned-package-{id}");
+            package.lyric_text = format!("Exact lyrics {id}");
+            assert!(
+                catalog
+                    .complete_processing(&id.to_string(), package.clone())
+                    .unwrap()
+            );
+            catalog.upsert(package).unwrap();
+        }
+        let mut source = sections[0].clone();
+        source.id = "whole-source".into();
+        source.section_id = None;
+        if let ItemLocation::LocalMedia {
+            trim_start_millis,
+            trim_end_millis,
+            ..
+        } = &mut source.locations[0]
+        {
+            *trim_start_millis = None;
+            *trim_end_millis = None;
+        }
+        catalog.upsert(source.clone()).unwrap();
+        let encoded = serde_json::to_vec(&catalog.document).unwrap();
+        catalog.document = serde_json::from_slice(&encoded).unwrap();
+        catalog.rebuild_indexes();
+        catalog.upsert(source).unwrap();
+        assert_eq!(catalog.items().len(), 3);
+        for original in sections {
+            let saved = catalog.item(&original.id).unwrap();
+            assert_eq!(saved.section_id, original.section_id);
+            assert_eq!(saved.title, original.title);
+            assert_eq!(saved.lyric_text, format!("Exact lyrics {}", original.id));
+            assert_eq!(
+                serde_json::to_value(&saved.locations[0]).unwrap(),
+                serde_json::to_value(&original.locations[0]).unwrap()
+            );
+        }
+        assert!(catalog.item("whole-source").unwrap().section_id.is_none());
     }
 
     #[test]
