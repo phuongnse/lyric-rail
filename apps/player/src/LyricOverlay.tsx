@@ -249,7 +249,7 @@ export function paginateLyricEvent(
     ? presentation.roleChangeCue.dotCount
     : 0;
   const cueWidth = cueCount
-    ? cueCount * fontSize * LYRIC_CUE_SIZE_EM + (cueCount - 1) * gap
+    ? cueCount * fontSize * (LYRIC_CUE_SIZE_EM + LYRIC_INNER_WIDTH_EM) + (cueCount - 1) * gap
     : 0;
   const source = event.line?.syllables?.length
     ? event.line.syllables
@@ -372,7 +372,7 @@ function KaraokeToken({
     >
       <span className="lyric-token-shadow" aria-hidden="true">{text}</span>
       <span className="lyric-token-outline">{text}</span>
-      <span className="lyric-word" aria-hidden="true">{text}</span>
+      <span className="lyric-word" aria-hidden="true">{cue ? <span className="lyric-cue-fill" /> : text}</span>
     </span>
   );
 }

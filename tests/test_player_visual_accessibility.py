@@ -137,7 +137,7 @@ def test_player_honors_authenticated_karaoke_layout_palette_and_cues() -> None:
         ".lyric-row",
         ".lyric-token-outline",
         ".lyric-token-shadow",
-        ".lyric-cue-dot > span",
+        ".lyric-cue-dot > .lyric-token-shadow",
         ".lyric-cue {",
     ):
         assert selector in CSS
@@ -150,7 +150,7 @@ def test_player_honors_authenticated_karaoke_layout_palette_and_cues() -> None:
     assert ".lyric-line.top { bottom: calc(var(--lyric-bottom-slot-height) + var(--lyric-bottom) + var(--lyric-outer-width) / 2)" in CSS
     assert ".lyric-line.bottom { bottom: 0" in CSS
     assert "width: var(--fill)" in CSS
-    assert ".lyric-cue-dot .lyric-word::before" in CSS
+    assert ".lyric-cue-fill::before" in CSS
     assert "opacity: var(--fill-ratio)" not in CSS
     assert "transform: scale(var(--lyric-scale-x)" not in CSS
     assert "shouldUpdateTransportClock(now, last)" in APP

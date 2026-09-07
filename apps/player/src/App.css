@@ -161,12 +161,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .lyric-word { color: var(--role); paint-order: stroke fill; -webkit-text-stroke: var(--lyric-inner-width) var(--lyric-inner); clip-path: inset(-1em calc(100% - var(--fill)) -1em -1em); }
 .lyric-token.is-empty .lyric-word { visibility: hidden; }
 .lyric-token.is-full .lyric-word { clip-path: none; }
-.lyric-cue-dot { width: var(--lyric-cue-size); height: var(--lyric-cue-size); }
-.lyric-cue-dot > span { width: 100%; height: 100%; border-radius: 50%; }
+.lyric-cue-dot { width: calc(var(--lyric-cue-size) + var(--lyric-inner-width)); height: var(--lyric-cue-size); }
+.lyric-cue-dot > .lyric-token-shadow, .lyric-cue-dot > .lyric-token-outline { width: var(--lyric-cue-size); height: var(--lyric-cue-size); border-radius: 50%; }
 .lyric-cue-dot .lyric-token-shadow { background: var(--lyric-shadow); box-shadow: 0 0 0 calc(var(--lyric-outer-width) / 2) var(--lyric-shadow); }
 .lyric-cue-dot .lyric-token-outline { background: var(--lyric-unsung); box-shadow: 0 0 0 calc(var(--lyric-outer-width) / 2) var(--lyric-outer); }
-.lyric-cue-dot .lyric-word { width: var(--fill); overflow: hidden; justify-self: start; visibility: visible; border-radius: 0; background: none; clip-path: none; opacity: 1; }
-.lyric-cue-dot .lyric-word::before { display: block; width: var(--lyric-cue-size); height: var(--lyric-cue-size); box-sizing: border-box; border: calc(var(--lyric-inner-width) / 2) solid var(--lyric-inner); border-radius: 50%; background: var(--role); content: ""; }
+.lyric-cue-dot .lyric-word { width: var(--fill); height: calc(var(--lyric-cue-size) + var(--lyric-inner-width)); overflow: hidden; justify-self: start; align-self: center; visibility: visible; background: none; clip-path: none; opacity: 1; }
+.lyric-cue-fill { display: grid; width: calc(var(--lyric-cue-size) + var(--lyric-inner-width)); height: calc(var(--lyric-cue-size) + var(--lyric-inner-width)); border-radius: 50%; background: var(--lyric-inner); place-items: center; }
+.lyric-cue-fill::before { width: var(--lyric-cue-size); height: var(--lyric-cue-size); border-radius: 50%; background: var(--role); content: ""; }
 
 .transport { padding: 13px 16px 14px; box-shadow: none; }
 .timeline { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 10px; color: var(--muted); font-size: var(--font-small); font-variant-numeric: tabular-nums; }

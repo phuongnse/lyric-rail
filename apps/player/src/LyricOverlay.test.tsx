@@ -178,7 +178,7 @@ describe("shared karaoke core", () => {
     const fontSize = fixedLyricFontSize(narrow);
     const maximumWidth = 600 * 0.93 - 2 * fontSize * 0.11;
     const gap = fontSize * 0.2414;
-    const cueWidth = 3 * fontSize * 0.2931 + 2 * gap;
+    const cueWidth = 3 * fontSize * (0.2931 + 0.085) + 2 * gap;
     expect(cueWidth + gap + measure(first.text)).toBeLessThanOrEqual(maximumWidth);
     expect(first.text.length).toBeLessThan(text.length);
   });
