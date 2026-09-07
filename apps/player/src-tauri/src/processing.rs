@@ -1920,11 +1920,13 @@ pub fn set_playback_state(app: &AppHandle, playing: bool) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::encode_worker_request;
     use super::{
         PendingJob, ProcessingInner, WorkerRequest, apply_current_generation,
         commit_waiting_request, dispatch_failure_projection, drain_dispatch_failures,
-        durable_task_record, encode_worker_request, error_code, load_durable_manifest,
-        read_bounded_lines, read_durable_output, read_worker_stdout, recover_worker_disconnect,
+        durable_task_record, error_code, load_durable_manifest, read_bounded_lines,
+        read_durable_output, read_worker_stdout, recover_worker_disconnect,
         take_worker_disconnect_failure, worker_command, worker_request,
     };
     use crate::catalog::{

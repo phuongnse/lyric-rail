@@ -329,6 +329,8 @@ fn monitor_installer_child(
     let stdout_reader = output_reader(stdout, false, sender.clone());
     let stderr_reader = output_reader(stderr, true, sender);
     let mut diagnostics = String::new();
+    let mut exit_status = None;
+    let mut output_closed = false;
     let status = loop {
         if cancelled.load(Ordering::Acquire) {
             stop_child(child);
@@ -348,15 +350,22 @@ fn monitor_installer_child(
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => output_closed = true,
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) => {}
-            Err(error) => {
-                stop_child(child);
-                break Err(format!("Unable to inspect model installer: {error}"));
+        if exit_status.is_none() {
+            match child.try_wait() {
+                Ok(status) => exit_status = status,
+                Err(error) => {
+                    stop_child(child);
+                    break Err(format!("Unable to inspect model installer: {error}"));
+                }
             }
+        }
+        if output_closed {
+            if let Some(status) = exit_status {
+                break Ok(status);
+            }
+            thread::sleep(Duration::from_millis(100));
         }
     };
     drop(receiver);
@@ -601,6 +610,17 @@ mod tests {
             return;
         };
         match mode.as_str() {
+            "fast-success" | "fast-failure" => {
+                for progress in [55, 100] {
+                    println!(
+                        "{{\"kind\":\"lyricrail.model-install.progress\",\"progressPercent\":{progress}}}"
+                    );
+                }
+                if mode == "fast-failure" {
+                    eprintln!("fixture installation failed");
+                    std::process::exit(7);
+                }
+            }
             "success" => {
                 println!(
                     "{{\"kind\":\"lyricrail.model-install.progress\",\"progressPercent\":55,\"message\":\"fixture\"}}"
@@ -656,6 +676,31 @@ mod tests {
                 .unwrap_err()
                 .contains("already running")
         );
+    }
+
+    #[test]
+    fn exited_installer_retains_final_progress_and_failure_diagnostics() {
+        for mode in ["fast-success", "fast-failure"] {
+            let mut child = fixture_command(mode).spawn().unwrap();
+            child.wait().unwrap();
+            let mut progress = Vec::new();
+            let result = monitor_installer_child(
+                &mut child,
+                &AtomicBool::new(false),
+                Path::new("runtime"),
+                |line| {
+                    if let Some(update) = installer_progress(line) {
+                        progress.push(update.progress_percent);
+                    }
+                },
+            );
+            assert_eq!(progress, [55.0, 100.0]);
+            if mode == "fast-success" {
+                result.unwrap();
+            } else {
+                assert!(result.unwrap_err().contains("fixture installation failed"));
+            }
+        }
     }
 
     #[test]
