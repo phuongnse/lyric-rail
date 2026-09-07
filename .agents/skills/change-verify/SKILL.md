@@ -16,6 +16,11 @@ or stream failure, failed descendant cleanup, or tracked repository mutation is 
 failure and leaves the change in implementing. Successfully cleaned post-exit
 descendants remain recorded without replacing the foreground command result.
 
+A failed report may include a safe selective-reproduction argument array. It can
+confirm the isolated failure through the same bounded runner, but it remains a
+diagnostic action: never submit it in place of the required full profile, and do not
+expect it to reveal captured stdout or stderr.
+
 The contract must already include conditional profiles required by affected enforced
 capabilities. Run those profiles exactly; do not run every planned production gate for
 an unrelated change, and do not treat a passing baseline profile as evidence for a
