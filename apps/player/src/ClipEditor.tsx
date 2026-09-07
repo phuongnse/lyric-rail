@@ -4,7 +4,7 @@ import "./clipEditor.css";
 import { useClipFrames } from "./useClipFrames";
 
 export type LocalClipPreview = {
-  direct?: boolean; clipId: string; suggestedTitle: string; sizeBytes: number; durationMillis: number;
+  direct?: boolean; requiresCompatibility?: boolean; clipId: string; suggestedTitle: string; sizeBytes: number; durationMillis: number;
   frameDurationMillis?: number; frameTimesMillis?: number[]; previewUrl: string; videoUrl?: string; videoOffsetMillis?: number;
 };
 export type ClipSection = { startMillis: number; endMillis: number; title: string };
@@ -23,9 +23,9 @@ export function validSections(sections: ClipSection[], duration: number): boolea
     && section.startMillis >= 0 && section.endMillis <= duration && section.startMillis < section.endMillis);
 }
 
-export default function ClipEditor({ preview, busy, containerRef, onClose, onCommit, onPlay, onCompatible }: {
+export default function ClipEditor({ preview, busy, containerRef, onClose, onCommit, onPlay, onCompatible, preparationError }: {
   preview: LocalClipPreview; busy: boolean; containerRef: RefObject<HTMLDivElement | null>;
-  onClose: () => void; onCommit: (sections: ClipSection[]) => Promise<void>; onPlay: () => void; onCompatible?: () => void;
+  onClose: () => void; onCommit: (sections: ClipSection[]) => Promise<void>; onPlay: () => void; onCompatible?: () => void; preparationError?: string;
 }) {
   const [sections, setSections] = useState<Section[]>([{ id: 1, startMillis: 0, endMillis: preview.durationMillis, title: preview.suggestedTitle }]);
   const [selected, setSelected] = useState(1);
@@ -39,11 +39,11 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
   const nextId = useRef(2);
   const audio = useRef<HTMLAudioElement>(null), video = useRef<HTMLVideoElement>(null);
   const active = sections.find((section) => section.id === selected)!;
-  const frameData = useClipFrames(preview, position, playing);
+  const frameData = useClipFrames(preview, position, playing || busy);
   const frames = frameData.frames;
   const hasVideo = Boolean(preview.videoUrl);
   const [mediaError, setMediaError] = useState(false);
-  useEffect(() => { setMediaError(false); setError(""); }, [preview.clipId]);
+  useEffect(() => { setMediaError(false); setError(""); setPosition(0); setPlaying(false); setReview(false); }, [preview.clipId]);
   // Native trim ranges use integer milliseconds. Quantize once, including for lookup,
   // so a displayed boundary never snaps back to the preceding fractional frame.
   const boundaries = useMemo(() => frames.map(Math.floor), [frames]);
@@ -117,6 +117,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
     } else seek(position + direction * 10);
   };
   const play = async (selection: boolean) => {
+    if (preview.requiresCompatibility) return;
     setError(""); onPlay(); setReview(selection);
     if (selection) seek(active.startMillis);
     else if (position >= duration) seek(0);
@@ -163,17 +164,17 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
     <div className="clip-workspace">
       <section className="clip-viewer" aria-label="Section player">
         <div className="clip-screen" tabIndex={0} aria-label="Preview player. Left and Right step frames. I sets Start, O sets End, Space plays.">
-          {preview.videoUrl ? <video ref={video} src={preview.videoUrl} style={{ visibility: position < Math.floor(videoOffset) ? "hidden" : "visible" }} muted playsInline preload="metadata" onError={() => { stop(); setMediaError(true); setError("Video preview could not be decoded on this device."); }} />
-            : <div className="clip-audio-art"><span>♫</span><strong>Audio preview</strong><p>{preview.suggestedTitle}</p></div>}
-          <audio ref={audio} src={preview.previewUrl} preload="metadata" onEnded={() => { if (review && loop) void play(true); else stop(); }} onError={() => { stop(); setMediaError(true); setError("Audio preview is unavailable."); }} />
+          {preview.videoUrl && !preview.requiresCompatibility ? <video ref={video} src={preview.videoUrl} style={{ visibility: position < Math.floor(videoOffset) ? "hidden" : "visible" }} muted playsInline preload="metadata" onError={() => { stop(); setMediaError(true); setError("Video preview could not be decoded on this device."); }} />
+            : <div className="clip-audio-art"><span>♫</span><strong>{preview.requiresCompatibility ? "Compatible preview needed" : "Audio preview"}</strong><p>{preview.suggestedTitle}</p></div>}
+          <audio ref={audio} src={preview.requiresCompatibility ? undefined : preview.previewUrl} preload="metadata" onEnded={() => { if (review && loop) void play(true); else stop(); }} onError={() => { stop(); setMediaError(true); setError("Audio preview is unavailable."); }} />
           <span className="clip-time-badge">{formatTimecodeMillis(position)}</span>
         </div>
         <div className="clip-transport">
           <button aria-label={hasVideo ? "Previous frame" : "Back 10 milliseconds"} onClick={() => step(-1)} disabled={busy || (hasVideo && (!frameData.ready || !frames.length))}>←</button>
-          <button className="primary" onClick={() => playing ? stop() : void play(false)} disabled={busy}>{playing ? "Pause" : "Play"}</button>
+          <button className="primary" onClick={() => playing ? stop() : void play(false)} disabled={busy || preview.requiresCompatibility}>{playing ? "Pause" : "Play"}</button>
           <button aria-label={hasVideo ? "Next frame" : "Forward 10 milliseconds"} onClick={() => step(1)} disabled={busy || (hasVideo && (!frameData.ready || !frames.length))}>→</button>
           <span>{formatTimecodeMillis(position)} / {formatTimecodeMillis(duration)}{frames.length > 0 && <small>{preview.direct ? "Nearby frame" : "Frame"} {frameAt(boundaries, position) + 1} / {frames.length}</small>}</span>
-          <button onClick={() => void play(true)} disabled={busy}>▶ Review section</button>
+          <button onClick={() => void play(true)} disabled={busy || preview.requiresCompatibility}>▶ Review section</button>
           <label className="clip-volume"><span>Volume</span><input aria-label="Preview volume" type="range" min={0} max={1} step={.05} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
         </div>
         <label className="clip-scrub"><span>Playhead</span><input aria-label="Seek preview" type="range" min={0} max={duration} step={1} value={position} disabled={busy} onChange={(event) => { setReview(false); seek(Number(event.target.value)); }} /></label>
@@ -206,9 +207,10 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
         <p className="clip-queue-note">Added to the top of Library & queue in this order. Add each song’s lyrics there to start processing.</p>
       </aside>
     </div>
-    {preview.direct && hasVideo && !frameData.ready && !playing && <p className="clip-help" role="status">{frameData.error || "Loading nearby frames… Playback and seeking are ready."}{frameData.error && <button onClick={frameData.retry}>Retry frame details</button>}</p>}
-    {preview.direct && mediaError && onCompatible && <p className="clip-help">This device may need a compatible preview. Preparing the whole file can take minutes; you can cancel it.<button disabled={busy} onClick={() => { stop(); onCompatible(); }}>Prepare compatible preview</button></p>}
+    {preview.direct && !preview.requiresCompatibility && hasVideo && !frameData.ready && !playing && <p className="clip-help" role="status">{frameData.error || "Loading nearby frames… Playback and seeking are ready."}{frameData.error && <button onClick={frameData.retry}>Retry frame details</button>}</p>}
+    {preview.direct && (mediaError || preview.requiresCompatibility) && onCompatible && <p className="clip-help">{preview.requiresCompatibility ? "This file needs a compatible preview for accurate timing." : "This device may need a compatible preview."} Preparing the whole file can take minutes; you can cancel it.<button disabled={busy} onClick={() => { stop(); onCompatible(); }}>Prepare compatible preview</button></p>}
+    {preparationError && <p className="clip-error" role="alert">{preparationError}</p>}
     {(!validDrafts || error) && <p className="clip-error" role="alert">{!validDrafts ? "Enter valid times within this file. End must be later than Start." : error}</p>}
-    <footer><span>Your original file stays unchanged.</span><button onClick={onClose} disabled={busy}>Cancel</button><button className="primary" disabled={busy || !validDrafts} onClick={() => { stop(); setError(""); void onCommit(pendingSections.map(({ startMillis, endMillis, title }) => ({ startMillis, endMillis, title }))).catch(() => setError("Songs could not be added. Your sections are kept here; try again or open Activity after closing this editor.")); }}>{busy ? "Adding songs…" : `Add ${sections.length} ${sections.length === 1 ? "song" : "songs"} to queue`}</button></footer>
+    <footer><span>Your original file stays unchanged.</span><button onClick={onClose} disabled={busy}>Cancel</button><button className="primary" disabled={busy || !validDrafts || preview.requiresCompatibility} onClick={() => { stop(); setError(""); void onCommit(pendingSections.map(({ startMillis, endMillis, title }) => ({ startMillis, endMillis, title }))).catch(() => setError("Songs could not be added. Your sections are kept here; try again or open Activity after closing this editor.")); }}>{busy ? "Adding songs…" : `Add ${sections.length} ${sections.length === 1 ? "song" : "songs"} to queue`}</button></footer>
   </div>;
 }

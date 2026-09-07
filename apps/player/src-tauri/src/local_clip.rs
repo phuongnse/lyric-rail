@@ -82,6 +82,7 @@ pub struct LocalClipPreview {
     preview_url: String,
     video_url: Option<String>,
     direct: bool,
+    requires_compatibility: bool,
 }
 
 struct PreparedLocalClip {
@@ -1145,15 +1146,19 @@ pub async fn prepare(
     path: PathBuf,
     request_id: String,
     compatible: bool,
+    replace_clip_id: Option<String>,
 ) -> Result<Option<LocalClipPreview>, String> {
     validate_clip_id(&request_id)?;
+    if let Some(id) = &replace_clip_id {
+        validate_clip_id(id)?;
+    }
     let cancelled = Arc::new(AtomicBool::new(false));
     let preview_root = app
         .path()
         .app_cache_dir()
         .map_err(|_| "Unable to resolve the local clip preview directory")?
         .join("clip-preview");
-    {
+    let previous = {
         let state = app.state::<LocalClipState>();
         let mut inner = state
             .inner
@@ -1162,13 +1167,18 @@ pub async fn prepare(
         if inner.cancelled_requests.contains(&request_id) {
             return Ok(None);
         }
-        if inner.preparing || inner.preview.is_some() {
+        let previous = replacement_session(&inner, compatible, replace_clip_id.as_deref())?;
+        if inner.preparing {
             return Err("Finish or cancel the current clip first".into());
+        }
+        if let Some(cancel) = &inner.frame_cancel {
+            cancel.store(true, Ordering::Release);
         }
         inner.preparing = true;
         inner.preparation_cancel = Some(cancelled.clone());
         inner.request_id = Some(request_id.clone());
-    }
+        previous
+    };
     if let Err(error) = tasks::start(
         &app,
         TaskSpec {
@@ -1197,14 +1207,24 @@ pub async fn prepare(
     );
     let task_app = app.clone();
     let worker_cancelled = cancelled.clone();
+    let worker_previous = previous.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _permit =
             scheduler.acquire_cancellable(IoPriority::AlternateTrack, &worker_cancelled)?;
         let stage_app = task_app.clone();
         let command_app = task_app.clone();
         let unit_app = task_app;
-        prepare_source(
-            path,
+        if let Some(session) = &worker_previous {
+            verify_source_unchanged(
+                &session.source_file,
+                &session.path,
+                &session.source_identity,
+            )?;
+        }
+        let prepared = prepare_source(
+            worker_previous
+                .as_ref()
+                .map_or(path, |session| session.path.clone()),
             preview_root,
             |stage, title| {
                 tasks::progress(
@@ -1244,7 +1264,18 @@ pub async fn prepare(
             },
             compatible,
             &worker_cancelled,
-        )
+        )?;
+        if let Some(session) = &worker_previous {
+            verify_source_unchanged(
+                &session.source_file,
+                &session.path,
+                &session.source_identity,
+            )?;
+            if prepared.source_identity != session.source_identity {
+                return Err("Selected media changed while its preview was prepared".into());
+            }
+        }
+        Ok(prepared)
     })
     .await
     .map_err(|error| format!("Local clip task failed: {error}"));
@@ -1256,7 +1287,14 @@ pub async fn prepare(
     inner.preparing = false;
     inner.preparation_cancel = None;
     inner.request_id = None;
-    if cancelled.load(Ordering::Acquire) {
+    if cancelled.load(Ordering::Acquire)
+        || previous.as_ref().is_some_and(|session| {
+            inner
+                .preview
+                .as_ref()
+                .is_none_or(|current| current.clip_id != session.clip_id)
+        })
+    {
         tasks::finish(
             &app,
             CLIP_TASK_ID,
@@ -1287,6 +1325,9 @@ pub async fn prepare(
         frame_times_millis: prepared.frame_times_millis,
         video_offset_millis: prepared.video_offset_millis,
         direct: prepared.direct,
+        // Browser clocks for offset containers vary by demuxer and even change
+        // after loadeddata. Do not expose them as normalized editing clocks.
+        requires_compatibility: requires_compatibility(prepared.direct, prepared.timeline_origin),
     };
     inner.preview = Some(LocalClipSession {
         clip_id,
@@ -1309,6 +1350,24 @@ pub async fn prepare(
         Some("Local clip preview ready".into()),
     );
     Ok(Some(preview))
+}
+
+fn replacement_session(
+    inner: &LocalClipInner,
+    compatible: bool,
+    replace_clip_id: Option<&str>,
+) -> Result<Option<LocalClipSession>, String> {
+    match (&inner.preview, replace_clip_id) {
+        (None, None) => Ok(None),
+        (Some(session), Some(id)) if compatible && session.clip_id == id => {
+            Ok(Some(session.clone()))
+        }
+        _ => Err("Finish or cancel the current clip first".into()),
+    }
+}
+
+fn requires_compatibility(direct: bool, timeline_origin: f64) -> bool {
+    direct && timeline_origin.abs() > 0.000001
 }
 
 pub fn cancel_preparation(app: &AppHandle, request_id: Option<&str>) -> Result<bool, String> {
@@ -1816,6 +1875,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn offset_containers_require_compatible_clocks_before_editing() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("offset.mp4");
+        let ffprobe = available_tool("LYRICRAIL_FFPROBE", "ffprobe").unwrap();
+        let ffmpeg = available_tool("LYRICRAIL_FFMPEG", "ffmpeg").unwrap();
+        assert!(
+            Command::new(ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x48:rate=10:duration=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=duration=2",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    "-output_ts_offset",
+                    "5"
+                ])
+                .arg(&source)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let info = super::probe_media_cancellable(
+            &ffprobe,
+            &source,
+            &|_, _| {},
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(info.timeline_origin > 4.9);
+        assert!(super::requires_compatibility(true, info.timeline_origin));
+        assert!(super::requires_compatibility(true, -0.023));
+        assert!(!super::requires_compatibility(true, 0.0));
+        assert!(!super::requires_compatibility(false, info.timeline_origin));
+    }
+
     use super::{
         LocalClipInner, LocalClipSession, cancel_inner, open_source_guard, parse_frame_duration,
         portable_preview_with_tool, preview_file_response, read_exact_at, source_identity,
@@ -1923,6 +2027,21 @@ mod tests {
                 duration_millis: 1_000,
             }),
         };
+        // Starting a compatible replacement borrows the authenticated session;
+        // a worker error or cancelled attempt cannot consume the existing preview.
+        let id = "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b";
+        assert!(super::replacement_session(&inner, false, Some(id)).is_err());
+        assert!(super::replacement_session(&inner, true, Some("wrong")).is_err());
+        assert!(super::replacement_session(&inner, true, None).is_err());
+        let previous = super::replacement_session(&inner, true, Some(id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            previous.source_identity,
+            inner.preview.as_ref().unwrap().source_identity
+        );
+        drop(previous);
+        assert_eq!(inner.preview.as_ref().unwrap().clip_id, id);
         assert!(cancel_inner(
             &mut inner,
             "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b"

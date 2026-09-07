@@ -81,6 +81,10 @@ and seeking remain available. Rapid seeks replace pending frame work. Preparatio
 Cancel and close, and running preparation can also be cancelled from Activity.
 
 If the device cannot decode a source, explicitly choose Prepare compatible preview.
+Files with nonzero container start times require this mode before playback to keep
+editing on the source timeline. A failed conversion retains all selected songs and
+the original preview for retry. Frame controls load neighbors across probe boundaries;
+missing timestamps show a retry message instead of guessing or jumping to file edges.
 This cancellable fallback converts the whole file to anonymous PCM/H264 previews
 (video up to 640x360, 2 GiB and five minutes); it can take minutes on long media.
 Native ffprobe/ffmpeg retain local-file/demuxer allowlists and identity guards. Direct

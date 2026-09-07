@@ -594,6 +594,7 @@ function App() {
   const [queueInsertion, setQueueInsertion] = useState(0);
   const [clipBusy, setClipBusy] = useState(false);
   const [clipPreparing, setClipPreparing] = useState(false);
+  const [clipPreparationError, setClipPreparationError] = useState("");
   const clipRequest = useRef<{ id: string; cancelled: boolean } | undefined>(undefined);
   const clipSource = useRef<string | undefined>(undefined);
   const clipPreparingRef = useRef<HTMLDivElement>(null);
@@ -927,21 +928,27 @@ function App() {
   const cancelClipPreparation = () => {
     const request = clipRequest.current;
     if (request) { request.cancelled = true; void invoke("cancel_clip_preparation", { requestId: request.id }).catch((reason) => reportError("tasks", "Could not cancel clip preparation", reason)); }
+    if (clipPreview) void invoke("cancel_local_clip", { clipId: clipPreview.clipId }).catch(() => {});
     setClipDialogOpen(false);
   };
   const prepareClip = async (path: string, compatible = false) => {
     const request = { id: crypto.randomUUID(), cancelled: false };
     clipRequest.current = request; clipSource.current = path;
+    setClipPreparationError("");
     setClipPreparing(true); setClipBusy(true); setClipDialogOpen(true);
     try {
-      if (compatible && clipPreview) await invoke("cancel_local_clip", { clipId: clipPreview.clipId });
-      const preview = await invoke<LocalClipPreview | null>("prepare_local_clip", { path, requestId: request.id, compatible });
+      const preview = await invoke<LocalClipPreview | null>("prepare_local_clip", { path, requestId: request.id, compatible, replaceClipId: compatible ? clipPreview?.clipId : undefined });
       if (request.cancelled || clipRequest.current !== request) {
         if (preview) await invoke("cancel_local_clip", { clipId: preview.clipId });
       } else if (preview) setClipPreview(preview);
-      else setClipDialogOpen(false);
+      else if (!compatible) setClipDialogOpen(false);
+      else setClipPreparationError("Preparation cancelled. Your sections are kept; you can retry.");
     } catch (reason) {
-      if (!request.cancelled) { setClipDialogOpen(false); throw reason; }
+      if (!request.cancelled) {
+        if (!compatible) setClipDialogOpen(false);
+        else setClipPreparationError("Compatible preview failed. Your sections are kept; you can retry.");
+        throw reason;
+      }
     } finally {
       if (clipRequest.current === request) { clipRequest.current = undefined; setClipPreparing(false); setClipBusy(false); }
     }
@@ -1498,7 +1505,7 @@ function App() {
 
       {clipDialogOpen && clipPreview && (
         <div className="modal-layer" style={{ display: clipPreparing ? "none" : undefined }} role="dialog" aria-modal="true" aria-labelledby="clip-editor-title">
-          <ClipEditor preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed"); }} />
+          <ClipEditor preparationError={clipPreparationError} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed"); }} />
         </div>
       )}
 

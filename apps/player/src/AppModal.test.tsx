@@ -113,3 +113,45 @@ it("shows cancellation before preparation resolves and never reopens a cancelled
   expect(vi.mocked(invoke).mock.calls).toContainEqual(["cancel_local_clip", { clipId: "late" }]);
   vi.mocked(invoke).mockImplementation(original);
 });
+
+it("keeps titles, ranges and invalid drafts across failed compatibility and successful retry", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let fallbackAttempts = 0;
+  vi.mocked(invoke).mockImplementation((command, args, options) => {
+    if (command !== "prepare_local_clip") return original(command, args, options);
+    const compatible = (args as { compatible: boolean }).compatible;
+    if (compatible && ++fallbackAttempts === 1) return Promise.reject(new Error("Synthetic conversion failure"));
+    return Promise.resolve({ clipId: compatible ? "compatible" : "direct", direct: !compatible, suggestedTitle: "Song", sizeBytes: 10, durationMillis: 3000, previewUrl: "http://fixture/preview" });
+  });
+  const button = (text: string) => [...host.querySelectorAll("button")].find((element) => element.textContent?.includes(text))!;
+  const input = (label: string) => host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
+  const change = async (label: string, value: string) => act(async () => {
+    const element = input(label);
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true })));
+  await change("Song 1 title", "Keep exact title");
+  await change("Drag section end", "1500");
+  await act(async () => button("Add section at playhead").click());
+  await change("Song 2 title", "Second title");
+  await change("Section start time", "unfinished");
+  await act(async () => host.querySelector(".clip-screen audio")!.dispatchEvent(new Event("error")));
+  vi.mocked(invoke).mockClear();
+  await act(async () => button("Prepare compatible preview").click());
+  expect(host.textContent).toContain("Compatible preview failed. Your sections are kept");
+  expect(input("Song 1 title").value).toBe("Keep exact title");
+  expect(input("Song 2 title").value).toBe("Second title");
+  expect(input("Section start time").value).toBe("unfinished");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "cancel_local_clip")).toBe(false);
+  expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "prepare_local_clip")?.[1]).toMatchObject({ compatible: true, replaceClipId: "direct" });
+  await act(async () => button("Prepare compatible preview").click());
+  expect(input("Song 1 title").value).toBe("Keep exact title");
+  expect(input("Song 2 title").value).toBe("Second title");
+  expect(input("Section start time").value).toBe("unfinished");
+  expect(button("Add 2 songs to queue").disabled).toBe(true);
+  await change("Section start time", "0.500");
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Edit section 1"]')!.click());
+  expect(input("Drag section end").value).toBe("1500");
+  vi.mocked(invoke).mockImplementation(original);
+});

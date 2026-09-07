@@ -41,6 +41,70 @@ const renderFrames = async (frames: number[]) => {
     videoOffsetMillis: frames[0] ?? 0, frameTimesMillis: frames }} busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
 };
 
+const settleFrames = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 180)); }); };
+const renderDirect = async (requiresCompatibility = false) => {
+  await act(async () => root.render(<ClipEditor key="direct" preview={{ direct: true, requiresCompatibility, clipId: "direct", suggestedTitle: "First song", sizeBytes: 100, durationMillis: 120000,
+    previewUrl: "http://fixture/source", videoUrl: "http://fixture/video" }} busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} onCompatible={() => {}} />));
+};
+
+it("loads earlier neighbors at a lower window edge without moving a section to file start", async () => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command !== "local_clip_frames") return true;
+    const time = (args as { timeMillis: number }).timeMillis;
+    return time >= 47000 ? { frameTimesMillis: [47000, 48000, 49000, 50000, 51000], fromMillis: 47000, toMillis: 56000 }
+      : { frameTimesMillis: [44000, 45000, 46000, 47000, 48000], fromMillis: 41000, toMillis: 50000 };
+  });
+  await renderDirect(); await change("Seek preview", "50000"); await settleFrames();
+  await change("Drag section start", "47000");
+  await handleKey("Drag section start", "ArrowLeft");
+  expect(input("Drag section start").value).toBe("47000");
+  await settleFrames();
+  await handleKey("Drag section start", "ArrowLeft");
+  expect(input("Drag section start").value).toBe("46000");
+  expect(host.querySelector("audio")!.currentTime).toBe(46);
+});
+
+it("loads forward neighbors for sparse timestamps before stepping beyond a probe edge", async () => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command !== "local_clip_frames") return true;
+    return (args as { timeMillis: number }).timeMillis < 6000
+      ? { frameTimesMillis: [0, 1000, 2000, 3000, 4000], fromMillis: 0, toMillis: 6000 }
+      : { frameTimesMillis: [4000, 5000, 6000, 7000, 8000], fromMillis: 4000, toMillis: 13000 };
+  });
+  await renderDirect(); await settleFrames();
+  await change("Drag section end", "4000");
+  expect(button("Next frame").disabled).toBe(true);
+  await handleKey("Drag section end", "ArrowRight");
+  expect(input("Drag section end").value).toBe("4000");
+  await settleFrames();
+  await handleKey("Drag section end", "ArrowRight");
+  expect(input("Drag section end").value).toBe("5000");
+  await key("ArrowRight");
+  expect(host.querySelector("audio")!.currentTime).toBeCloseTo(6.00001);
+});
+
+it("makes absent frame evidence visible and retryable without repeated background scans", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) => command === "local_clip_frames" ? { frameTimesMillis: [], fromMillis: 0, toMillis: 6000 } : true);
+  vi.mocked(invoke).mockClear();
+  await renderDirect(); await settleFrames(); await settleFrames();
+  expect(host.textContent).toContain("No nearby frame timestamps");
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "local_clip_frames")).toHaveLength(1);
+  expect(button("Next frame").disabled).toBe(true);
+  await act(async () => button("Retry frame details").click()); await settleFrames();
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "local_clip_frames")).toHaveLength(2);
+});
+
+it("requires explicit compatibility before decoding media with an unsupported clock origin", async () => {
+  vi.mocked(invoke).mockClear();
+  await renderDirect(true); await settleFrames();
+  expect(host.querySelector("video")).toBeNull();
+  expect(host.querySelector("audio")!.getAttribute("src")).toBeNull();
+  expect(button("Play").disabled).toBe(true);
+  expect(button("Add 1 song to queue").disabled).toBe(true);
+  expect(button("Prepare compatible preview").disabled).toBe(false);
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "local_clip_frames")).toBe(false);
+});
+
 it("opens direct media before frame inspection, cancels stale seeks and keeps only the latest frame window", async () => {
   const pending: Array<{ time: number; resolve: (value: unknown) => void }> = [];
   vi.mocked(invoke).mockImplementation((command, args) => {

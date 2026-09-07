@@ -93,10 +93,17 @@ The product must not claim otherwise.
    start time, with a nine-second requested interval, 1 MiB/16,384-frame/20-second bounds;
    seeking may start at an earlier keyframe. One active query and one replaceable UI
    destination bound rapid seeking; request IDs scope cancellation and stale rejection.
+   The UI retains at most two overlapping frame windows and fetches missing neighbors;
+   requested probe bounds alone are not evidence of adjacent frames. Empty or stalled
+   inspection is explicit and retryable. Nonzero container origins require explicit
+   compatibility preparation before playback; browser time is not assumed normalized.
    Preparation is cancellable from its modal and Activity, including scheduler wait,
    subprocess work and the final publication boundary. Owned children are killed/reaped.
    Video sources are bounded to 8K pixel count. Unsupported webview codecs expose an
    explicit whole-file compatibility fallback, never an automatic long conversion.
+   Replacement authenticates the existing clip ID and pinned source identity, retaining
+   the previous session and editor drafts until successful publication. A failed attempt
+   leaves the old preview usable; closing it prevents late replacement publication.
    That fallback uses anonymous delete-on-close 16 kHz mono PCM with normalized PTS and
    leading/trailing silence, plus an anonymous muted H264 proxy capped at 2 GiB/300 seconds,
    with passthrough presentation timestamps and a bounded one-million-frame/24 MiB/

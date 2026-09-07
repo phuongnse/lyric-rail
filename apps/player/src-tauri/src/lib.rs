@@ -1303,9 +1303,10 @@ async fn prepare_local_clip(
     path: PathBuf,
     request_id: String,
     compatible: Option<bool>,
+    replace_clip_id: Option<String>,
 ) -> Result<Option<local_clip::LocalClipPreview>, String> {
     let scheduler = app.state::<CloudState>().scheduler.clone();
-    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false)).await
+    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false), replace_clip_id).await
 }
 }
 
