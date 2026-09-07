@@ -1,0 +1,13 @@
+[
+  {"input":"password: TOPSECRET","expected":null},
+  {"input":"Bearer TOPSECRET","expected":null},
+  {"input":"client_secret = TOPSECRET","expected":null},
+  {"input":"unknown diagnostic TOPSECRET","expected":null},
+  {"input":"Pipeline started","expected":"Pipeline started"},
+  {"input":"{\"kind\":\"lyricrail.model-install.progress\",\"phase\":\"downloading\",\"message\":\"TOPSECRET\",\"progressPercent\":25,\"completedBytes\":3,\"totalBytes\":12}","expected":{"kind":"lyricrail.model-install.progress","phase":"downloading","message":"Downloading verified model data","progressPercent":25,"completedBytes":3,"totalBytes":12}},
+  {"input":"{\"kind\":\"lyricrail.model-install.progress\",\"phase\":\"downloading\",\"progressPercent\":true}","expected":null},
+  {"input":"{\"kind\":\"lyricrail.model-install.progress\",\"phase\":\"downloading\",\"progressPercent\":101}","expected":null},
+  {"input":"{\"kind\":\"lyricrail.model-install.progress\",\"phase\":\"downloading\",\"progressPercent\":\"TOPSECRET\"}","expected":null},
+  {"input":"{\"kind\":\"lyricrail.model-install.progress\",\"phase\":\"TOPSECRET\"}","expected":null},
+  {"input":"{\"kind\":\"lyricrail.model-install.progress\",\"phase\":\"downloading\",\"extra\":\"TOPSECRET\"}","expected":null}
+]

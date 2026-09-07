@@ -395,7 +395,7 @@ mod tests {
             },
         );
         assert_eq!(issue.code.chars().count(), 80);
-        assert_eq!(issue.detail.unwrap().chars().count(), 4_000);
+        assert!(issue.detail.unwrap().chars().count() <= 4_000);
     }
 
     #[test]
@@ -440,8 +440,8 @@ mod tests {
         assert!(!remote_detail.contains("GOOG"));
         assert!(!remote_detail.contains("AMZ"));
         assert!(!remote_detail.contains("RAW"));
-        assert!(path_detail.contains("<local path>"));
-        assert!(remote_detail.contains("<remote address>"));
+        assert!(path_detail.contains("Diagnostic text withheld"));
+        assert!(remote_detail.contains("Diagnostic text withheld"));
     }
 
     #[test]

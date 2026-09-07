@@ -248,7 +248,7 @@ fn installer_progress(output: &OutputLine) -> Option<InstallerProgress> {
     if output.stderr {
         return None;
     }
-    serde_json::from_str::<InstallerProgress>(&output.line)
+    serde_json::from_str::<InstallerProgress>(&tasks::redact_diagnostic_text(&output.line))
         .ok()
         .filter(|progress| progress.kind == "lyricrail.model-install.progress")
 }
@@ -284,25 +284,8 @@ fn handle_line(app: &AppHandle, output: &OutputLine) {
     );
 }
 
-fn safe_install_detail(value: &str, runtime_root: &Path) -> String {
-    let mut detail = value.replace(&runtime_root.display().to_string(), "<runtime>");
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
-        detail = detail.replace(&PathBuf::from(profile).display().to_string(), "<user>");
-    }
-    detail
-        .split_whitespace()
-        .map(|part| {
-            if part.starts_with("http://") || part.starts_with("https://") {
-                "<remote address>"
-            } else {
-                part
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(MAX_INSTALL_OUTPUT_BYTES)
-        .collect()
+fn safe_install_detail(_value: &str, _runtime_root: &Path) -> String {
+    "Model installation failed".into()
 }
 
 fn monitor_installer_child(
@@ -613,7 +596,7 @@ mod tests {
             "fast-success" | "fast-failure" => {
                 for progress in [55, 100] {
                     println!(
-                        "{{\"kind\":\"lyricrail.model-install.progress\",\"progressPercent\":{progress}}}"
+                        "{{\"kind\":\"lyricrail.model-install.progress\",\"phase\":\"downloading\",\"progressPercent\":{progress}}}"
                     );
                 }
                 if mode == "fast-failure" {
@@ -623,7 +606,7 @@ mod tests {
             }
             "success" => {
                 println!(
-                    "{{\"kind\":\"lyricrail.model-install.progress\",\"progressPercent\":55,\"message\":\"fixture\"}}"
+                    "{{\"kind\":\"lyricrail.model-install.progress\",\"phase\":\"downloading\",\"progressPercent\":55,\"message\":\"fixture\"}}"
                 );
                 println!("{}", "x".repeat(MAX_INSTALL_LINE_BYTES * 2));
             }
@@ -698,7 +681,7 @@ mod tests {
             if mode == "fast-success" {
                 result.unwrap();
             } else {
-                assert!(result.unwrap_err().contains("fixture installation failed"));
+                assert!(result.unwrap_err().contains("Model installation failed"));
             }
         }
     }

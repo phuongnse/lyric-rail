@@ -219,7 +219,7 @@ export function LibraryDrawer(props: DrawerProps) {
           <div className="source-action-group">
             <button ref={localTriggerRef} aria-haspopup="menu" aria-expanded={sourceMenu === "local"} onClick={() => setSourceMenu((current) => current === "local" ? undefined : "local")} disabled={props.busy}>Local</button>
             {sourceMenu === "local" && <div className="source-menu" role="menu" aria-label="Local sources" onKeyDown={moveSourceMenuFocus}>
-              <button role="menuitem" onClick={() => { setSourceMenu(undefined); props.onAddFiles(); }}>Files</button>
+              <button role="menuitem" onClick={() => { localTriggerRef.current?.focus(); setSourceMenu(undefined); props.onAddFiles(); }}>Files</button>
               <button role="menuitem" onClick={() => { setSourceMenu(undefined); props.onAddFolder(); }}>Folder</button>
             </div>}
           </div>
@@ -489,7 +489,6 @@ export function ActivityCenter({
               && (barValue != null || task.totalUnits != null);
             const taskOutput = taskOutputById[task.id] ?? [];
             const modelTransfer = task.kind === "model-install"
-              && task.statusMessage?.startsWith("Downloading pinned model")
               ? latestModelTransferProgress(taskOutput)
               : undefined;
             const primaryStatus = task.kind === "model-install"
@@ -612,6 +611,11 @@ function App() {
   const utilityToggleRef = useRef<HTMLDivElement>(null);
   const setupDialogRef = useRef<HTMLDivElement>(null);
   const aboutDialogRef = useRef<HTMLDivElement>(null);
+  const lyricDialogRef = useRef<HTMLDivElement>(null);
+  const clipDialogRef = useRef<HTMLDivElement>(null);
+  const lyricInputRef = useRef<HTMLTextAreaElement>(null);
+  const lyricRestoreRef = useRef<HTMLElement>(null);
+  const clipRestoreRef = useRef<HTMLElement>(null);
   const lastAudibleVolumeRef = useRef(0.9);
   const selectedTaskIdRef = useRef<string | undefined>(undefined);
   const taskReplayRef = useRef(new Map<string, { dirty: boolean }>());
@@ -640,10 +644,12 @@ function App() {
     [taskState.tasks],
   );
   const showUtilityMenu = !native || status?.platform === "windows" || status?.platform === "linux";
-  const systemModalOpen = Boolean(confirmIssue) || aboutOpen;
-  const anyModalOpen = systemModalOpen || Boolean(lyricDialog) || clipDialogOpen;
+  const systemModalOpen = Boolean(confirmIssue) || aboutOpen || Boolean(lyricDialog) || clipDialogOpen;
+  const anyModalOpen = systemModalOpen;
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
   useFocusContainment(aboutOpen, aboutDialogRef, undefined, utilityToggleRef);
+  useFocusContainment(Boolean(lyricDialog), lyricDialogRef, lyricInputRef, lyricRestoreRef);
+  useFocusContainment(clipDialogOpen && Boolean(clipPreview), clipDialogRef, undefined, clipRestoreRef);
   const reportError = useCallback((
     scope: string,
     title: string,
@@ -923,7 +929,9 @@ function App() {
     finally { setBusy(false); }
   };
 
-  const addFiles = () => runBusy(async () => {
+  const addFiles = () => {
+    clipRestoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return runBusy(async () => {
     const selected = await open({ multiple: true, directory: false, filters: [{ name: "Music and LyricRail", extensions: ["lrail", "mp4", "mkv", "mov", "webm", "mp3", "m4a", "flac", "wav", "aac", "ogg", "opus", "avi", "wma"] }] });
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];
@@ -939,7 +947,8 @@ function App() {
     setClipLoop(true);
     setClipBusy(false);
     setClipDialogOpen(true);
-  }, "library", "Files could not be added");
+    }, "library", "Files could not be added");
+  };
 
   const addFolder = () => runBusy(async () => {
     const selected = await open({ multiple: false, directory: true });
@@ -1108,6 +1117,7 @@ function App() {
   }, "lyrics", "Lyric file could not be added");
 
   const showLyricDialog = async (item: LibraryItem, mode: "add" | "edit") => {
+    lyricRestoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setLyricDraft(mode === "edit" && native ? await invoke<string>("item_lyrics", { itemId: item.id }) : "");
     setLyricDialog({ item, mode });
     setDrawerOpen(true);
@@ -1500,10 +1510,10 @@ function App() {
 
       {lyricDialog && (
         <div className="modal-layer" role="dialog" aria-modal="true">
-          <div className="lyric-dialog panel">
+          <div ref={lyricDialogRef} className="lyric-dialog panel">
             <header><div><p className="eyebrow">{lyricDialog.mode === "edit" ? "Confirmed revision" : "Authoritative lyrics"}</p><h2>{lyricDialog.item.title}</h2></div><IconButton className="dialog-close" icon="close" label="Close lyric editor" onClick={() => setLyricDialog(undefined)} /></header>
             <p>{lyricDialog.mode === "edit" ? "Nothing changes until you confirm. The original package remains valid until its revision authenticates." : "Paste exact UTF-8 lyrics, one semantic phrase per line."}</p>
-            <textarea value={lyricDraft} onChange={(event) => setLyricDraft(event.target.value)} autoFocus spellCheck />
+            <textarea ref={lyricInputRef} value={lyricDraft} onChange={(event) => setLyricDraft(event.target.value)} spellCheck />
             <footer><button onClick={() => setLyricDialog(undefined)}>Cancel</button><button className="primary" onClick={submitLyrics} disabled={busy || !lyricDraft.trim()}>{lyricDialog.mode === "edit" ? "Create revision" : "Add to queue"}</button></footer>
           </div>
         </div>
@@ -1511,7 +1521,7 @@ function App() {
 
       {clipDialogOpen && clipPreview && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="clip-editor-title">
-          <div className="clip-dialog panel">
+          <div ref={clipDialogRef} className="clip-dialog panel">
             <header>
               <div><p className="eyebrow">Local file</p><h2 id="clip-editor-title">Choose the section to process</h2></div>
               <IconButton className="dialog-close" icon="close" label="Close clip editor" onClick={closeClipDialog} disabled={clipBusy} />

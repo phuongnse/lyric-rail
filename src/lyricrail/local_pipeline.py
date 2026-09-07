@@ -246,12 +246,10 @@ def _run(
         rendered = "<redacted>" if redact_next_argument else argument
         context.log("Argument: " + rendered)
         redact_next_argument = sensitive_flag and not redact_next_argument
-    process = subprocess.Popen(
-        actual_command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL,
-    )
+    from .subprocess_owner import OwnedProcess
+
+    owner = OwnedProcess(actual_command)
+    process = owner.process
     assert process.stdout is not None
     assert process.stderr is not None
     output_queue: queue.Queue[tuple[str, bytes] | None] = queue.Queue(maxsize=128)
@@ -304,13 +302,7 @@ def _run(
     last_machine_progress = 0.0
 
     def terminate_and_drain() -> None:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+        owner.terminate()
         deadline = time.monotonic() + 5.0
         while any(reader.is_alive() for reader in readers) and time.monotonic() < deadline:
             try:
@@ -319,7 +311,11 @@ def _run(
                 pass
         for reader in readers:
             reader.join(timeout=0.2)
+        process.stdout.close()
+        process.stderr.close()
+        owner.close()
 
+    drain_deadline: float | None = None
     while process.poll() is None or readers_done < len(readers):
         try:
             item = output_queue.get(timeout=0.1)
@@ -363,14 +359,21 @@ def _run(
                         stream=stream,
                         level="WARNING" if stream == "stderr" else "INFO",
                     )
-            if process.poll() is None:
-                context.checkpoint()
+            context.checkpoint()
+            if process.poll() is not None and readers_done < len(readers):
+                if drain_deadline is None:
+                    drain_deadline = time.monotonic() + 5.0
+                elif time.monotonic() >= drain_deadline:
+                    raise RuntimeError("Command descendants did not close output pipes")
         except BaseException:
             terminate_and_drain()
             raise
     for reader in readers:
         reader.join(timeout=5)
     returncode = process.wait()
+    process.stdout.close()
+    process.stderr.close()
+    owner.close()
     output = "\n".join(captured_stdout).strip()
     error_output = "\n".join(captured_stderr).strip()
     completed = subprocess.CompletedProcess(
@@ -2992,6 +2995,8 @@ def _separate_stems(context: StageContext) -> list[dict[str, Any]]:
             else:
                 context.log(f"Reusing loaded separation model {model_label}")
                 active.output_dir = str(output_dir)
+                if active.model_instance is not None:
+                    active.model_instance.output_dir = str(output_dir)
             context.progress(15, "Separating vocals and instrumental")
             separated = active.separate(
                 str(_source_audio(context)),

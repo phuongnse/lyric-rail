@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from . import __version__
+from .diagnostics import CONTRACT
 
 
 JOB_SCHEMA_VERSION = 1
@@ -174,7 +175,7 @@ def _sanitize_diagnostic_payload(
     if depth >= MAX_DIAGNOSTIC_JSON_DEPTH:
         return "<nested diagnostic omitted>"
     if isinstance(value, str):
-        return budget.text(value)
+        return budget.text(redact_diagnostic_text(value))
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, int):
@@ -196,6 +197,8 @@ def _sanitize_diagnostic_payload(
                 if index >= MAX_DIAGNOSTIC_JSON_ITEMS:
                     result["<items truncated>"] = True
                     break
+                if key not in CONTRACT["diagnosticKeys"]:
+                    continue
                 rendered_key = _diagnostic_key(key, budget)
                 if rendered_key in result:
                     rendered_key = f"{rendered_key} <duplicate>"
@@ -232,57 +235,7 @@ def sanitize_diagnostic_payload(value: Any, *, _depth: int = 0) -> Any:
         return "<diagnostic unavailable>"
 
 
-def redact_diagnostic_text(message: str) -> str:
-    value = replace_unpaired_surrogates(message).replace("\r", " ").replace("\0", "")
-    secret_key = (
-        r"token|access_token|refresh_token|id_token|password|secret|client_secret|"
-        r"private_key|authorization|credential|api[-_]?key|apikey|signature|"
-        r"x[-_]goog[-_]signature|x[-_]amz[-_]signature"
-    )
-    label, separator, payload = value.partition(":")
-    if separator and label in {"Argument", "Executable"}:
-        if re.search(
-            rf"(?i)\b(?:{secret_key})\b",
-            payload,
-        ):
-            return f"{label}: <redacted>"
-        if re.search(r"https?://", payload, flags=re.IGNORECASE):
-            return f"{label}: <remote address>"
-        if re.search(
-            r"(?i)(?:[A-Z]:[\\/]|\\\\|(?:^|\s)/[^\s]*)",
-            payload,
-        ):
-            return f"{label}: <local path>"
-    value = re.sub(r"https?://\S+", "<remote address>", value, flags=re.IGNORECASE)
-    value = re.sub(
-        r"(?i)\bbearer\s+(?:\"[^\"]*\"|'[^']*'|\S+)",
-        "Bearer <redacted>",
-        value,
-    )
-    value = re.sub(
-        rf"(?i)\"?({secret_key})\"?\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}}]+)",
-        lambda match: f"{match.group(1)}=<redacted>",
-        value,
-    )
-    value = re.sub(
-        r'''(?i)(["'])(?:[A-Z]:[\\/]|\\\\|/)[^"']+\1''',
-        "<local path>",
-        value,
-    )
-    path_match = re.search(
-        r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\)|(?<![A-Za-z0-9:])/(?!/)",
-        value,
-    )
-    if path_match:
-        prefix = value[: path_match.start()].rstrip(" \t\"'([{,=:")
-        value = f"{prefix} <local path>".strip()
-    encoded = value.encode("utf-8")
-    if len(encoded) <= MAX_LOG_LINE_BYTES:
-        return value
-    marker = b" ... <line truncated>"
-    return (encoded[: MAX_LOG_LINE_BYTES - len(marker)] + marker).decode(
-        "utf-8", errors="replace"
-    )
+from .diagnostics import project_diagnostic as redact_diagnostic_text
 
 
 def _append_bounded_log(path: Path, line: str, max_bytes: int) -> None:
@@ -710,7 +663,7 @@ class JobStore:
             for key, value in changes.items():
                 if key not in manifest:
                     raise ValueError(f"Cannot update unknown field: {key}")
-                manifest[key] = value
+                manifest[key] = sanitize_diagnostic_payload(value) if key == "error" else value
             manifest["updatedAt"] = now_iso()
             manifest["progressPercent"] = calculate_progress(manifest["stages"])
             manifest["durationSeconds"] = _duration_seconds(
@@ -763,7 +716,7 @@ class JobStore:
                         stage.get("startedAt"), stage.get("finishedAt")
                     )
             if error is not None:
-                stage["error"] = deepcopy(error)
+                stage["error"] = sanitize_diagnostic_payload(error)
             manifest["currentStage"] = stage_key if stage["status"] == "running" else None
             manifest["updatedAt"] = now_iso()
             manifest["progressPercent"] = calculate_progress(manifest["stages"])

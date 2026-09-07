@@ -418,26 +418,7 @@ fn error_code(value: Option<&Value>) -> Option<&str> {
 }
 
 fn safe_runtime_detail(value: &str) -> String {
-    let mut detail = resolve_runtime()
-        .map(|runtime| value.replace(&runtime.root.display().to_string(), "<runtime>"))
-        .unwrap_or_else(|_| value.to_owned());
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
-        detail = detail.replace(&PathBuf::from(profile).display().to_string(), "<user>");
-    }
-    detail
-        .split_whitespace()
-        .map(|part| {
-            if part.starts_with("http://") || part.starts_with("https://") {
-                "<remote address>"
-            } else {
-                part
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(4_000)
-        .collect()
+    tasks::redact_diagnostic_text(value)
 }
 
 fn item_title(app: &AppHandle, item_id: &str) -> String {
@@ -468,7 +449,9 @@ fn with_current_worker<T>(
     apply_current_generation(generation, current_generation, || action(&mut inner))
 }
 
-fn handle_event(app: &AppHandle, event: WorkerEvent, generation: u64) {
+fn handle_event(app: &AppHandle, mut event: WorkerEvent, generation: u64) {
+    event.stage = event.stage.filter(|key| tasks::stage_title(key).is_some());
+    event.stage_title = event.stage.as_deref().and_then(tasks::stage_title);
     match event.kind.as_str() {
         "lyricrail.worker.output" => {
             if !event.request_id.is_empty()
@@ -1735,7 +1718,9 @@ pub fn status(state: &ProcessingState) -> ProcessingStatus {
         worker_running,
         pending_jobs,
         runtime_available: runtime.is_ok(),
-        runtime_error: runtime.err(),
+        runtime_error: runtime
+            .err()
+            .map(|error| tasks::redact_diagnostic_text(&error)),
     }
 }
 

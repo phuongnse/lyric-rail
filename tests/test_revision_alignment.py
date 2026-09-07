@@ -6,6 +6,26 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lyricrail.revision_alignment import align_revision_scope
+from lyricrail.revision_alignment import revision_display_texts
+import pytest
+
+
+def test_reflow_mapping_preserves_rows_and_rejects_changed_semantic_structure() -> None:
+    rows = [
+        {"referenceGroup": 1, "text": "One  two", "syllables": [{"text": "One"}, {"text": "two"}]},
+        {"referenceGroup": 1, "text": "three", "syllables": [{"text": "three"}]},
+        {"referenceGroup": 2, "text": "Again", "syllables": [{"text": "Again"}]},
+    ]
+    assert revision_display_texts(rows, [" One two three ", "Again"]) == ["One  two", "three", "Again"]
+    assert revision_display_texts(rows, ["One new three", "Again"]) == ["One  new", "three", "Again"]
+    for invalid in (["One two", "Again"], ["One two three", "Again extra"], ["One two three Again"]):
+        with pytest.raises(ValueError):
+            revision_display_texts(rows, invalid)
+    for group in (0, 3, True, 1.5, None):
+        malformed = json.loads(json.dumps(rows))
+        malformed[1]["referenceGroup"] = group
+        with pytest.raises(ValueError):
+            revision_display_texts(malformed, ["One two three", "Again"])
 
 
 def _timing() -> dict[str, object]:

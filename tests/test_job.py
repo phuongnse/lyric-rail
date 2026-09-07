@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from lyricrail.diagnostics import CONTRACT
 
 from lyricrail.job import (
     JobStore,
@@ -86,15 +87,15 @@ class JobStoreTests(unittest.TestCase):
     def test_diagnostic_surrogates_are_replaced_and_bounded_before_logging(self) -> None:
         job = self.create_job()
         rendered = self.store.log(job["jobId"], "bad\udc90 diagnostic")
-        self.assertEqual(rendered, "bad\ufffd diagnostic")
+        self.assertEqual(rendered, CONTRACT["withheld"])
         log_path = self.store.logs_path(job["jobId"])
-        self.assertIn("bad\ufffd diagnostic", log_path.read_text(encoding="utf-8"))
+        self.assertIn(CONTRACT["withheld"], log_path.read_text(encoding="utf-8"))
         nested = sanitize_diagnostic_payload(
             {"bad\udc90-key": ["value\udc90", {"nested": "Mắt em buồn"}]}
         )
         encoded = json.dumps(nested, ensure_ascii=False).encode("utf-8", errors="strict")
-        self.assertIn("bad\ufffd-key", encoded.decode("utf-8"))
-        self.assertEqual(nested["bad\ufffd-key"][1]["nested"], "Mắt em buồn")
+        self.assertNotIn("bad", encoded.decode("utf-8"))
+        self.assertEqual(nested, {})
         self.assertEqual(replace_unpaired_surrogates("\ud83d\ude00"), "😀")
         self.assertEqual(replace_unpaired_surrogates("x\ud800y"), "x\ufffdy")
 
@@ -102,20 +103,20 @@ class JobStoreTests(unittest.TestCase):
         cycle: list[object] = []
         cycle.append(cycle)
         payload = {
-            "nan": float("nan"),
-            "infinity": float("inf"),
-            "huge": 10**5_000,
-            "wide": {f"key-{index}": index for index in range(10_000)},
-            "cycle": cycle,
+            "progressPercent": float("nan"),
+            "stageProgressPercent": float("inf"),
+            "completedBytes": 10**5_000,
+            "error": {f"key-{index}": index for index in range(10_000)},
+            "detail": cycle,
         }
         safe = sanitize_diagnostic_payload(payload)
         encoded = json.dumps(safe, ensure_ascii=True, allow_nan=False).encode("utf-8")
         self.assertLessEqual(len(encoded), 512 * 1024)
-        self.assertEqual(safe["nan"], "<non-finite number>")
-        self.assertEqual(safe["infinity"], "<non-finite number>")
-        self.assertEqual(safe["huge"], "<integer out of range>")
-        self.assertLessEqual(len(safe["wide"]), 257)
-        self.assertEqual(safe["cycle"][0], "<cyclic diagnostic>")
+        self.assertEqual(safe["progressPercent"], "<non-finite number>")
+        self.assertEqual(safe["stageProgressPercent"], "<non-finite number>")
+        self.assertEqual(safe["completedBytes"], "<integer out of range>")
+        self.assertLessEqual(len(safe["error"]), 257)
+        self.assertEqual(safe["detail"][0], "<cyclic diagnostic>")
 
     def test_each_created_job_has_an_isolated_empty_workspace(self) -> None:
         first = self.create_job()

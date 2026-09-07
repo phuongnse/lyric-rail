@@ -32,6 +32,10 @@ The product must not claim otherwise.
    fresh keys/nonces. Exact confirmed text is distinct from its timing/render derivations.
    A lyric revision may replace only bounded declared assets after affected-scope alignment,
    preserves unchanged media ciphertext and switches files only after full verification.
+   Player and CLI device-vault revision publication select the current master under
+   the same cross-process lock as rotation and hold it through publication/rollback.
+   Revision maps authenticated `referenceGroup` word scopes to existing display rows;
+   semantic and display line counts remain distinct.
    A published output left by interruption is adopted only if request-bound verification
    matches authenticated manifest fields, every current input hash and all package chunks;
    an ambiguous existing output is never overwritten or deleted automatically.
@@ -47,6 +51,10 @@ The product must not claim otherwise.
    state. Catalog/source/search records are authenticated and
    encrypted under a separate OS-stored catalog key. No plaintext lyric index is
    persisted.
+   Drive listing requests the provider's `incompleteSearch` flag and refuses partial
+   reconciliation. Offline completion requires every retained ciphertext block;
+   objects exceeding cache capacity remain online-only. Folder enumeration applies
+   its remaining global entry budget before collection and sorting.
 5. **Credential stores.** The library master, catalog key and Drive refresh token use
    the platform credential service. Content keys and recovery passphrases stay in
    locked/zeroized native memory and never enter frontend JavaScript, command lines or
@@ -96,15 +104,22 @@ The product must not claim otherwise.
    at most every 100 ms; signals and replays retained-ring gaps after burst shedding; and
    computes ETA only from a sufficient monotonic measured window. Python drains
    stdout/stderr concurrently with bounded lines/channels and
-   rotates redacted durable logs. The WebView virtualizes output and pausing its view
+   rotates projected durable logs. Cancellation continues during post-exit pipe drain;
+   Unix process groups and guarded Windows Jobs own command descendants. A Windows
+   helper waits for Job assignment before launching the target. Post-exit draining
+   has a five-second limit. The WebView virtualizes output and pausing its view
    never changes worker execution. Restarted status, stage, percentage and timestamps
    come from encrypted/authenticated catalog task evidence. Fixed-path bounded clear job
    evidence contributes only diagnostics after its job ID and exact lyric digest match
    that catalog; authenticated package state is required after verified cleanup.
    Local OS paths remain exact internally, including Windows extended-path forms.
    Internal Python JSON escapes lone surrogate code units for lossless path round-trip,
-   while bounded diagnostic/log/worker-output strings replace them before strict UTF-8
-   reaches Rust or the WebView. Diagnostic traversal has global node/byte/depth limits,
+   while `src/lyricrail/diagnostic_contract.json` defines the closed shared diagnostic
+   vocabulary and typed finite progress fields for Python, Rust and TypeScript.
+   Arbitrary text and unknown fields are withheld before durable logging, native
+   ring/event storage, command-error IPC and clipboard output. Numeric progress and
+   fixed stage/status messages remain available; raw subprocess tails and argument
+   values are not retained as safe diagnostics. Diagnostic traversal has global node/byte/depth limits,
    rejects non-finite/out-of-range numbers and preserves valid surrogate pairs. Worker
    control IDs/package paths are validated and never blanket-rewritten; portable display
    labels are made valid before the package filename exists. Authoritative lyric bytes

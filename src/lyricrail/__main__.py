@@ -483,6 +483,12 @@ def _worker_safe_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 payload, f"Worker produced invalid Unicode in control field {field}"
             )
         safe[field] = value
+    from .diagnostics import CONTRACT
+    if "stage" in safe:
+        stage = safe["stage"]
+        safe["stage"] = stage if stage in CONTRACT["stages"] else None
+        if "stageTitle" in payload:
+            safe["stageTitle"] = CONTRACT["stages"].get(stage)
     return safe
 
 

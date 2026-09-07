@@ -268,6 +268,10 @@ fn media_protocol(
     let Some(loaded) = guard.as_mut() else {
         return error_response(StatusCode::NOT_FOUND, "No package is open");
     };
+    media_response(loaded, request)
+}
+
+fn media_response(loaded: &mut LoadedPackage, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let Some(asset) = loaded.routes.get(request.uri().path()).cloned() else {
         return error_response(StatusCode::NOT_FOUND, "Not found");
     };
@@ -284,6 +288,9 @@ fn media_protocol(
     }
     if request.method() != Method::GET {
         return error_response(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed");
+    }
+    if asset.length == 0 {
+        return error_response(StatusCode::RANGE_NOT_SATISFIABLE, "Media asset is empty");
     }
     let range_header = request
         .headers()
@@ -668,6 +675,9 @@ fn prepare_open(mut reader: PackageReader) -> Result<(LoadedPackage, OpenPackage
     if originals.next().is_some() {
         return Err("Package contains ambiguous Original Reference audio".into());
     }
+    if original.plaintext_length == 0 {
+        return Err("Package Original Reference audio is empty".into());
+    }
     routes.insert(
         "/audio/original-reference",
         PlaybackAsset {
@@ -890,6 +900,23 @@ fn enqueue_ready(app: &tauri::AppHandle, items: Vec<CatalogItem>) {
     let _ = save_and_emit(app);
 }
 
+// Every command error is projected before it crosses the WebView boundary.
+macro_rules! ipc_command {
+    (async fn $name:ident($($argument:ident: $kind:ty),* $(,)?) -> Result<$output:ty, String> $body:block) => {
+        #[tauri::command]
+        async fn $name($($argument: $kind),*) -> Result<$output, String> {
+            (async move $body).await.map_err(|error: String| tasks::redact_diagnostic_text(&error))
+        }
+    };
+    (fn $name:ident($($argument:ident: $kind:ty),* $(,)?) -> Result<$output:ty, String> $body:block) => {
+        #[tauri::command]
+        fn $name($($argument: $kind),*) -> Result<$output, String> {
+            let command = || $body;
+            command().map_err(|error: String| tasks::redact_diagnostic_text(&error))
+        }
+    };
+}
+
 #[tauri::command]
 fn player_status(
     app: tauri::AppHandle,
@@ -920,7 +947,7 @@ fn player_status(
     }
 }
 
-#[tauri::command]
+ipc_command! {
 fn catalog_snapshot(state: tauri::State<'_, CatalogState>) -> Result<CatalogSnapshot, String> {
     state
         .0
@@ -928,8 +955,9 @@ fn catalog_snapshot(state: tauri::State<'_, CatalogState>) -> Result<CatalogSnap
         .map_err(|_| "Catalog lock is poisoned".to_string())
         .map(|catalog| catalog.snapshot())
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn search_library(
     state: tauri::State<'_, CatalogState>,
     query: String,
@@ -943,8 +971,9 @@ fn search_library(
         .map_err(|_| "Catalog lock is poisoned".to_string())
         .map(|catalog| catalog.search(&query))
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn item_lyrics(state: tauri::State<'_, CatalogState>, item_id: String) -> Result<String, String> {
     state
         .0
@@ -953,6 +982,7 @@ fn item_lyrics(state: tauri::State<'_, CatalogState>, item_id: String) -> Result
         .item(&item_id)
         .map(|item| item.lyric_text.clone())
         .ok_or_else(|| "Library item no longer exists".to_string())
+}
 }
 
 #[tauri::command]
@@ -979,7 +1009,7 @@ fn task_record(app: tauri::AppHandle, task_id: String) -> Option<tasks::TaskReco
     tasks::task(&app, &task_id)
 }
 
-#[tauri::command]
+ipc_command! {
 fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<bool, String> {
     let task = tasks::task(&app, &task_id).ok_or_else(|| "Task no longer exists".to_string())?;
     if !task.cancellable {
@@ -994,6 +1024,7 @@ fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<bool, String> {
         tasks::TaskKind::ModelInstall => model_installer::cancel_active(&app),
         _ => Err("This task cannot be cancelled".into()),
     }
+}
 }
 
 fn start_runtime_task(
@@ -1041,7 +1072,7 @@ fn dismiss_system_issue(app: tauri::AppHandle, issue_id: String) -> bool {
     issues::dismiss(&app, &issue_id)
 }
 
-#[tauri::command]
+ipc_command! {
 async fn install_processing_models(
     app: tauri::AppHandle,
     issue_id: String,
@@ -1049,13 +1080,15 @@ async fn install_processing_models(
 ) -> Result<model_installer::ModelInstallResult, String> {
     model_installer::install(app, issue_id, license_confirmed).await
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn cancel_model_install(app: tauri::AppHandle, issue_id: String) -> Result<bool, String> {
     model_installer::cancel(&app, &issue_id)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 async fn add_local_files(
     app: tauri::AppHandle,
     paths: Vec<PathBuf>,
@@ -1140,8 +1173,9 @@ async fn add_local_files(
     finish_runtime_task(&app, &task_id, &result, "Selected files added to Library");
     result
 }
+}
 
-#[tauri::command]
+ipc_command! {
 async fn add_local_folder(app: tauri::AppHandle, path: PathBuf) -> Result<CatalogSnapshot, String> {
     let task_id = start_runtime_task(
         &app,
@@ -1241,8 +1275,9 @@ async fn add_local_folder(app: tauri::AppHandle, path: PathBuf) -> Result<Catalo
     finish_runtime_task(&app, &task_id, &result, "Folder scan completed");
     result
 }
+}
 
-#[tauri::command]
+ipc_command! {
 async fn prepare_local_clip(
     app: tauri::AppHandle,
     path: PathBuf,
@@ -1250,13 +1285,15 @@ async fn prepare_local_clip(
     let scheduler = app.state::<CloudState>().scheduler.clone();
     local_clip::prepare(app, scheduler, path).await
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn cancel_local_clip(app: tauri::AppHandle, clip_id: String) -> Result<bool, String> {
     local_clip::cancel(&app, &clip_id)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn commit_local_clip(
     app: tauri::AppHandle,
     clip_id: String,
@@ -1282,8 +1319,9 @@ fn commit_local_clip(
     enqueue_ready(&app, vec![queued_item]);
     Ok(snapshot)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 async fn rescan_local_sources(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
     let sources = app
         .state::<CatalogState>()
@@ -1304,8 +1342,9 @@ async fn rescan_local_sources(app: tauri::AppHandle) -> Result<CatalogSnapshot, 
     }
     save_and_emit(&app)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn remove_library_source(
     app: tauri::AppHandle,
     source_id: String,
@@ -1320,8 +1359,9 @@ fn remove_library_source(
     }
     save_and_emit(&app)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn provide_lyrics_file(
     app: tauri::AppHandle,
     item_id: String,
@@ -1345,6 +1385,7 @@ fn provide_lyrics_file(
     };
     enqueue_item(&app, item, None)?;
     save_and_emit(&app)
+}
 }
 
 fn write_pasted_lyrics(
@@ -1389,7 +1430,7 @@ fn write_pasted_lyrics(
     Ok(path)
 }
 
-#[tauri::command]
+ipc_command! {
 fn provide_lyrics_text(
     app: tauri::AppHandle,
     item_id: String,
@@ -1411,6 +1452,7 @@ fn provide_lyrics_text(
     enqueue_item(&app, item, Some(path))?;
     save_and_emit(&app)
 }
+}
 
 fn bind_retry_lyrics_path(
     mut item: CatalogItem,
@@ -1428,7 +1470,7 @@ fn bind_retry_lyrics_path(
     Ok(item)
 }
 
-#[tauri::command]
+ipc_command! {
 fn retry_processing_item(
     app: tauri::AppHandle,
     item_id: String,
@@ -1457,14 +1499,16 @@ fn retry_processing_item(
     issues::resolve_processing_failure(&app, &item_id);
     save_and_emit(&app)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn cancel_processing_item(
     app: tauri::AppHandle,
     item_id: String,
 ) -> Result<CatalogSnapshot, String> {
     processing::cancel_item(&app, &item_id)?;
     catalog_snapshot(app.state::<CatalogState>())
+}
 }
 
 fn drive_catalog_item(
@@ -1584,7 +1628,7 @@ fn legacy_drive_roots(catalog: &Catalog, source_id: &str) -> Vec<DriveRoot> {
     roots
 }
 
-#[tauri::command]
+ipc_command! {
 async fn connect_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
     let task_id = start_runtime_task(
         &app,
@@ -1719,8 +1763,9 @@ async fn connect_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, 
     );
     result
 }
+}
 
-#[tauri::command]
+ipc_command! {
 async fn rescan_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
     let sources = {
         let state = app.state::<CatalogState>();
@@ -1914,8 +1959,9 @@ async fn rescan_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, S
     finish_runtime_task(&app, &task_id, &result, "Google Drive rescan completed");
     result
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn disconnect_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
     if let Ok(provider) = drive_provider(&app) {
         provider.disconnect()?;
@@ -1944,8 +1990,9 @@ fn disconnect_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, Str
     }
     save_and_emit(&app)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn open_library_item(app: tauri::AppHandle, item_id: String) -> Result<OpenPackageResult, String> {
     let item = app
         .state::<CatalogState>()
@@ -2062,8 +2109,9 @@ fn open_library_item(app: tauri::AppHandle, item_id: String) -> Result<OpenPacka
     }
     Ok(result)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn load_item_thumbnail(app: tauri::AppHandle, item_id: String) -> Result<Option<String>, String> {
     let item = app
         .state::<CatalogState>()
@@ -2094,8 +2142,9 @@ fn load_item_thumbnail(app: tauri::AppHandle, item_id: String) -> Result<Option<
         STANDARD.encode(bytes.as_slice())
     )))
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn close_package(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
     *state
         .loaded
@@ -2103,8 +2152,9 @@ fn close_package(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
         .map_err(|_| "Player state lock is poisoned".to_string())? = None;
     Ok(())
 }
+}
 
-#[tauri::command]
+ipc_command! {
 async fn revise_item_lyrics(
     app: tauri::AppHandle,
     item_id: String,
@@ -2116,13 +2166,15 @@ async fn revise_item_lyrics(
         .map_err(|error| format!("Lyric revision task failed: {error}"))??;
     catalog_snapshot(app.state::<CatalogState>())
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn set_playback_active(app: tauri::AppHandle, playing: bool) -> Result<(), String> {
     processing::set_playback_state(&app, playing)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn take_startup_package(
     state: tauri::State<'_, StartupPackage>,
 ) -> Result<Option<PathBuf>, String> {
@@ -2132,16 +2184,18 @@ fn take_startup_package(
         .map_err(|_| "Startup package state lock is poisoned".to_string())
         .map(|mut path| path.take())
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn launch_recovery_export(
     app: tauri::AppHandle,
     output: PathBuf,
 ) -> Result<recovery_ui::RecoveryToolLaunch, String> {
     recovery_ui::export(app, output)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 fn launch_recovery_restore_local(
     app: tauri::AppHandle,
     bundle: PathBuf,
@@ -2149,8 +2203,9 @@ fn launch_recovery_restore_local(
 ) -> Result<recovery_ui::RecoveryToolLaunch, String> {
     recovery_ui::restore_local(app, bundle, library)
 }
+}
 
-#[tauri::command]
+ipc_command! {
 async fn launch_recovery_restore_cloud(
     app: tauri::AppHandle,
     bundle: PathBuf,
@@ -2159,6 +2214,7 @@ async fn launch_recovery_restore_cloud(
     tauri::async_runtime::spawn_blocking(move || recovery_ui::restore_cloud(app, bundle, item_id))
         .await
         .map_err(|error| format!("Cloud recovery preparation failed: {error}"))?
+}
 }
 
 fn package_argument<T>(arguments: impl IntoIterator<Item = T>) -> Option<PathBuf>
@@ -2294,6 +2350,102 @@ mod tests {
     };
     use crate::range_cache::RemoteObject;
     use std::path::PathBuf;
+
+    #[test]
+    fn authenticated_empty_original_is_rejected_and_zero_routes_cannot_underflow() {
+        use lrail_format::{
+            AssetRequest, ContentEncoding, PackageReader, PackageRequest, pack_for_vault,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let mut assets = Vec::new();
+        for (name, kind, media, bytes) in [
+            (
+                "media/video.mp4",
+                "playback-video",
+                "video/mp4",
+                b"video".as_slice(),
+            ),
+            (
+                "audio/karaoke.m4a",
+                "playback-audio",
+                "audio/mp4",
+                b"audio".as_slice(),
+            ),
+            (
+                "audio/original-reference.m4a",
+                "playback-audio",
+                "audio/mp4",
+                b"".as_slice(),
+            ),
+        ] {
+            let path = directory.path().join(name.replace('/', "-"));
+            std::fs::write(&path, bytes).unwrap();
+            assets.push(AssetRequest {
+                logical_name: name.into(),
+                path,
+                kind: kind.into(),
+                media_type: media.into(),
+                track_name: None,
+                language: None,
+                default: false,
+                content_encoding: ContentEncoding::Identity,
+            });
+        }
+        let package = directory.path().join("empty.lrail");
+        let key = [0x37; 32];
+        pack_for_vault(
+            &PackageRequest {
+                metadata: serde_json::json!({}),
+                assets,
+                producer: "fixture".into(),
+                minimum_player_version: "0.8.0".into(),
+            },
+            &package,
+            &key,
+            None,
+        )
+        .unwrap();
+        let reader = PackageReader::open_with_vault(&package, &key).unwrap();
+        assert!(matches!(super::prepare_open(reader), Err(error) if error.contains("empty")));
+        let mut loaded = super::LoadedPackage {
+            reader: PackageReader::open_with_vault(&package, &key).unwrap(),
+            routes: std::collections::HashMap::from([(
+                "/audio/original-reference",
+                super::PlaybackAsset {
+                    logical_name: "audio/original-reference.m4a".into(),
+                    length: 0,
+                    media_type: "audio/mp4".into(),
+                },
+            )]),
+        };
+        for range in [None, Some("bytes=0-0")] {
+            let mut request = super::Request::builder().uri("/audio/original-reference");
+            if let Some(range) = range {
+                request = request.header("Range", range);
+            }
+            assert_eq!(
+                super::media_response(&mut loaded, request.body(Vec::new()).unwrap()).status(),
+                super::StatusCode::RANGE_NOT_SATISFIABLE
+            );
+        }
+        loaded.routes.insert(
+            "/audio/karaoke",
+            super::PlaybackAsset {
+                logical_name: "audio/karaoke.m4a".into(),
+                length: 5,
+                media_type: "audio/mp4".into(),
+            },
+        );
+        let response = super::media_response(
+            &mut loaded,
+            super::Request::builder()
+                .uri("/audio/karaoke")
+                .body(Vec::new())
+                .unwrap(),
+        );
+        assert_eq!(response.status(), super::StatusCode::OK);
+        assert_eq!(response.body(), b"audio");
+    }
 
     fn presentation_fixture() -> serde_json::Value {
         serde_json::json!({

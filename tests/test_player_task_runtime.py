@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from lyricrail.diagnostics import CONTRACT
 from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
@@ -62,8 +63,8 @@ class PlayerTaskRuntimeTests(unittest.TestCase):
             )
         encoded = output.getvalue().encode("utf-8", errors="strict")
         payload = json.loads(encoded.decode("utf-8"))
-        self.assertEqual(payload["message"], "bad\ufffd diagnostic")
-        self.assertEqual(payload["nested"][0]["key\ufffd"], "Mắt em buồn")
+        self.assertEqual(payload["message"], CONTRACT["withheld"])
+        self.assertNotIn("nested", payload)
 
     def test_worker_preserves_surrogate_path_internally_but_sanitizes_output(self) -> None:
         source = "C:\\media\\song\udc90.mp4"
@@ -99,7 +100,7 @@ class PlayerTaskRuntimeTests(unittest.TestCase):
         encoded = worker_output.getvalue().encode("utf-8", errors="strict")
         payloads = [json.loads(line) for line in encoded.decode("utf-8").splitlines()]
         output = next(item for item in payloads if item["kind"] == "lyricrail.worker.output")
-        self.assertEqual(output["outputText"], "bad\ufffd output")
+        self.assertEqual(output["outputText"], CONTRACT["withheld"])
 
     def test_worker_json_fallback_rejects_invalid_control_paths_and_numbers(self) -> None:
         output = io.StringIO()
@@ -133,7 +134,7 @@ class PlayerTaskRuntimeTests(unittest.TestCase):
         failed = json.loads(lines[1], parse_constant=lambda value: self.fail(value))
         completed = json.loads(lines[2], parse_constant=lambda value: self.fail(value))
         self.assertEqual(progress["progressPercent"], "<non-finite number>")
-        self.assertEqual(progress["diagnostic"]["huge"], "<integer out of range>")
+        self.assertNotIn("diagnostic", progress)
         self.assertEqual(failed["kind"], "lyricrail.worker.failed")
         self.assertNotIn("packagePath", failed)
         self.assertEqual(
@@ -175,6 +176,21 @@ class PlayerTaskRuntimeTests(unittest.TestCase):
                 [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(30)"],
             )
         self.assertLess(time.monotonic() - started, 5.0)
+
+    def test_cancellation_after_parent_exit_terminates_pipe_holding_descendant(self) -> None:
+        context = CommandContext(cancel_after=0.3)
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "escaped.txt"
+            descendant = f"import time,pathlib; time.sleep(2); pathlib.Path({str(marker)!r}).write_text('escaped')"
+            parent = f"import subprocess,sys; subprocess.Popen([sys.executable,'-c',{descendant!r}])"
+            started = time.monotonic()
+            with self.assertRaisesRegex(RuntimeError, "controlled cancellation"):
+                _run(context, [sys.executable, "-c", parent])
+            self.assertLess(time.monotonic() - started, 1.5)
+            following = _run(CommandContext(), [sys.executable, "-c", "print('following')"])
+            self.assertEqual(following.stdout, "following")
+            time.sleep(2)
+            self.assertFalse(marker.exists())
 
     def test_hostile_unterminated_line_and_ffmpeg_progress_are_bounded_and_truthful(self) -> None:
         context = CommandContext()
@@ -225,7 +241,7 @@ class PlayerTaskRuntimeTests(unittest.TestCase):
             combined = "\n".join(str(event.get("text", "")) for event in output)
             self.assertNotIn("private.mp4", combined)
             self.assertNotIn("token=unsafe", combined)
-            self.assertIn("<local path>", combined)
+            self.assertIn(CONTRACT["withheld"], combined)
 
             store.log(
                 job["jobId"],
@@ -246,7 +262,7 @@ class PlayerTaskRuntimeTests(unittest.TestCase):
             self.assertNotIn("RAW", durable)
             self.assertNotIn("Private Song.mp4", durable)
             self.assertNotIn("trailing-name.mp4", durable)
-            self.assertIn("<redacted>", durable)
+            self.assertIn(CONTRACT["withheld"], durable)
 
             with (
                 patch("lyricrail.job.MAX_PIPELINE_LOG_BYTES", 4096),
@@ -275,12 +291,12 @@ class PlayerTaskRuntimeTests(unittest.TestCase):
         self.assertNotIn("AMZ", value)
         self.assertNotIn("RAW", value)
         self.assertNotIn("credential-value", value)
-        self.assertIn("<local path>", path)
-        self.assertIn("<remote address>", value)
-        self.assertIn("<redacted>", value)
+        self.assertIn(CONTRACT["withheld"], path)
+        self.assertIn(CONTRACT["withheld"], value)
+        self.assertIn(CONTRACT["withheld"], value)
         self.assertEqual(
             redact_diagnostic_text(r"Argument: C:\Music Library\Private Song.mp4"),
-            "Argument: <local path>",
+            CONTRACT["withheld"],
         )
 
 

@@ -103,7 +103,7 @@ class StageContext:
                     "stream": stream,
                     "level": level.upper(),
                     "stage": self.stage_key,
-                    "text": message,
+                    "text": redact_diagnostic_text(message),
                 }
             )
 
@@ -153,7 +153,7 @@ class PipelineRunner:
                     "stream": "stderr" if level.upper() in {"ERROR", "WARNING"} else "stdout",
                     "level": level.upper(),
                     "stage": stage,
-                    "text": message,
+                    "text": redact_diagnostic_text(message),
                 }
             )
 

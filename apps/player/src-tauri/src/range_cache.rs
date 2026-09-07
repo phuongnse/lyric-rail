@@ -258,6 +258,13 @@ impl RangeCache {
         object: RemoteObject,
         on_progress: DownloadProgress,
     ) -> Result<bool, String> {
+        if object.length > self.maximum_bytes
+            || object.length.div_ceil(CACHE_BLOCK_BYTES) > self.maximum_files as u64
+        {
+            return Err(
+                "Package exceeds offline cache capacity; online playback remains available".into(),
+            );
+        }
         let key = Self::object_prefix(&object);
         {
             let mut downloads = self
@@ -284,6 +291,17 @@ impl RangeCache {
                     Ok(block) => {
                         let completed =
                             ((index * CACHE_BLOCK_BYTES) + block.len() as u64).min(object.length);
+                        if completed == object.length && !cache.is_complete(&object) {
+                            on_progress(
+                                completed,
+                                object.length,
+                                Some(
+                                    "Cache blocks were evicted; package is not available offline"
+                                        .into(),
+                                ),
+                            );
+                            return;
+                        }
                         on_progress(completed, object.length, None);
                     }
                     Err(error) => {
@@ -501,6 +519,67 @@ mod tests {
     struct FixtureTransport {
         bytes: Vec<u8>,
         ranges: Mutex<Vec<(u64, u64)>>,
+    }
+
+    #[test]
+    fn offline_completion_requires_capacity_and_all_retained_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let object = RemoteObject {
+            cache_key: "bounded-offline".into(),
+            version: "1".into(),
+            length: CACHE_BLOCK_BYTES * 2,
+        };
+        let transport = Arc::new(FixtureTransport {
+            bytes: vec![0x31; object.length as usize],
+            ranges: Mutex::new(Vec::new()),
+        });
+        let too_small = Arc::new(
+            RangeCache::new(
+                directory.path().to_owned(),
+                transport.clone(),
+                Arc::new(PriorityScheduler::default()),
+            )
+            .unwrap()
+            .with_limit(CACHE_BLOCK_BYTES),
+        );
+        assert!(
+            too_small
+                .download_in_background_with_progress(
+                    object.clone(),
+                    Arc::new(|_, _, _| panic!("oversize download started"))
+                )
+                .is_err()
+        );
+        assert!(transport.ranges.lock().unwrap().is_empty());
+        let first = too_small.block_path(&object, 0);
+        let cache = Arc::new(
+            RangeCache::new(
+                directory.path().to_owned(),
+                transport,
+                Arc::new(PriorityScheduler::default()),
+            )
+            .unwrap()
+            .with_before_publish(Arc::new(move |_path| {
+                if first.is_file() {
+                    std::fs::remove_file(&first).unwrap();
+                }
+            })),
+        );
+        let (sender, receiver) = mpsc::channel();
+        cache
+            .download_in_background_with_progress(
+                object.clone(),
+                Arc::new(move |done, total, error| {
+                    sender.send((done, total, error)).unwrap();
+                }),
+            )
+            .unwrap();
+        let first = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(first.2.is_none());
+        let last = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(last.0, object.length);
+        assert!(last.2.is_some());
+        assert!(!cache.is_complete(&object));
     }
 
     impl RangeTransport for FixtureTransport {

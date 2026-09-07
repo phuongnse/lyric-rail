@@ -1,3 +1,5 @@
+import { projectDiagnostic } from "./diagnostics";
+
 export type IssueSeverity = "warning" | "error" | "blocking";
 export type IssueState = "open" | "resolving";
 export type IssueResolution = "install-models" | "retry-item" | "reconnect-drive";
@@ -28,7 +30,6 @@ export type SystemIssue = {
   native?: boolean;
 };
 
-const MAX_DETAIL = 4_000;
 
 function issueKind(title: string): string {
   return title
@@ -40,16 +41,7 @@ function issueKind(title: string): string {
 }
 
 export function safeIssueDetail(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  let value = raw
-    .replace(/https?:\/\/\S+/gi, "<remote address>")
-    .replace(/\bbearer\s+(?:"[^"]*"|'[^']*'|\S+)/gi, "Bearer <redacted>")
-    .replace(/"?(token|access_token|refresh_token|id_token|password|secret|client_secret|private_key|authorization|credential|api[-_]?key|apikey|signature|x[-_]goog[-_]signature|x[-_]amz[-_]signature)"?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi, "$1=<redacted>");
-  const windowsPath = value.search(/(?:[A-Za-z]:[\\/]|\\\\)/);
-  const unixPath = value.search(/(?:^|\s)\/(?!\/)/);
-  const pathIndex = windowsPath < 0 ? unixPath : unixPath < 0 ? windowsPath : Math.min(windowsPath, unixPath);
-  if (pathIndex >= 0) value = `${value.slice(0, pathIndex).trimEnd()} <local path>`.trim();
-  return value.slice(0, MAX_DETAIL);
+  return projectDiagnostic(error instanceof Error ? error.message : String(error));
 }
 
 export function clientIssue(

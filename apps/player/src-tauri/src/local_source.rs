@@ -378,6 +378,10 @@ pub fn scan_files(paths: Vec<PathBuf>) -> Result<Vec<CatalogItem>, String> {
 }
 
 pub fn scan_root(root: &Path) -> Result<ScanResult, String> {
+    scan_root_with_limit(root, MAX_SCAN_ENTRIES)
+}
+
+fn scan_root_with_limit(root: &Path, maximum_entries: usize) -> Result<ScanResult, String> {
     let root = root
         .canonicalize()
         .map_err(|error| format!("Unable to open {}: {error}", root.display()))?;
@@ -391,6 +395,7 @@ pub fn scan_root(root: &Path) -> Result<ScanResult, String> {
     while let Some((directory, depth)) = directories.pop_front() {
         let mut entries = fs::read_dir(&directory)
             .map_err(|error| format!("Unable to scan {}: {error}", directory.display()))?
+            .take(maximum_entries.saturating_sub(entries_seen) + 1)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 format!(
@@ -401,7 +406,7 @@ pub fn scan_root(root: &Path) -> Result<ScanResult, String> {
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             entries_seen += 1;
-            if entries_seen > MAX_SCAN_ENTRIES || candidates.len() >= MAX_SCAN_ITEMS {
+            if entries_seen > maximum_entries || candidates.len() >= MAX_SCAN_ITEMS {
                 truncated = true;
                 break;
             }
@@ -437,6 +442,19 @@ mod tests {
         clipped_local_media_item, exact_sidecar, is_media, read_authoritative_lyrics, scan_root,
     };
     use std::fs;
+
+    #[test]
+    fn directory_scan_stops_at_global_entry_budget_plus_one_sentinel() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..12 {
+            fs::write(directory.path().join(format!("{index}.mp4")), b"media").unwrap();
+        }
+        let scan = super::scan_root_with_limit(directory.path(), 3).unwrap();
+        assert!(scan.truncated);
+        assert_eq!(scan.entries_seen, 4);
+        assert_eq!(scan.items.len(), 3);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 12);
+    }
 
     #[test]
     fn exact_utf8_sidecars_pair_without_fuzzy_guessing() {

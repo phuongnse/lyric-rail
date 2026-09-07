@@ -19,6 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from lyricrail.config import load_project_config  # noqa: E402
+from lyricrail.diagnostics import CONTRACT  # noqa: E402
 from lyricrail.model_provenance import (  # noqa: E402
     assert_model_provenance,
     load_model_manifest,
@@ -32,13 +33,15 @@ DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 DOWNLOAD_TIMEOUT_SECONDS = 300
 
 
-def _emit(json_lines: bool, message: str, progress_percent: float) -> None:
+def _emit(json_lines: bool, message: str, progress_percent: float, *, phase: str = "checking", completed_bytes: int | None = None, total_bytes: int | None = None) -> None:
     if json_lines:
         print(
             json.dumps(
                 {
                     "kind": "lyricrail.model-install.progress",
-                    "message": message,
+                    "message": CONTRACT["phases"][phase],
+                    "phase": phase,
+                    **({"completedBytes": completed_bytes, "totalBytes": total_bytes} if completed_bytes is not None else {}),
                     "progressPercent": max(0.0, min(100.0, progress_percent)),
                 },
                 ensure_ascii=False,
@@ -121,6 +124,7 @@ def _download_verified_file(
         json_lines,
         f"{'Repairing incomplete cached file' if repairing else 'Downloading verified file'} for {key}: {filename}",
         progress_percent,
+        phase="downloading",
     )
     request = Request(url, headers={"User-Agent": "LyricRail/0.8 model-installer"})
     temporary: Path | None = None
@@ -150,11 +154,8 @@ def _download_verified_file(
                     digest.update(chunk)
                     percent = int(downloaded * 100 / expected_size)
                     if percent > last_percent:
-                        print(
-                            f"{percent}%| | {_format_bytes(downloaded)}/{_format_bytes(expected_size)} [verified download]",
-                            file=sys.stderr,
-                            flush=True,
-                        )
+                        _emit(json_lines, "Downloading verified model data", progress_percent,
+                              phase="downloading", completed_bytes=downloaded, total_bytes=expected_size)
                         last_percent = percent
                 output.flush()
                 os.fsync(output.fileno())
@@ -248,12 +249,13 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 raise ValueError(f"Unsupported model type in manifest: {kind}")
 
-        _emit(args.json_lines, "Verifying every pinned model hash", 95.0)
+        _emit(args.json_lines, "Verifying every pinned model hash", 95.0, phase="verifying")
         report = assert_model_provenance(PROJECT_ROOT, pipeline, verify_hashes=True)
         _emit(
             args.json_lines,
             f"Verified {len(report['checks'])} pinned models",
             100.0,
+            phase="complete",
         )
         return 0
     except URLError:

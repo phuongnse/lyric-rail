@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import tempfile
 import unittest
+from lyricrail.diagnostics import CONTRACT
 from unittest.mock import patch
 
 from lyricrail.__main__ import _execute_job
@@ -76,7 +77,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(final["status"], "failed")
         self.assertEqual(final["error"]["code"], "STAGE_EXECUTION_FAILED")
         log = self.store.logs_path(job["jobId"], "probe").read_text(encoding="utf-8")
-        self.assertIn("RuntimeError", log)
+        self.assertIn(CONTRACT["withheld"], log)
+        self.assertNotIn("model crashed", log)
 
     def test_retry_preserves_successful_stages_before_failure(self) -> None:
         def success(context: StageContext):

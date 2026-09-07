@@ -1,7 +1,6 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet, VecDeque},
-    path::PathBuf,
     sync::{Mutex, OnceLock},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -215,17 +214,6 @@ fn bounded(value: impl Into<String>, max: usize) -> String {
     value.into().chars().take(max).collect()
 }
 
-fn bounded_bytes(value: String, max: usize) -> String {
-    if value.len() <= max {
-        return value;
-    }
-    let mut end = max;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_owned()
-}
-
 fn valid_id(value: &str) -> bool {
     (3..=180).contains(&value.len())
         && value
@@ -233,170 +221,75 @@ fn valid_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
 }
 
-fn sensitive_text(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    [
-        "token=",
-        "token:",
-        "--token",
-        "password=",
-        "password:",
-        "--password",
-        "secret=",
-        "secret:",
-        "--secret",
-        "authorization",
-        "credential=",
-        "api_key",
-        "api-key",
-        "apikey",
-        "access_token",
-        "refresh_token",
-        "id_token",
-        "client_secret",
-        "private_key",
-        "bearer ",
-        "signature=",
-        "signature:",
-        "\"signature\"",
-        "x-goog-signature",
-        "x-amz-signature",
-        "x_goog_signature",
-        "x_amz_signature",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
-fn known_private_paths() -> &'static [String] {
-    static PATHS: OnceLock<Vec<String>> = OnceLock::new();
-    PATHS.get_or_init(|| {
-        [
-            std::env::var_os("USERPROFILE").map(PathBuf::from),
-            std::env::var_os("HOME").map(PathBuf::from),
-            Some(std::env::temp_dir()),
-            std::env::current_dir().ok(),
-        ]
-        .into_iter()
-        .flatten()
-        .map(|path| path.display().to_string())
-        .filter(|path| !path.is_empty())
-        .collect()
+fn diagnostic_contract() -> &'static serde_json::Value {
+    static CONTRACT: OnceLock<serde_json::Value> = OnceLock::new();
+    CONTRACT.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../src/lyricrail/diagnostic_contract.json"
+        ))
+        .expect("embedded diagnostic contract")
     })
 }
 
-fn contains_absolute_path(value: &str, known_paths: &[String]) -> bool {
-    let lower = value.to_ascii_lowercase();
-    let contains_known_path = known_paths.iter().any(|path| {
-        let path = path.to_ascii_lowercase();
-        lower.contains(&path) || lower.contains(&path.replace('\\', "/"))
-    });
-    let bytes = value.as_bytes();
-    let contains_windows_path = bytes.windows(3).enumerate().any(|(index, window)| {
-        (index == 0 || !bytes[index - 1].is_ascii_alphanumeric())
-            && window[0].is_ascii_alphabetic()
-            && window[1] == b':'
-            && matches!(window[2], b'\\' | b'/')
-    }) || value.contains("\\\\");
-    let contains_unix_path = value.split_whitespace().any(|part| {
-        let candidate = part.trim_matches(|character: char| {
-            matches!(
-                character,
-                '\'' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | ','
-            )
-        });
-        candidate.starts_with('/') && candidate.len() > 1
-    });
-    contains_known_path || contains_windows_path || contains_unix_path
+pub(crate) fn stage_title(key: &str) -> Option<String> {
+    diagnostic_contract()["stages"]
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
 }
 
 pub(crate) fn redact_diagnostic_text(value: &str) -> String {
-    let value = value.replace('\r', " ").replace('\0', "");
-    let known_paths = known_private_paths();
-    if let Some((label, payload)) = value.split_once(':')
-        && matches!(label, "Argument" | "Executable")
+    let contract = diagnostic_contract();
+    let withheld = contract["withheld"].as_str().expect("withheld message");
+    let phases = contract["phases"].as_object().expect("phases");
+    let stages = contract["stages"].as_object().expect("stages");
+    if value == withheld
+        || contract["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str() == Some(value))
+        || phases.values().any(|item| item.as_str() == Some(value))
+        || stages.contains_key(value)
+        || stages.values().any(|item| item.as_str() == Some(value))
     {
-        let replacement = if sensitive_text(payload) {
-            Some("<redacted>")
-        } else if payload.to_ascii_lowercase().contains("http://")
-            || payload.to_ascii_lowercase().contains("https://")
-        {
-            Some("<remote address>")
-        } else if contains_absolute_path(payload, known_paths) {
-            Some("<local path>")
-        } else {
-            None
-        };
-        if let Some(replacement) = replacement {
-            return bounded_bytes(format!("{label}: {replacement}"), MAX_LINE_BYTES);
-        }
+        return value.to_owned();
     }
-    let mut path_prefix = Vec::new();
-    let mut contains_path = false;
-    for part in value.split_whitespace() {
-        if contains_absolute_path(part, known_paths) {
-            contains_path = true;
-            break;
-        }
-        path_prefix.push(part);
+    if value.len() > MAX_LINE_BYTES {
+        return withheld.into();
     }
-    if contains_path {
-        let prefix = path_prefix.join(" ");
-        return if prefix.is_empty() {
-            "<local path>".into()
-        } else {
-            bounded_bytes(
-                format!("{} <local path>", redact_diagnostic_text(&prefix)),
-                MAX_LINE_BYTES,
-            )
-        };
+    let Ok(serde_json::Value::Object(item)) = serde_json::from_str(value) else {
+        return withheld.into();
+    };
+    if item.get("kind") != Some(&contract["progressKind"]) {
+        return withheld.into();
     }
-    let mut redacting_quoted_path = None;
-    let mut redact_next = 0_u8;
-    let mut parts = Vec::new();
-    for part in value.split_whitespace() {
-        if let Some(quote) = redacting_quoted_path {
-            if part.ends_with(quote) {
-                redacting_quoted_path = None;
-            }
-            continue;
-        }
-        if redact_next > 0 {
-            parts.push("<redacted>");
-            redact_next -= 1;
-            continue;
-        }
-        let lower = part.to_ascii_lowercase();
-        if lower.contains("http://") || lower.contains("https://") {
-            parts.push("<remote address>");
-        } else if sensitive_text(part) {
-            parts.push("<redacted>");
-            redact_next = if lower.starts_with("authorization:") || lower == "--authorization" {
-                2
-            } else if lower == "--token"
-                || lower == "--password"
-                || lower == "--secret"
-                || lower == "--credential"
-                || lower == "--api-key"
-                || lower == "--access-token"
-            {
-                1
-            } else {
-                0
+    let Some(phase) = item.get("phase").and_then(serde_json::Value::as_str) else {
+        return withheld.into();
+    };
+    let Some(message) = phases.get(phase) else {
+        return withheld.into();
+    };
+    let numbers = contract["numericFields"].as_object().unwrap();
+    if item.keys().any(|key| {
+        !matches!(key.as_str(), "kind" | "phase" | "message") && !numbers.contains_key(key)
+    }) {
+        return withheld.into();
+    }
+    let mut output =
+        serde_json::json!({"kind": contract["progressKind"], "phase": phase, "message": message});
+    for (field, maximum) in numbers {
+        if let Some(value) = item.get(field) {
+            let Some(number) = value.as_f64() else {
+                return withheld.into();
             };
-        } else if contains_absolute_path(part, known_paths) {
-            parts.push("<local path>");
-            let trimmed = part.trim_start_matches(['\'', '"']);
-            if part.starts_with('"') && !trimmed.ends_with('"') {
-                redacting_quoted_path = Some('"');
-            } else if part.starts_with('\'') && !trimmed.ends_with('\'') {
-                redacting_quoted_path = Some('\'');
+            if !number.is_finite() || number < 0.0 || number > maximum.as_f64().unwrap() {
+                return withheld.into();
             }
-        } else {
-            parts.push(part);
+            output[field] = value.clone();
         }
     }
-    bounded_bytes(parts.join(" "), MAX_LINE_BYTES)
+    output.to_string()
 }
 
 fn terminal(status: &TaskStatus) -> bool {
@@ -726,8 +619,8 @@ pub fn restore(app: &AppHandle, mut record: TaskRecord) -> Result<(), String> {
         return Err("Task ID is invalid".into());
     }
     record.title = bounded(record.title, 160);
-    record.stage_key = record.stage_key.map(|value| bounded(value, 100));
-    record.stage_title = record.stage_title.map(|value| bounded(value, 180));
+    record.stage_key = record.stage_key.filter(|key| stage_title(key).is_some());
+    record.stage_title = record.stage_key.as_deref().and_then(stage_title);
     record.status_message = record
         .status_message
         .map(|value| bounded(redact_diagnostic_text(&value), 240));
@@ -804,8 +697,16 @@ pub fn progress(app: &AppHandle, id: &str, update: TaskProgress) {
             let updated_at = live_timestamp(&mut inner);
             let task = inner.tasks.get_mut(id).expect("task existence checked");
             task.status = TaskStatus::Running;
-            task.stage_key = update.stage_key.map(|value| bounded(value, 100));
-            task.stage_title = update.stage_title.map(|value| bounded(value, 180));
+            task.stage_key = update.stage_key.filter(|key| stage_title(key).is_some());
+            task.stage_title = task.stage_key.as_deref().and_then(stage_title).or_else(|| {
+                update.stage_title.filter(|title| {
+                    diagnostic_contract()["messages"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|value| value.as_str() == Some(title.as_str()))
+                })
+            });
             task.stage_progress_percent = update
                 .stage_progress_percent
                 .map(|value| value.clamp(0.0, 100.0));
@@ -817,7 +718,9 @@ pub fn progress(app: &AppHandle, id: &str, update: TaskProgress) {
             };
             task.completed_units = update.completed_units;
             task.total_units = update.total_units;
-            task.unit_label = update.unit_label.map(|value| bounded(value, 40));
+            task.unit_label = update
+                .unit_label
+                .filter(|value| matches!(value.as_str(), "bytes" | "files" | "frames" | "items"));
             task.eta_seconds = eta;
             task.status_message = update
                 .message
@@ -877,8 +780,8 @@ pub fn finish(app: &AppHandle, id: &str, status: TaskStatus, message: Option<Str
     schedule_emit(app);
 }
 
-fn append_output_inner(
-    app: &AppHandle,
+fn record_output(
+    inner: &mut TaskInner,
     task_id: &str,
     stream: OutputStream,
     stage: Option<&str>,
@@ -886,51 +789,73 @@ fn append_output_inner(
     mut timestamp_millis: u64,
     update_timestamp: bool,
 ) {
+    if !inner.tasks.contains_key(task_id) {
+        return;
+    }
+    if update_timestamp {
+        timestamp_millis = timestamp_millis.max(inner.last_live_timestamp_millis);
+        inner.last_live_timestamp_millis = timestamp_millis;
+    }
+    inner.sequence = inner.sequence.saturating_add(1);
+    let line = TaskOutputLine {
+        sequence: inner.sequence,
+        timestamp_millis,
+        task_id: task_id.to_owned(),
+        stream,
+        stage: stage
+            .filter(|key| stage_title(key).is_some())
+            .map(str::to_owned),
+        text: redact_diagnostic_text(text),
+    };
+    let line_bytes = line.text.len();
+    let ring = inner.output.entry(task_id.to_owned()).or_default();
+    ring.bytes = ring.bytes.saturating_add(line_bytes);
+    ring.lines.push_back(line.clone());
+    while ring.lines.len() > MAX_OUTPUT_LINES || ring.bytes > MAX_OUTPUT_BYTES {
+        if let Some(removed) = ring.lines.pop_front() {
+            ring.bytes = ring.bytes.saturating_sub(removed.text.len());
+            ring.truncated = true;
+        }
+    }
+    queue_pending_output(inner, line);
+    let output_state = inner
+        .output
+        .get(task_id)
+        .map(|ring| (ring.lines.len(), ring.truncated));
+    if let Some(task) = inner.tasks.get_mut(task_id) {
+        if let Some((line_count, truncated)) = output_state {
+            task.output_line_count = line_count;
+            task.output_truncated = truncated;
+        }
+        if update_timestamp {
+            task.updated_at_millis = timestamp_millis;
+        }
+    }
+    inner.changed_tasks.insert(task_id.to_owned());
+}
+
+fn append_output_inner(
+    app: &AppHandle,
+    task_id: &str,
+    stream: OutputStream,
+    stage: Option<&str>,
+    text: &str,
+    timestamp_millis: u64,
+    update_timestamp: bool,
+) {
     let Some(state) = app.try_state::<TaskStateStore>() else {
         return;
     };
     if let Ok(mut inner) = state.0.lock() {
-        if !inner.tasks.contains_key(task_id) {
-            return;
-        }
-        if update_timestamp {
-            timestamp_millis = timestamp_millis.max(inner.last_live_timestamp_millis);
-            inner.last_live_timestamp_millis = timestamp_millis;
-        }
-        inner.sequence = inner.sequence.saturating_add(1);
-        let line = TaskOutputLine {
-            sequence: inner.sequence,
-            timestamp_millis,
-            task_id: task_id.to_owned(),
+        record_output(
+            &mut inner,
+            task_id,
             stream,
-            stage: stage.map(|value| bounded(value, 100)),
-            text: redact_diagnostic_text(text),
-        };
-        let line_bytes = line.text.len();
-        let ring = inner.output.entry(task_id.to_owned()).or_default();
-        ring.bytes = ring.bytes.saturating_add(line_bytes);
-        ring.lines.push_back(line.clone());
-        while ring.lines.len() > MAX_OUTPUT_LINES || ring.bytes > MAX_OUTPUT_BYTES {
-            if let Some(removed) = ring.lines.pop_front() {
-                ring.bytes = ring.bytes.saturating_sub(removed.text.len());
-                ring.truncated = true;
-            }
-        }
-        queue_pending_output(&mut inner, line);
-        let output_state = inner
-            .output
-            .get(task_id)
-            .map(|ring| (ring.lines.len(), ring.truncated));
-        if let Some(task) = inner.tasks.get_mut(task_id) {
-            if let Some((line_count, truncated)) = output_state {
-                task.output_line_count = line_count;
-                task.output_truncated = truncated;
-            }
-            if update_timestamp {
-                task.updated_at_millis = timestamp_millis;
-            }
-        }
-        inner.changed_tasks.insert(task_id.to_owned());
+            stage,
+            text,
+            timestamp_millis,
+            update_timestamp,
+        );
     }
     schedule_emit(app);
 }
@@ -1040,6 +965,68 @@ mod tests {
         collections::VecDeque,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn closed_diagnostics_are_projected_before_ring_and_event_storage_for_every_stream() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/diagnostics-v1.json"
+        ))
+        .unwrap();
+        let mut inner = TaskInner::default();
+        inner.tasks.insert(
+            "fixture-task".into(),
+            record("fixture-task", TaskStatus::Running),
+        );
+        for case in cases.as_array().unwrap() {
+            let input = case["input"].as_str().unwrap();
+            let output = redact_diagnostic_text(input);
+            assert!(!output.contains("TOPSECRET"));
+            if case["expected"].is_object() {
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&output).unwrap(),
+                    case["expected"]
+                );
+            } else {
+                assert_eq!(
+                    output,
+                    case["expected"]
+                        .as_str()
+                        .unwrap_or(super::diagnostic_contract()["withheld"].as_str().unwrap())
+                );
+            }
+            for stream in [
+                OutputStream::Stdout,
+                OutputStream::Stderr,
+                OutputStream::Progress,
+                OutputStream::System,
+            ] {
+                super::record_output(
+                    &mut inner,
+                    "fixture-task",
+                    stream.clone(),
+                    Some("TOPSECRET"),
+                    input,
+                    1,
+                    true,
+                );
+                super::record_output(
+                    &mut inner,
+                    "fixture-task",
+                    stream,
+                    Some("TOPSECRET"),
+                    input,
+                    1,
+                    false,
+                );
+            }
+        }
+        for line in &inner.pending_output {
+            assert!(!serde_json::to_string(line).unwrap().contains("TOPSECRET"));
+        }
+        for line in &inner.output["fixture-task"].lines {
+            assert!(!serde_json::to_string(line).unwrap().contains("TOPSECRET"));
+        }
+    }
 
     fn record(id: &str, status: TaskStatus) -> TaskRecord {
         TaskRecord {
@@ -1152,9 +1139,9 @@ mod tests {
         assert!(!secret.contains("AMZ"));
         assert!(!secret.contains("RAW"));
         assert!(!secret.contains("value"));
-        assert!(path.contains("<local path>"));
-        assert!(remote.contains("<remote address>"));
-        assert!(secret.contains("<redacted>"));
+        assert!(path.contains("Diagnostic text withheld"));
+        assert!(remote.contains("Diagnostic text withheld"));
+        assert!(secret.contains("Diagnostic text withheld"));
 
         let mut ring = OutputRing::default();
         for sequence in 0..(MAX_OUTPUT_LINES + 20) as u64 {

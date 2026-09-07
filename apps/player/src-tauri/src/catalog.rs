@@ -375,6 +375,16 @@ impl Catalog {
         };
         let mut document = document;
         for item in &mut document.items {
+            if let Some(evidence) = item.processing_task_evidence.as_mut() {
+                evidence.stage_key = evidence
+                    .stage_key
+                    .take()
+                    .filter(|key| crate::tasks::stage_title(key).is_some());
+                evidence.stage_title = evidence
+                    .stage_key
+                    .as_deref()
+                    .and_then(crate::tasks::stage_title);
+            }
             item.status_message = item
                 .status_message
                 .take()
@@ -703,11 +713,18 @@ impl Catalog {
     pub fn set_processing_task_evidence(
         &mut self,
         id: &str,
-        evidence: ProcessingTaskEvidence,
+        mut evidence: ProcessingTaskEvidence,
     ) -> bool {
         let Some(item) = self.item_mut(id) else {
             return false;
         };
+        evidence.stage_key = evidence
+            .stage_key
+            .filter(|key| crate::tasks::stage_title(key).is_some());
+        evidence.stage_title = evidence
+            .stage_key
+            .as_deref()
+            .and_then(crate::tasks::stage_title);
         item.processing_task_evidence = Some(evidence);
         true
     }

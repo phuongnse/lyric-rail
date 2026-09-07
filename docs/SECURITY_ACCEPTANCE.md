@@ -62,9 +62,11 @@ current evidence for each claimed platform.
       state comes only from encrypted/authenticated catalog evidence, while clear job
       manifests/log tails require the matching catalog job ID and exact authoritative-
       lyric hash before attachment.
-- [x] Pending live-output shedding signals replay from the retained ring; JSON/underscore
-      credential names, Bearer values and spaced absolute paths are redacted before
-      durable logs, native events or clipboard copy.
+- [x] Pending live-output shedding signals replay from the retained ring. A shared
+      closed diagnostic contract retains fixed messages and typed numeric progress;
+      arbitrary subprocess text is withheld before durable logs, native events,
+      command-error IPC or clipboard copy. Synthetic credential fixtures exercise
+      every native stream and shared Python/Rust/TypeScript projection.
 - [x] OS-native paths round-trip internal valid UTF-8 JSON through ASCII surrogate
       escapes; lone surrogates are replaced only in bounded diagnostics and portable
       display labels. Worker diagnostics use one global depth/node/byte budget and

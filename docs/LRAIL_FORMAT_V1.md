@@ -222,6 +222,13 @@ atomic switch, with the old package retained as rollback until the published pat
 verifies. Revision requests cannot change a playback asset's declared role or add an
 arbitrary logical name.
 
+Device-vault writers select the current master while holding the cross-process
+rotation lock, retaining that lock through verification, publication and rollback.
+Low-level explicit-key APIs require callers to own their key/publication lifecycle.
+Timing revisions map authenticated `referenceGroup` semantic phrases onto existing
+display rows and their word counts. Reflow and role splitting do not change the
+authoritative lyric line count; whitespace-only revisions retain display timing.
+
 ## Request-bound publication recovery
 
 The package format is unchanged, but the local pipeline binds durable publication to

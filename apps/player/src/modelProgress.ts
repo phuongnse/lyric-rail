@@ -1,4 +1,5 @@
 import type { TaskOutputLine } from "./tasks";
+import { projectDiagnostic } from "./diagnostics";
 
 export type ModelTransferProgress = {
   percent: number;
@@ -24,6 +25,16 @@ function amountLabel(token: string): string {
 }
 
 export function parseModelTransferProgress(text: string): ModelTransferProgress | undefined {
+  if (text.startsWith("{")) {
+    try {
+      const value = JSON.parse(projectDiagnostic(text)) as { phase?: string; completedBytes?: number; totalBytes?: number };
+      if (value.phase !== "downloading" || value.completedBytes == null || !value.totalBytes) return undefined;
+      const completed = String(value.completedBytes);
+      const total = String(value.totalBytes);
+      return { percent: Math.min(100, value.completedBytes / value.totalBytes * 100), completed, total,
+        completedLabel: `${completed} bytes`, totalLabel: `${total} bytes` };
+    } catch { return undefined; }
+  }
   const match = text.replace(ANSI_ESCAPE, "").match(TRANSFER_LINE);
   if (!match) return undefined;
   const percent = Number(match[1]);
@@ -66,6 +77,10 @@ export function modelProgressMessage(text: string): string | undefined {
 }
 
 export function isModelDownloadMarker(text: string): boolean {
+  try {
+    const value = JSON.parse(projectDiagnostic(text)) as { phase?: string };
+    if (value.phase) return true;
+  } catch { /* Legacy output has no typed phase. */ }
   const message = modelProgressMessage(text);
   return Boolean(message && DOWNLOAD_MESSAGE.test(message));
 }

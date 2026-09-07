@@ -5,7 +5,7 @@ use crate::{
     Error, LockedSecret, Result,
     crypto::KEY_BYTES,
     package::{PackagedAsset, pack_for_vault},
-    schema::PackageRequest,
+    schema::{PackageRequest, PackageRevisionReport, PackageRevisionRequest},
 };
 
 pub(crate) const VAULT_SERVICE: &str = "com.lyricrail.keys";
@@ -78,6 +78,40 @@ pub fn pack_for_device_vault(
     let _guard = acquire_vault_operation_lock()?;
     let vault_master = load_or_create_vault_master_unlocked()?;
     pack_for_vault(request, output, &vault_master, recovery_passphrase)
+}
+
+fn with_locked_vault_master<T>(
+    load: impl FnOnce() -> Result<Option<LockedSecret<KEY_BYTES>>>,
+    operation: impl FnOnce(&LockedSecret<KEY_BYTES>) -> Result<T>,
+) -> Result<T> {
+    let _guard = acquire_vault_operation_lock()?;
+    let master =
+        load()?.ok_or_else(|| Error::Vault("library master key is not initialized".into()))?;
+    operation(&master)
+}
+
+/// Selects the current device key under the rotation lock and keeps that lock
+/// until the new revision has been authenticated and published.
+pub fn revise_package_for_device_vault(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    request: &PackageRevisionRequest,
+) -> Result<PackageRevisionReport> {
+    with_locked_vault_master(
+        || load_vault_account(VAULT_ACCOUNT),
+        |master| crate::package::revise_package_for_vault(input, output, master, request),
+    )
+}
+
+/// Serializes in-place revision, including rollback verification, with rotation.
+pub fn revise_package_in_place_for_device_vault(
+    input: &std::path::Path,
+    request: &PackageRevisionRequest,
+) -> Result<PackageRevisionReport> {
+    with_locked_vault_master(
+        || load_vault_account(VAULT_ACCOUNT),
+        |master| crate::package::revise_package_in_place_for_vault(input, master, request),
+    )
 }
 
 pub struct VaultOperationGuard {
@@ -169,6 +203,87 @@ impl Drop for VaultOperationGuard {
 #[cfg(test)]
 mod tests {
     use super::{KEY_BYTES, decode_master};
+
+    #[test]
+    fn revision_selects_key_only_after_rotation_and_holds_lock_through_publication() {
+        use crate::{AssetRequest, ContentEncoding, PackageRequest, PackageRevisionRequest};
+        use std::{
+            sync::{Arc, Mutex, mpsc},
+            thread,
+            time::Duration,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let lyrics = directory.path().join("lyrics.txt");
+        std::fs::write(&lyrics, b"Exact words").unwrap();
+        let asset = AssetRequest {
+            logical_name: "lyrics/authoritative.txt".into(),
+            path: lyrics,
+            media_type: "text/plain; charset=utf-8".into(),
+            kind: "authoritative-lyrics".into(),
+            track_name: None,
+            language: None,
+            default: false,
+            content_encoding: ContentEncoding::Identity,
+        };
+        let package = directory.path().join("song.lrail");
+        let old = [0x21; KEY_BYTES];
+        let new = [0x22; KEY_BYTES];
+        let request = PackageRequest {
+            metadata: serde_json::json!({}),
+            assets: vec![asset.clone()],
+            producer: "fixture".into(),
+            minimum_player_version: "0.8.0".into(),
+        };
+        crate::pack_for_vault(&request, &package, &old, None).unwrap();
+        let current = Arc::new(Mutex::new(old));
+        let rotation_guard = super::acquire_vault_operation_lock().unwrap();
+        let (loaded_tx, loaded_rx) = mpsc::channel();
+        let (publishing_tx, publishing_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = mpsc::channel();
+        let worker_key = current.clone();
+        let worker_package = package.clone();
+        let worker = thread::spawn(move || {
+            super::with_locked_vault_master(
+                || {
+                    loaded_tx.send(()).unwrap();
+                    decode_master(worker_key.lock().unwrap().to_vec()).map(Some)
+                },
+                |master| {
+                    publishing_tx.send(()).unwrap();
+                    finish_rx.recv().unwrap();
+                    crate::revise_package_in_place_for_vault(
+                        &worker_package,
+                        master,
+                        &PackageRevisionRequest {
+                            metadata: None,
+                            producer: None,
+                            assets: vec![asset],
+                        },
+                    )
+                },
+            )
+            .unwrap();
+        });
+        assert!(loaded_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        let rotated = directory.path().join("rotated.lrail");
+        crate::rewrap_package_for_vaults(&package, &rotated, &[&old], &[&new]).unwrap();
+        std::fs::copy(&rotated, &package).unwrap();
+        *current.lock().unwrap() = new;
+        drop(rotation_guard);
+        loaded_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        publishing_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let contender = thread::spawn(move || {
+            let _guard = super::acquire_vault_operation_lock().unwrap();
+            locked_tx.send(()).unwrap();
+        });
+        assert!(locked_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        finish_tx.send(()).unwrap();
+        worker.join().unwrap();
+        contender.join().unwrap();
+        crate::verify_package_with_vault(&package, &new).unwrap();
+        assert!(crate::verify_package_with_vault(&package, &old).is_err());
+    }
 
     #[test]
     fn credential_bytes_enter_locked_memory_and_invalid_lengths_fail_closed() {

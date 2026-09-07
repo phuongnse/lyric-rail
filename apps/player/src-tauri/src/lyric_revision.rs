@@ -7,7 +7,7 @@ use std::{
 
 use lrail_format::{
     AssetRequest, ContentEncoding, PackageReader, PackageRevisionRequest, load_vault_master,
-    revise_package_in_place_for_vault,
+    revise_package_in_place_for_device_vault,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -56,7 +56,10 @@ fn semantic_lines(text: &str) -> Result<Vec<String>, String> {
         return Err("Revised lyrics exceed the UTF-8 text bound".into());
     }
     let lines = text
-        .lines()
+        .split([
+            '\n', '\r', '\u{000b}', '\u{000c}', '\u{001c}', '\u{001d}', '\u{001e}', '\u{0085}',
+            '\u{2028}', '\u{2029}',
+        ])
         .filter(|line| !line.trim().is_empty())
         .map(str::to_owned)
         .collect::<Vec<_>>();
@@ -98,6 +101,7 @@ fn update_text_identical_timing(
     lines: &[String],
     sha256: &str,
 ) -> Result<bool, String> {
+    let display_texts = revision_display_texts(timing, lines)?;
     let object = timing
         .as_object_mut()
         .ok_or_else(|| "Timing payload is not an object".to_string())?;
@@ -105,13 +109,8 @@ fn update_text_identical_timing(
         .get_mut("lines")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| "Timing payload has no lines".to_string())?;
-    if timed_lines.len() != lines.len() {
-        return Err(
-            "This edit changes the sung line structure; reprocess the original local media".into(),
-        );
-    }
     let mut acoustic_change = false;
-    for (line, exact_text) in timed_lines.iter_mut().zip(lines) {
+    for (line, exact_text) in timed_lines.iter_mut().zip(&display_texts) {
         let object = line
             .as_object_mut()
             .ok_or_else(|| "Timing line is not an object".to_string())?;
@@ -136,7 +135,7 @@ fn update_text_identical_timing(
         .iter()
         .map(|line| line.split_whitespace().count())
         .sum::<usize>();
-    object.insert("lineCount".into(), json!(lines.len()));
+    object.insert("lineCount".into(), json!(display_texts.len()));
     if let Some(authoritative) = object
         .get_mut("authoritativeLyrics")
         .and_then(Value::as_object_mut)
@@ -152,6 +151,88 @@ fn update_text_identical_timing(
         diagnostics.insert("inputSha256".into(), Value::String(sha256.into()));
     }
     Ok(false)
+}
+
+fn revision_display_texts(timing: &Value, lines: &[String]) -> Result<Vec<String>, String> {
+    let rows = timing
+        .get("lines")
+        .and_then(Value::as_array)
+        .ok_or("Timing payload has no lines")?;
+    let grouped = rows.iter().any(|row| row.get("referenceGroup").is_some());
+    let mut groups: Vec<Vec<&Value>> = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let group = if grouped {
+            row.get("referenceGroup")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or("Revision semantic group mapping is invalid")?
+        } else {
+            index + 1
+        };
+        if group == groups.len() + 1 {
+            groups.push(Vec::new());
+        } else if group == 0 || group != groups.len() {
+            return Err("Revision semantic groups are not contiguous".into());
+        }
+        groups.last_mut().expect("validated group").push(row);
+    }
+    if groups.len() != lines.len() {
+        return Err(
+            "This edit changes the sung line structure; reprocess the original local media".into(),
+        );
+    }
+    let mut result = Vec::new();
+    for (rows, exact) in groups.iter().zip(lines) {
+        let words = exact.split_whitespace().collect::<Vec<_>>();
+        let mut offset = 0;
+        for row in rows {
+            let text = row
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or("Revision display text is invalid")?;
+            let syllables = row
+                .get("syllables")
+                .and_then(Value::as_array)
+                .ok_or("Timing line has no syllables")?;
+            let old_words = syllables
+                .iter()
+                .map(|word| word.get("text").and_then(Value::as_str))
+                .collect::<Option<Vec<_>>>()
+                .ok_or("Timing word is invalid")?;
+            if old_words.is_empty() || text.split_whitespace().collect::<Vec<_>>() != old_words {
+                return Err("Revision display text does not match authenticated words".into());
+            }
+            let revised = words.get(offset..offset + old_words.len()).ok_or(
+                "This edit changes a sung word boundary; reprocess the original local media",
+            )?;
+            offset += old_words.len();
+            let replacement = if !grouped {
+                exact.clone()
+            } else if old_words == revised {
+                text.to_owned()
+            } else {
+                let mut output = String::new();
+                let mut remaining = text;
+                for (old, new) in old_words.iter().zip(revised) {
+                    let start = remaining
+                        .find(|character: char| !character.is_whitespace())
+                        .ok_or("Revision word mapping is invalid")?;
+                    output.push_str(&remaining[..start]);
+                    output.push_str(new);
+                    remaining = &remaining[start + old.len()..];
+                }
+                output.push_str(remaining);
+                output
+            };
+            result.push(replacement);
+        }
+        if offset != words.len() {
+            return Err(
+                "This edit changes a sung word boundary; reprocess the original local media".into(),
+            );
+        }
+    }
+    Ok(result)
 }
 
 fn ass_escape(text: &str) -> String {
@@ -463,9 +544,8 @@ pub fn revise(app: AppHandle, item_id: String, text: String) -> Result<(), Strin
     if let Ok(mut loaded) = app.state::<PlayerState>().loaded.lock() {
         loaded.take();
     }
-    revise_package_in_place_for_vault(
+    revise_package_in_place_for_device_vault(
         &path,
-        &master,
         &PackageRevisionRequest {
             metadata: Some(metadata),
             producer: Some("LyricRail Player lyric revision".into()),
@@ -543,6 +623,44 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn semantic_groups_keep_reflow_rows_and_word_scopes_authoritative() {
+        let mut timing = json!({"lines": [
+            {"referenceGroup":1,"text":"One  two","syllables":[{"text":"One"},{"text":"two"}]},
+            {"referenceGroup":1,"text":"three","syllables":[{"text":"three"}]},
+            {"referenceGroup":2,"text":"Again","syllables":[{"text":"Again"}]}
+        ], "authoritativeLyrics":{}});
+        let exact = vec![" One two three ".into(), "Again".into()];
+        assert!(!update_text_identical_timing(&mut timing, &exact, "exact-hash").unwrap());
+        assert_eq!(timing["lines"][0]["text"], "One  two");
+        assert_eq!(timing["lineCount"], 3);
+        assert_eq!(timing["authoritativeLyrics"]["lineCount"], 2);
+        let revised = vec!["One new three".into(), "Again".into()];
+        assert_eq!(
+            super::revision_display_texts(&timing, &revised).unwrap(),
+            ["One  new", "three", "Again"]
+        );
+        assert!(update_text_identical_timing(&mut timing, &revised, "changed-hash").unwrap());
+        for invalid in [
+            json!(0),
+            json!(3),
+            json!(true),
+            json!(1.5),
+            serde_json::Value::Null,
+        ] {
+            let mut malformed = timing.clone();
+            malformed["lines"][1]["referenceGroup"] = invalid;
+            assert!(super::revision_display_texts(&malformed, &exact).is_err());
+        }
+        assert!(
+            super::revision_display_texts(&timing, &["One two".into(), "Again".into()]).is_err()
+        );
+        assert_eq!(
+            semantic_lines("One\rTwo\u{2028}Three\r\nFour").unwrap(),
+            ["One", "Two", "Three", "Four"]
+        );
+    }
+
+    #[test]
     fn exact_text_is_preserved_and_acoustic_changes_require_alignment() {
         let mut timing = json!({
             "lines": [{
@@ -562,7 +680,7 @@ mod tests {
         );
         assert_eq!(identical["lines"][0]["text"], "  Xin chao  ");
         assert!(
-            update_text_identical_timing(&mut timing, &["Xin chào bạn".into()], "hash").unwrap()
+            update_text_identical_timing(&mut timing, &["Xin chào bạn".into()], "hash").is_err()
         );
 
         let mut plan = json!({"events": [{"lineIndex": 1, "line": {}}]});

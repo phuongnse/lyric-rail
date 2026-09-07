@@ -30,9 +30,9 @@ describe("system issue model", () => {
     expect(remote).not.toContain("TOPSECRET");
     expect(remote).not.toContain("GOOG");
     expect(remote).not.toContain("RAW");
-    expect(detail).toContain("<local path>");
-    expect(remote).toContain("<remote address>");
-    expect(safeIssueDetail("failed at /home/name/private.txt")).toBe("failed at <local path>");
+    expect(detail).toContain("Diagnostic text withheld");
+    expect(remote).toContain("Diagnostic text withheld");
+    expect(safeIssueDetail("failed at /home/name/private.txt")).toContain("Diagnostic text withheld");
   });
 
   it("places native and client issues into one newest-first center", () => {

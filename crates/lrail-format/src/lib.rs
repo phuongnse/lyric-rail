@@ -37,4 +37,7 @@ pub use schema::{
     PackageRevisionReport, PackageRevisionRequest, VerificationReport,
 };
 pub use secret::{LockedSecret, LockedString};
-pub use vault::{load_or_create_vault_master, load_vault_master, pack_for_device_vault};
+pub use vault::{
+    load_or_create_vault_master, load_vault_master, pack_for_device_vault,
+    revise_package_for_device_vault, revise_package_in_place_for_device_vault,
+};

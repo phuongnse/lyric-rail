@@ -1172,7 +1172,9 @@ mod tests {
                     Err(error) => panic!("range fixture accept failed: {error}"),
                 };
                 stream.set_nonblocking(false).unwrap();
-                stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
                 let request = String::from_utf8_lossy(&read_http_request(&mut stream)).into_owned();
                 let range = request
                     .lines()
@@ -1383,7 +1385,38 @@ mod tests {
         );
         let requests = requests.lock().unwrap();
         assert!(requests[1].contains("pageSize=1000"));
+        assert!(requests[1].contains("incompleteSearch"));
         assert!(requests[2].contains("pageToken=next"));
+    }
+
+    #[test]
+    fn incomplete_folder_result_is_never_returned_for_reconciliation() {
+        let body = br#"{"files":[],"incompleteSearch":true}"#;
+        let response = http_response(
+            "200 OK",
+            &[("Content-Type", "application/json".into())],
+            body,
+        );
+        let (base, requests, server) = fixture_server(vec![response]);
+        let provider = Arc::new(
+            GoogleTokenProvider::new_with_store(
+                config_with_base(&base),
+                Some(TokenResponse {
+                    access_token: "access".into(),
+                    refresh_token: None,
+                    expires_in: 3600,
+                }),
+                Arc::new(MemoryStore::default()),
+            )
+            .unwrap(),
+        );
+        assert!(
+            super::list_children(&Client::new(), &provider, "folder", 100)
+                .unwrap_err()
+                .contains("incomplete")
+        );
+        server.join().unwrap();
+        assert!(requests.lock().unwrap()[0].contains("incompleteSearch"));
     }
 
     #[test]

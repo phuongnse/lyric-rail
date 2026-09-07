@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use lrail_format::{
     LockedString, PackageRequest, PackageRevisionRequest, export_recovery_bundle, inspect_package,
     inspect_recovery_bundle, load_vault_master, pack_for_device_vault, restore_recovery_bundle,
-    revise_package_for_vault,
+    revise_package_for_device_vault,
     runtime::{
         RUNTIME_MANIFEST_NAME, RUNTIME_SIGNATURE_NAME, RuntimeExecutables, create_runtime_manifest,
         generate_runtime_keypair, runtime_platform, sign_runtime_manifest, verify_runtime_pack,
@@ -197,8 +197,7 @@ fn run() -> Result<()> {
                 .with_context(|| format!("unable to read {}", request.display()))?;
             let revision: PackageRevisionRequest = serde_json::from_slice(&request_bytes)
                 .with_context(|| format!("invalid revision request {}", request.display()))?;
-            let vault_master = load_vault_master()?;
-            let report = revise_package_for_vault(&input, &output, &vault_master, &revision)?;
+            let report = revise_package_for_device_vault(&input, &output, &revision)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::Inspect { input } => {

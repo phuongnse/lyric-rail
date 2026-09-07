@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,44 @@ from .song_alignment import force_align_song_lines
 
 
 MAXIMUM_TIMING_BYTES = 16 * 1024 * 1024
+
+
+def revision_display_texts(current_lines: list[dict[str, Any]], exact_lines: list[str]) -> list[str]:
+    grouped = any("referenceGroup" in line for line in current_lines)
+    groups: list[list[dict[str, Any]]] = []
+    for index, line in enumerate(current_lines):
+        group = line.get("referenceGroup") if grouped else index + 1
+        if type(group) is not int or group < 1 or group > len(groups) + 1:
+            raise ValueError("Revision semantic group mapping is invalid")
+        if group == len(groups) + 1:
+            groups.append([])
+        elif group != len(groups):
+            raise ValueError("Revision semantic groups are not contiguous")
+        groups[-1].append(line)
+    if len(groups) != len(exact_lines):
+        raise ValueError("This edit changes the sung line structure; reprocess the original local media")
+    result: list[str] = []
+    for rows, exact in zip(groups, exact_lines):
+        words = exact.split()
+        counts = [len(row.get("syllables", [])) for row in rows]
+        if sum(counts) != len(words) or any(count == 0 for count in counts):
+            raise ValueError("This edit changes a sung word boundary; reprocess the original local media")
+        offset = 0
+        for row, count in zip(rows, counts):
+            text = row.get("text")
+            old_words = [word.get("text") for word in row["syllables"]]
+            if not isinstance(text, str) or text.split() != old_words:
+                raise ValueError("Revision display text does not match authenticated words")
+            revised = words[offset:offset + count]
+            offset += count
+            if not grouped:
+                result.append(exact)
+            elif old_words == revised:
+                result.append(text)
+            else:
+                replacements = iter(revised)
+                result.append(re.sub(r"\S+", lambda _: next(replacements), text))
+    return result
 
 
 def align_revision_scope(
@@ -39,14 +78,11 @@ def align_revision_scope(
     authoritative = load_authoritative_lyrics(lyrics_path)
     exact_lines = list(authoritative.lines)
     current_lines = timing["lines"]
-    if len(exact_lines) != len(current_lines):
-        raise ValueError(
-            "This edit changes the sung line structure; reprocess the original local media"
-        )
+    display_texts = revision_display_texts(current_lines, exact_lines)
 
     candidate = deepcopy(current_lines)
     changed: set[int] = set()
-    for index, (line, exact_text) in enumerate(zip(candidate, exact_lines)):
+    for index, (line, exact_text) in enumerate(zip(candidate, display_texts)):
         if not isinstance(line, dict) or not isinstance(line.get("syllables"), list):
             raise ValueError("Revision timing line has no syllables")
         current_text = str(line.get("text", ""))
@@ -79,12 +115,12 @@ def align_revision_scope(
             target_line_indexes=changed,
         )
 
-    for index, exact_text in enumerate(exact_lines):
+    for index, exact_text in enumerate(display_texts):
         candidate[index]["text"] = exact_text
     digest = hashlib.sha256(authoritative.text.encode("utf-8")).hexdigest()
     word_count = sum(len(line.split()) for line in exact_lines)
     timing["lines"] = candidate
-    timing["lineCount"] = len(exact_lines)
+    timing["lineCount"] = len(candidate)
     authoritative_metadata = timing.setdefault("authoritativeLyrics", {})
     authoritative_metadata.update(
         {

@@ -221,9 +221,10 @@ def test_model_installer_verifies_only_after_all_controlled_downloads(
     assert model_path.read_bytes() == complete
     assert not list(model_directory.glob("*.part"))
     payloads = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert any("Repairing incomplete cached file" in payload["message"] for payload in payloads)
+    assert any(payload.get("phase") == "downloading" for payload in payloads)
     assert payloads[-1]["progressPercent"] == 100.0
-    assert payloads[-1]["message"] == "Verified 2 pinned models"
+    assert payloads[-1]["phase"] == "complete"
+    assert payloads[-1]["message"] == "Model setup complete"
 
 
 def test_atomic_model_download_preserves_existing_file_on_hostile_response(
