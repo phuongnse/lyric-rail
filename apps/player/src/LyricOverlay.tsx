@@ -342,7 +342,6 @@ export function paintLyricToken(node: HTMLElement, time: number): void {
   if (!Number.isFinite(start) || !Number.isFinite(end)) return;
   const fill = end <= start ? (time >= end ? 100 : 0) : clampPercent((time - start) / (end - start) * 100);
   node.style.setProperty("--fill", `${fill}%`);
-  node.style.setProperty("--fill-ratio", `${fill / 100}`);
   node.classList.toggle("is-empty", fill <= 0);
   node.classList.toggle("is-full", fill >= 100);
 }
@@ -363,7 +362,7 @@ function KaraokeToken({
   const fill = start == null || end == null
     ? 0
     : end <= start ? (time >= end ? 100 : 0) : clampPercent((time - start) / (end - start) * 100);
-  const style = { "--fill": `${fill}%`, "--fill-ratio": fill / 100 } as CSSProperties;
+  const style = { "--fill": `${fill}%` } as CSSProperties;
   return (
     <span
       className={`lyric-token${cue ? " lyric-cue-dot" : ""}${fill <= 0 ? " is-empty" : ""}${fill >= 100 ? " is-full" : ""}`}

@@ -159,7 +159,8 @@ source word interval. Stored font-family/weight/size/scale, cue-font-size,
 outline-width and shadow-offset hints remain valid v1 data for producers and other
 renderers but do not control these Player cosmetics. This display change neither
 rewrites package assets nor changes the v1 wire schema or producer ASS output. Cue
-colors interpolate continuously on the same frame clock as word paint, while a fixed
+colors reveal continuously from left to right on the same frame clock as word paint,
+while a fixed
 font-metric baseline keeps their centers stable. For ordinary one-row slots, the
 top/bottom visual gap equals the lower safe margin; wrapped bottom pages reserve their
 second row before placing the top slot.

@@ -165,7 +165,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .lyric-cue-dot > span { width: 100%; height: 100%; border-radius: 50%; }
 .lyric-cue-dot .lyric-token-shadow { background: var(--lyric-shadow); box-shadow: 0 0 0 calc(var(--lyric-outer-width) / 2) var(--lyric-shadow); }
 .lyric-cue-dot .lyric-token-outline { background: var(--lyric-unsung); box-shadow: 0 0 0 calc(var(--lyric-outer-width) / 2) var(--lyric-outer); }
-.lyric-cue-dot .lyric-word { visibility: visible; background: var(--role); box-shadow: 0 0 0 calc(var(--lyric-inner-width) / 2) var(--lyric-inner); clip-path: none; opacity: var(--fill-ratio); }
+.lyric-cue-dot .lyric-word { width: var(--fill); overflow: hidden; justify-self: start; visibility: visible; border-radius: 0; background: none; clip-path: none; opacity: 1; }
+.lyric-cue-dot .lyric-word::before { display: block; width: var(--lyric-cue-size); height: var(--lyric-cue-size); box-sizing: border-box; border: calc(var(--lyric-inner-width) / 2) solid var(--lyric-inner); border-radius: 50%; background: var(--role); content: ""; }
 
 .transport { padding: 13px 16px 14px; box-shadow: none; }
 .timeline { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 10px; color: var(--muted); font-size: var(--font-small); font-variant-numeric: tabular-nums; }

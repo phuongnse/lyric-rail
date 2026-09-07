@@ -259,7 +259,6 @@ describe("shared karaoke core", () => {
     media.current.currentTime = 13.5;
     await act(async () => callback?.(16));
     expect(word.style.getPropertyValue("--fill")).toBe("50%");
-    expect(word.style.getPropertyValue("--fill-ratio")).toBe("0.5");
     expect(request).toHaveBeenCalledTimes(2);
     await act(async () => root.unmount());
     expect(cancel).toHaveBeenCalledWith(7);
