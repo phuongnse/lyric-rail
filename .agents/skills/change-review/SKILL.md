@@ -6,7 +6,29 @@ description: Review the exact verified snapshot from an independent actor and co
 # Review a change
 
 The reviewer must not share either actor identity or execution context with an
-implementer in the current cycle. Read `processctl change status --change-id ID`.
+implementer in the current cycle. An implementer must hand off this phase to an
+actual reviewer, not perform it under another identity.
+
+For a new agent review, spawn a fresh agent/session without the implementation
+conversation. Supply the accepted contract and plan, recorded `comparisonBaseCommit`, candidate
+path/checkpoint, and verification evidence. Request an independent assessment of
+the complete diff and relevant code/tests without suggesting a verdict. The same
+model, provider, or account may be used. If the environment cannot run or reach an
+independent reviewer, leave the change awaiting review and report that missing
+handoff.
+
+Use `comparisonBaseCommit` from lifecycle output or the run state; never re-resolve
+the original moving ref after implementation. Older runs may lack this field. Keep
+their accepted comparison boundary explicit and establish the complete diff from
+available history; if it cannot be established, request an owner-selected replacement
+contract rather than claiming the base was pinned at start.
+
+Use the runner's returned reviewer handle to continue the real reviewer. Record its
+actor/context in the existing assignment and retain the native task/session
+interaction and returned result for inspection. Distinct identity strings alone do
+not demonstrate that a review ran.
+
+Read `processctl change status --change-id ID`.
 When the phase is `verified`, start the assignment:
 
     processctl change review start --change-id ID --actor REVIEWER --context REVIEW_CONTEXT
@@ -27,6 +49,22 @@ current lifecycle gate and is not derived mechanically from priority. Ideas outs
 the contract are proposals, not blocking findings. approved may contain non-blocking
 observations but no blocking finding; changes-requested requires at least one blocking
 finding.
+
+Carry every previously open blocking finding into the next report with its identity
+unchanged. It must remain blocking or have a `resolved` disposition with the reason
+the reviewed snapshot closes it. Omission, `accepted-risk`, and `tracked-follow-up`
+cannot retire a blocker. This also applies to older report versions; their ordinary
+non-blocking observations keep the existing compatibility rules.
+
+Assess accepted design criteria separately from passing checks. Use
+**production-engineering** design guidance to trace a significant behavior and a
+concrete maintenance scenario grounded in current requirements through the affected
+code, callers, and dependencies. Evaluate both the effort to understand the flow and
+the reach of a change. A design finding must identify the violated criterion, source
+location, and concrete correctness, comprehension, or maintenance consequence.
+Apply the existing blocking rules to demonstrated violations even when tests pass;
+preference for a pattern, shorter code, or a different valid structure is insufficient.
+Do not retrofit new design criteria into the frozen contract.
 
 Read **production-engineering** and independently reassess every canonical invariant.
 Use the report's `productionEngineering` entries to record `satisfied`,
@@ -60,7 +98,10 @@ For a planned-to-enforced transition, require the explicit readiness diff and cu
 consumer-owned evidence; reject promotion by prose, stale evidence, or renamed gap.
 Do not block the change merely because unrelated planned capabilities still exist.
 
-Validate and submit the report:
+The reviewer authors the verdict, findings, and assessments, then validates and
+submits its report. If only the coordinator can submit, it transports the reviewer's
+returned report unchanged. Report errors go back to the assigned reviewer for
+correction; the coordinator must not fill in or rewrite the review content.
 
     processctl contract validate --kind review REPORT_PATH
     processctl change review submit --change-id ID --review REPORT_PATH
