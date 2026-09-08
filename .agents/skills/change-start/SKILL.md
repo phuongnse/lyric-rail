@@ -10,6 +10,21 @@ behavior. Write a change contract containing the source request, comparison base
 risk, affected projects, observable acceptance criteria, and required verification
 profiles. Do not decide unresolved product behavior silently.
 
+When the work produces a PR description, release notes or an automation name, inspect the consumer's
+selected artifact standard and existing publication checks. The consumer may override
+the packaged defaults. Keep document-format choices separate from lifecycle approval.
+
+Choose the consumer's comparison ref deliberately. Start resolves it once to an
+existing commit and returns `comparisonBaseCommit`; use that recorded commit for
+later diff/review work. The accepted contract and its digest retain the original ref.
+
+When the accepted change adds or materially changes logic, state, or collaboration
+boundaries, read the design quality guidance in **production-engineering**. Express
+applicable consumer design standards as observable outcomes in the existing
+acceptance criteria: identify the responsibility or contract that must be clear and
+the supported behavior it must make understandable. Keep those outcomes within the
+accepted behavior and affected code; routine edits need no separate design exercise.
+
 Read the readiness result from `processctl project validate --json`. Use the accepted
 request, consumer rules, and inspected behavior to identify only capabilities this
 change affects or explicitly advances. State that relationship in the summary and

@@ -1,9 +1,9 @@
 ---
 name: production-engineering
-description: Apply the small production-engineering invariant floor during planning, implementation, verification, and independent review without replacing semantic judgment with keyword checks.
+description: Apply intentional design guidance and the small production-engineering invariant floor without replacing contextual judgment with keyword checks.
 ---
 
-# Production engineering invariants
+# Production engineering
 
 Assess the [canonical invariant definitions](invariants.json) for every new plan. They
 are a small correctness floor, not a design-pattern catalog and not a claim that one
@@ -12,6 +12,40 @@ architecture fits every repository.
 Keep the core floor at no more than seven invariants. Adding one requires evidence
 from a real consumer; first prefer clarifying or consolidating an existing invariant.
 This is a design budget, not an assessment or a substitute for evidence.
+
+## Design quality
+
+Use the consumer's architecture, domain model, and accepted design criteria to judge
+the affected code. Responsibilities, valid data and state, ownership of rules and
+side effects, and contracts between collaborators must be understandable from the
+source. A reader should be able to trace a supported behavior and locate its rules
+without reconstructing the implementation conversation.
+
+Actively introduce or refine cohesive abstractions when current requirements expose
+a hidden responsibility, duplicated policy, or coordination and consistency
+obligations leaking into callers. Use consumer-native constructs and reuse sound
+existing boundaries. An abstraction earns its place by clarifying behavior or
+containing a real change, with its indirection and coupling costs accounted for.
+A small caller count does not disqualify an abstraction that clarifies responsibility
+or protects a contract.
+
+Preserve clear direct implementations where further separation adds no present
+benefit. Judge both the effort to follow a behavior and the reach of a change;
+shorter code, more layers, and named patterns do not establish design quality.
+Keep refactoring within the accepted scope and avoid unused flexibility. Record
+material rationale near the owned code when the structure cannot express it.
+
+For automation identities, use a declared naming convention with clear ownership and
+role. The packaged automation-name standard supplies a default that consumers may
+override. Consumer bootstrap and configuration code must apply and verify the same
+selected convention, including provider-returned names before subsequent side effects.
+Provider limits and authenticated identity remain consumer-owned checks; a conforming
+name is not evidence of authority. Treat a live rename as an explicit consumer migration.
+
+Assess these outcomes through the existing accepted criteria. They do not add entries
+to the canonical invariant assessments or expand an in-flight contract.
+
+## Invariant assessments
 
 At plan time, assess every invariant as `applicable` or `not-applicable`. Explain the
 decision from the invariant's trigger. Every applicable assessment names the work
