@@ -13,6 +13,7 @@ beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  tick = () => {};
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { tick = callback; return 1; });
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   commit.mockClear(); close.mockClear(); play.mockClear();
@@ -21,7 +22,7 @@ beforeEach(async () => {
     previewUrl: "http://fixture/audio", videoUrl: "http://fixture/video", frameTimesMillis: [0, 40, 110, 200, 500, 800] }}
     busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const button = (label: string) => [...host.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === label || button.textContent === label)!;
 const key = async (value: string) => { await act(async () => host.querySelector(".clip-screen")!.dispatchEvent(new KeyboardEvent("keydown", { key: value, code: value === " " ? "Space" : "", bubbles: true, cancelable: true }))); };
 const input = (label: string) => host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
@@ -417,6 +418,36 @@ it("does not restart a paused preview when delayed play promises settle", async 
   await act(async () => button("Pause").click());
   await act(async () => resolves.forEach((resolve) => resolve()));
   expect(button("Play")).toBeDefined();
+  expect(button("Pause")).toBeUndefined();
+});
+
+it.each([false, true])("enforces the audition bound while video startup is pending (loop=%s)", async (loop) => {
+  await renderReview();
+  let finishVideo = () => {};
+  vi.mocked(HTMLMediaElement.prototype.play).mockImplementation(function (this: HTMLMediaElement) {
+    return this instanceof HTMLVideoElement ? new Promise<void>(resolve => { finishVideo = resolve; }) : Promise.resolve();
+  });
+  if (loop) await act(async () => host.querySelector<HTMLInputElement>('.clip-loop input')!.click());
+  await act(async () => button("Play last 5 seconds").click());
+  const audio = host.querySelector("audio")!;
+  audio.currentTime = 80.1;
+  await act(async () => tick(1));
+  expect(audio.currentTime).toBe(loop ? 75 : 80);
+  await act(async () => finishVideo());
+  expect(button(loop ? "Pause" : "Play")).toBeDefined();
+  expect(audio.currentTime).toBe(loop ? 75 : 80);
+});
+
+it("stops stalled startup and ignores play promises that settle after its deadline", async () => {
+  await renderReview();
+  vi.useFakeTimers();
+  const resolves: Array<() => void> = [];
+  vi.mocked(HTMLMediaElement.prototype.play).mockImplementation(() => new Promise<void>(resolve => resolves.push(resolve)));
+  await act(async () => button("Play last 5 seconds").click());
+  await act(async () => vi.advanceTimersByTime(10000));
+  expect(button("Play")).toBeDefined();
+  expect(host.textContent).toContain("Preview took too long to start");
+  await act(async () => resolves.forEach(resolve => resolve()));
   expect(button("Pause")).toBeUndefined();
 });
 

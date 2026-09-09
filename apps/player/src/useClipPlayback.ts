@@ -13,6 +13,8 @@ export function useClipPlayback(preview: LocalClipPreview, range: ClipPlaybackRa
   const [volume, setVolume] = useState(.8), [error, setError] = useState("");
   const [mediaError, setMediaError] = useState(false);
   const generation = useRef(0), wantsPlay = useRef(false), videoStarting = useRef(false);
+  const startupTimer = useRef<number | undefined>(undefined);
+  const clearStartup = () => { window.clearTimeout(startupTimer.current); startupTimer.current = undefined; };
   const frameData = useClipFrames(preview, position, playing || busy);
   const frames = frameData.frames;
   const boundaries = useMemo(() => frames.map(Math.floor), [frames]);
@@ -31,6 +33,7 @@ export function useClipPlayback(preview: LocalClipPreview, range: ClipPlaybackRa
     return bounded;
   };
   const stop = () => {
+    clearStartup();
     ++generation.current; wantsPlay.current = false;
     audio.current?.pause(); video.current?.pause();
     const time = (audio.current?.currentTime ?? 0) * 1000;
@@ -43,13 +46,17 @@ export function useClipPlayback(preview: LocalClipPreview, range: ClipPlaybackRa
     const start = bounds?.startMillis ?? 0, end = bounds?.endMillis ?? duration;
     const time = from ?? (audio.current?.currentTime ?? position / 1000) * 1000;
     const target = time < start || time >= end ? start : time;
+    clearStartup();
     const request = ++generation.current;
     wantsPlay.current = true; currentRange.current = bounds;
     setError(""); onPlay(); seek(target); setStatus("starting");
+    startupTimer.current = window.setTimeout(() => {
+      if (request === generation.current) fail("Preview took too long to start. Try again or prepare a compatible preview.");
+    }, 10000);
     const sound = audio.current, picture = video.current;
     try {
       await Promise.all([sound?.play(), target >= Math.floor(offset) ? picture?.play() : undefined]);
-      if (request === generation.current) setStatus("playing");
+      if (request === generation.current) { clearStartup(); setStatus("playing"); }
       else if (!wantsPlay.current) { sound?.pause(); picture?.pause(); }
     } catch {
       if (request === generation.current) fail("Preview could not play on this device.");
@@ -59,11 +66,12 @@ export function useClipPlayback(preview: LocalClipPreview, range: ClipPlaybackRa
   useEffect(() => {
     const sound = audio.current, picture = video.current;
     stop(); seek(0); setMediaError(false); setError("");
-    return () => { ++generation.current; wantsPlay.current = false; sound?.pause(); picture?.pause(); };
+    return () => { clearStartup(); ++generation.current; wantsPlay.current = false; sound?.pause(); picture?.pause(); };
   }, [preview.clipId]);
   useEffect(() => { if (busy) stop(); }, [busy]);
   useEffect(() => {
-    if (status !== "playing") return;
+    // Audio can advance before the video's play promise settles.
+    if (status === "paused") return;
     let frame = 0;
     const tick = () => {
       const time = (audio.current?.currentTime ?? 0) * 1000, bounds = currentRange.current;
@@ -74,7 +82,7 @@ export function useClipPlayback(preview: LocalClipPreview, range: ClipPlaybackRa
       else {
         setPosition(time);
         const picture = video.current;
-        if (picture) {
+        if (status === "playing" && picture) {
           const target = Math.max(0, time - offset) / 1000;
           if (time < Math.floor(offset)) picture.pause();
           else if (picture.paused && !picture.ended && !videoStarting.current) {

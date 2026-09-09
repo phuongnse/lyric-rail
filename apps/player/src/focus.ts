@@ -15,11 +15,19 @@ export function useFocusContainment(
       ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const container = containerRef.current;
     if (!container) return;
-    (initialRef?.current ?? container.querySelector<HTMLElement>(FOCUSABLE) ?? container).focus();
+    const availableControls = () => Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(element => {
+      for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor);
+        if (ancestor.matches("[inert], [hidden], [aria-hidden='true']") || style.display === "none" || style.visibility === "hidden") return false;
+        if (ancestor.matches("details:not([open])") && !ancestor.querySelector(":scope > summary")?.contains(element)) return false;
+        if (ancestor === container) break;
+      }
+      return true;
+    });
+    (initialRef?.current ?? availableControls()[0] ?? container).focus();
     const contain = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
-      const focusable = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE))
-        .filter((element) => !element.hasAttribute("inert") && element.getAttribute("aria-hidden") !== "true");
+      const focusable = availableControls();
       if (!focusable.length) {
         event.preventDefault();
         container.focus();

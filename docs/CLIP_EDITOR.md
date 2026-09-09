@@ -19,6 +19,9 @@ The slider under **Play** seeks only within the selected song. It also returns t
 the full selected interval after a short edge audition. **Pause** holds your place;
 **Play** resumes there. At the end of an audition, Play repeats that audition.
 **Loop** repeats the current song or the current short audition.
+The end boundary still applies while the video is starting. If playback cannot
+finish starting within ten seconds, the editor stops it and offers a retry or
+compatible preview. Pause also cancels a pending start.
 
 For a 20–80 second section, Listen to end plays 75–80 seconds. On a 25 fps file,
 moving End back one frame gives 79.960, and the next tail audition starts at 74.960.

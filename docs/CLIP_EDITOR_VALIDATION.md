@@ -22,6 +22,8 @@ listening quality, the operating-system file picker, or physical mouse/keyboard 
 Viewport checks used 1280×820 and 960×640 inside the native WebView; they did not change
 product window permissions. The earlier interrupted desktop-control attempt is not
 counted as a completed test.
+For the busy-modal keyboard case, the harness set the production editor's `busy`
+prop without submitting a song; focus movement ran in the native WebView.
 
 The generated fixture contains 120 seconds of 25 fps H264 video and AAC audio.
 Its SHA-256 before and after testing was
@@ -42,6 +44,7 @@ raw observations and temporary harness files remain excluded from Git.
 | Rapid Play/Pause | Three rapid audition/pause attempts leave both media elements paused |
 | Keyboard and zoom | End handle Left moves one frame; I/O mark stepped frames at 60.040/60.080; Space opens More controls without playback; Tab enters its controls; zoom halves the view; typing focus does not step media |
 | Multiple songs | Names and invalid drafts survive switching; the repair action returns to the invalid song; reorder preserves identity; remove leaves the other song intact |
+| Busy modal focus | With footer actions disabled, Tab and Shift+Tab wrap through visible controls; closed More controls excludes Volume, while opening it makes Volume reachable |
 | Layout | Main controls and save action remain visible at both viewport sizes, without horizontal overflow; the default single-song view has 14 visible buttons |
 
 The stopping clock is checked after pause/seek completes; this is not a claim of
@@ -52,7 +55,8 @@ with measured frame timestamps used for frame editing.
 
 Focused React regressions additionally cover fractional/VFR frame boundaries,
 delayed video, stale requests, missing timestamps, invalid drafts, failed submission,
-and pending-play cancellation. These mocks are regression tests, not native evidence.
+pending-play cancellation, End/loop enforcement while video startup is pending,
+and the ten-second startup deadline. These mocks are regression tests, not native evidence.
 All four profiles in [project.json](../.process/project.json) remain required:
 `frontend`, `python`, `rust`, and `security`.
 

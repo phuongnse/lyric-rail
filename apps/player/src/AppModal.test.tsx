@@ -80,6 +80,36 @@ it("contains the lyric editor and restores the selected song's edit button", asy
   await checkDialog(edit);
 });
 
+it("wraps focus around visible controls while a clip commit disables the footer", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let rejectCommit: (reason: Error) => void = () => {};
+  vi.mocked(invoke).mockImplementation((command, args, options) => command === "commit_local_sections"
+    ? new Promise((_resolve, reject) => { rejectCommit = reject; }) : original(command, args, options));
+  try {
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true })));
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    const save = [...dialog.querySelectorAll("button")].find(button => button.textContent === "Add 1 song to queue")!;
+    await act(async () => save.click());
+    expect(save.disabled).toBe(true);
+    const first = dialog.querySelector<HTMLElement>(".clip-screen")!;
+    const summary = dialog.querySelector("summary")!;
+    const tab = (element: HTMLElement, shiftKey = false) => act(() => {
+      element.focus();
+      element.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true }));
+    });
+    tab(summary);
+    expect(document.activeElement).toBe(first);
+    tab(first, true);
+    expect(document.activeElement).toBe(summary);
+    act(() => { summary.parentElement!.setAttribute("open", ""); });
+    tab(first, true);
+    expect(document.activeElement).toBe(dialog.querySelector('[aria-label="Preview volume"]'));
+    await act(async () => rejectCommit(new Error("Synthetic commit failure")));
+  } finally {
+    vi.mocked(invoke).mockImplementation(original);
+  }
+});
+
 it("dismisses the clip editor before Activity and restores normal shortcuts", async () => {
   const activity = host.querySelector<HTMLButtonElement>(".issues-toggle")!;
   act(() => { activity.focus(); activity.click(); });
