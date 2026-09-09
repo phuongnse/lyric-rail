@@ -18,6 +18,7 @@ LIB = (ROOT / "apps" / "player" / "src-tauri" / "src" / "lib.rs").read_text(
     encoding="utf-8"
 )
 APP = (ROOT / "apps" / "player" / "src" / "App.tsx").read_text(encoding="utf-8")
+EDITOR = (ROOT / "apps/player/src/ClipEditor.tsx").read_text(encoding="utf-8")
 CSS = (ROOT / "apps" / "player" / "src" / "App.css").read_text(encoding="utf-8")
 SELECTION = (ROOT / "apps" / "player" / "src" / "clipSelection.ts").read_text(
     encoding="utf-8"
@@ -57,15 +58,9 @@ def test_removed_remote_import_surface_cannot_be_reached() -> None:
 def test_single_local_media_opens_clip_editor_while_other_file_flows_stay_direct() -> None:
     for text in (
         "shouldOpenClipEditor(paths)",
-        'invoke<LocalClipPreview>("prepare_local_clip"',
+        'invoke<LocalClipPreview | null>("prepare_local_clip"',
         'invoke("cancel_local_clip"',
-        'invoke<CatalogSnapshot>("commit_local_clip"',
-        "Set at playhead",
-        "−1 frame",
-        "+1 frame",
-        "Loop selection",
-        "Add whole file",
-        "Add selected clip",
+        'invoke<CatalogSnapshot>("commit_local_sections"',
     ):
         assert text in APP
     assert "paths.length === 1" in SELECTION
@@ -139,11 +134,15 @@ def test_clip_preview_is_opaque_main_only_and_range_bounded() -> None:
     assert "https:" not in csp.split("media-src", 1)[1].split(";", 1)[0]
     assert "https:" not in csp.split("connect-src", 1)[1].split(";", 1)[0]
     assert "concurrent_preview_ranges_do_not_share_a_cursor" in LOCAL_CLIP
-    assert "lightweight PCM audio preview" in APP
+    assert "preview.videoUrl" in EDITOR
+    assert "<video" in EDITOR and "<audio" in EDITOR
+    assert "frameAt(boundaries" in EDITOR
+    assert "Drag section start" in EDITOR and "Drag section end" in EDITOR
+    assert "Add another song" in EDITOR
 
 
 def test_local_clip_trim_reuses_the_existing_catalog_and_worker_contract() -> None:
-    assert "const CATALOG_SCHEMA: u16 = 3" in CATALOG
+    assert "const CATALOG_SCHEMA: u16 = 4" in CATALOG
     assert "trim_start_millis: Option<u64>" in CATALOG
     assert "trim_end_millis: Option<u64>" in CATALOG
     assert "is_trim_metadata_downgrade" in CATALOG

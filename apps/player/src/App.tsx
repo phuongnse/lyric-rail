@@ -64,13 +64,8 @@ import {
   type IssueAction,
   type SystemIssue,
 } from "./issues";
-import {
-  formatTimecodeMillis,
-  loopedPreviewTime,
-  nudgedTimecode,
-  shouldOpenClipEditor,
-  validateClipRange,
-} from "./clipSelection";
+import { shouldOpenClipEditor } from "./clipSelection";
+import ClipEditor, { type ClipSection, type LocalClipPreview } from "./ClipEditor";
 
 type AudioTrack = { id: string; name: string; url: string; default: boolean };
 type OpenPackage = {
@@ -86,14 +81,7 @@ type PlayerStatus = {
   vaultAvailable: boolean;
   processing: { pendingJobs: number; runtimeAvailable: boolean; runtimeError?: string };
 };
-type LocalClipPreview = {
-  clipId: string;
-  suggestedTitle: string;
-  sizeBytes: number;
-  durationMillis: number;
-  frameDurationMillis?: number;
-  previewUrl: string;
-};
+
 const EMPTY_CATALOG: CatalogSnapshot = { items: [], localSources: [], driveSources: [] };
 const ROW_HEIGHT = 104;
 
@@ -129,6 +117,7 @@ type DrawerProps = {
   query: string;
   busy: boolean;
   blocked: boolean;
+  scrollToTopToken?: number;
   onClose: () => void;
   onRescan: () => void;
   onQuery: (value: string) => void;
@@ -155,6 +144,10 @@ export function LibraryDrawer(props: DrawerProps) {
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(600);
   const [sourceMenu, setSourceMenu] = useState<"local" | "cloud">();
+  useEffect(() => {
+    if (viewport.current) viewport.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [props.scrollToTopToken]);
   useEffect(() => {
     const node = viewport.current;
     if (!node) return;
@@ -276,7 +269,7 @@ export function LibraryDrawer(props: DrawerProps) {
                     </div>
                     <div className="row-actions" onClick={(event) => event.stopPropagation()}>
                       {playable && <IconButton className="row-icon" icon="play" iconSize={17} label={`Play ${item.title}`} onClick={() => props.onPlay(item)} />}
-                      {waiting && <button onClick={() => props.onLyricsPaste(item)}>Paste</button>}
+                      {waiting && <button onClick={() => props.onLyricsPaste(item)}>{item.canRename ? "Edit song" : "Paste"}</button>}
                       {waiting && <button onClick={() => props.onLyricsFile(item)}>TXT</button>}
                       {item.status === "failed" && item.canProcess && <button onClick={() => props.onRetry(item)}>Retry</button>}
                       {(task || ["queued", "processing", "failed", "setup-required"].includes(item.status)) && <button onClick={() => props.onShowContext(item)}>{item.status === "failed" || item.status === "setup-required" ? "View issue" : "View task"}</button>}
@@ -595,16 +588,18 @@ function App() {
   const [seenIssueNotice, setSeenIssueNotice] = useState<string>();
   const [lyricDialog, setLyricDialog] = useState<{ item: LibraryItem; mode: "add" | "edit" }>();
   const [lyricDraft, setLyricDraft] = useState("");
+  const [lyricTitle, setLyricTitle] = useState("");
   const [clipDialogOpen, setClipDialogOpen] = useState(false);
   const [clipPreview, setClipPreview] = useState<LocalClipPreview>();
-  const [clipTitle, setClipTitle] = useState("");
-  const [clipStart, setClipStart] = useState("00:00:00.000");
-  const [clipEnd, setClipEnd] = useState("00:00:00.000");
-  const [clipLoop, setClipLoop] = useState(true);
+  const [queueInsertion, setQueueInsertion] = useState(0);
   const [clipBusy, setClipBusy] = useState(false);
+  const [clipPreparing, setClipPreparing] = useState(false);
+  const [clipPreparationError, setClipPreparationError] = useState("");
+  const clipRequest = useRef<{ id: string; cancelled: boolean } | undefined>(undefined);
+  const clipSource = useRef<string | undefined>(undefined);
+  const clipPreparingRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const clipAudioRef = useRef<HTMLAudioElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const issuesHeadingRef = useRef<HTMLHeadingElement>(null);
   const issuesToggleRef = useRef<HTMLButtonElement>(null);
@@ -649,7 +644,8 @@ function App() {
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
   useFocusContainment(aboutOpen, aboutDialogRef, undefined, utilityToggleRef);
   useFocusContainment(Boolean(lyricDialog), lyricDialogRef, lyricInputRef, lyricRestoreRef);
-  useFocusContainment(clipDialogOpen && Boolean(clipPreview), clipDialogRef, undefined, clipRestoreRef);
+  useFocusContainment(clipDialogOpen && !clipPreparing, clipDialogRef, undefined, clipRestoreRef);
+  useFocusContainment(clipDialogOpen && clipPreparing, clipPreparingRef, undefined, clipRestoreRef);
   const reportError = useCallback((
     scope: string,
     title: string,
@@ -830,10 +826,10 @@ function App() {
         else if (aboutOpen) setAboutOpen(false);
         else if (lyricDialog) setLyricDialog(undefined);
         else if (clipDialogOpen) {
+          if (clipRequest.current) { cancelClipPreparation(); return; }
           if (clipBusy) return;
           const clipId = clipPreview?.clipId;
           setClipDialogOpen(false);
-          setClipTitle("");
           setClipPreview(undefined);
           setClipBusy(false);
           if (native && clipId) invoke("cancel_local_clip", { clipId }).catch(() => undefined);
@@ -929,6 +925,35 @@ function App() {
     finally { setBusy(false); }
   };
 
+  const cancelClipPreparation = () => {
+    const request = clipRequest.current;
+    if (request) { request.cancelled = true; void invoke("cancel_clip_preparation", { requestId: request.id }).catch((reason) => reportError("tasks", "Could not cancel clip preparation", reason)); }
+    if (clipPreview) void invoke("cancel_local_clip", { clipId: clipPreview.clipId }).catch(() => {});
+    setClipDialogOpen(false);
+  };
+  const prepareClip = async (path: string, compatible = false) => {
+    const request = { id: crypto.randomUUID(), cancelled: false };
+    clipRequest.current = request; clipSource.current = path;
+    setClipPreparationError("");
+    setClipPreparing(true); setClipBusy(true); setClipDialogOpen(true);
+    try {
+      const preview = await invoke<LocalClipPreview | null>("prepare_local_clip", { path, requestId: request.id, compatible, replaceClipId: compatible ? clipPreview?.clipId : undefined });
+      if (request.cancelled || clipRequest.current !== request) {
+        if (preview) await invoke("cancel_local_clip", { clipId: preview.clipId });
+      } else if (preview) setClipPreview(preview);
+      else if (!compatible) setClipDialogOpen(false);
+      else setClipPreparationError("Preparation cancelled. Your sections are kept; you can retry.");
+    } catch (reason) {
+      if (!request.cancelled) {
+        if (!compatible) setClipDialogOpen(false);
+        else setClipPreparationError("Compatible preview failed. Your sections are kept; you can retry.");
+        throw reason;
+      }
+    } finally {
+      if (clipRequest.current === request) { clipRequest.current = undefined; setClipPreparing(false); setClipBusy(false); }
+    }
+  };
+
   const addFiles = () => {
     clipRestoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     return runBusy(async () => {
@@ -939,14 +964,8 @@ function App() {
       await invoke("add_local_files", { paths });
       return;
     }
-    const preview = await invoke<LocalClipPreview>("prepare_local_clip", { path: paths[0] });
-    setClipPreview(preview);
-    setClipTitle(preview.suggestedTitle);
-    setClipStart("00:00:00.000");
-    setClipEnd(formatTimecodeMillis(preview.durationMillis));
-    setClipLoop(true);
-    setClipBusy(false);
-    setClipDialogOpen(true);
+    setClipPreview(undefined);
+    await prepareClip(paths[0]);
     }, "library", "Files could not be added");
   };
 
@@ -972,79 +991,28 @@ function App() {
   const toggleShuffle = () => setShuffle((value) => !value);
 
   const closeClipDialog = () => {
+    if (clipPreparing) { cancelClipPreparation(); return; }
     if (clipBusy) return;
     const clipId = clipPreview?.clipId;
     setClipDialogOpen(false);
-    setClipTitle("");
     setClipBusy(false);
     setClipPreview(undefined);
     if (native && clipId) invoke("cancel_local_clip", { clipId }).catch(() => undefined);
   };
 
-  const clipPreviewMedia = () => clipAudioRef.current;
-
-  const setClipEndpointFromPlayhead = (endpoint: "start" | "end") => {
-    const media = clipPreviewMedia();
-    if (!media) return;
-    const value = formatTimecodeMillis(media.currentTime * 1000);
-    if (endpoint === "start") setClipStart(value); else setClipEnd(value);
-  };
-
-  const nudgeClipEndpoint = (endpoint: "start" | "end", direction: -1 | 1) => {
-    if (!clipPreview) return;
-    const step = clipPreview.frameDurationMillis ?? 10;
-    try {
-      const current = endpoint === "start" ? clipStart : clipEnd;
-      const value = nudgedTimecode(current, direction * step, clipPreview.durationMillis);
-      if (endpoint === "start") setClipStart(value); else setClipEnd(value);
-    } catch (reason) {
-      reportError("clip", "Clip timestamp is invalid", reason);
-    }
-  };
-
-  const handleClipPreviewTime = (media: HTMLMediaElement) => {
-    if (!clipLoop || !clipPreview) return;
-    try {
-      const range = validateClipRange(clipStart, clipEnd, clipPreview.durationMillis);
-      const next = loopedPreviewTime(
-        media.currentTime * 1000,
-        range.startMillis,
-        range.endMillis,
-      );
-      if (next !== undefined) {
-        media.currentTime = next / 1000;
-        if (!media.paused) media.play().catch(() => undefined);
-      }
-    } catch { /* allow partially edited timestamps without interrupting preview */ }
-  };
-
-  const commitClip = async (wholeFile: boolean) => {
+  const commitClips = async (sections: ClipSection[]) => {
     if (!clipPreview || clipBusy) return;
+    setClipBusy(true);
     try {
-      const range = wholeFile
-        ? { startMillis: 0, endMillis: clipPreview.durationMillis }
-        : validateClipRange(clipStart, clipEnd, clipPreview.durationMillis);
-      setClipBusy(true);
-      const snapshot = await invoke<CatalogSnapshot>("commit_local_clip", {
-        clipId: clipPreview.clipId,
-        startMillis: range.startMillis,
-        endMillis: range.endMillis,
-        title: clipTitle,
-      });
-      setCatalog(snapshot);
-      setClipTitle("");
-      setClipPreview(undefined);
-      setClipDialogOpen(false);
-      setDrawerOpen(true);
-    } catch (reason) {
-      reportError("clip", "Clip could not be added", reason);
-    } finally {
-      setClipBusy(false);
-    }
+      const snapshot = await invoke<CatalogSnapshot>("commit_local_sections", { clipId: clipPreview.clipId, sections });
+      setCatalog(snapshot); setShownItems(snapshot.items); setQuery("");
+      setQueueInsertion((value) => value + 1);
+      setClipPreview(undefined); setClipDialogOpen(false); setDrawerOpen(true);
+    } catch (reason) { reportError("clip", "Songs could not be added", reason); throw reason; }
+    finally { setClipBusy(false); }
   };
 
   const playElements = async () => {
-    clipAudioRef.current?.pause();
     const audio = audioRef.current;
     const video = videoRef.current;
     if (!audio || !video) return;
@@ -1119,11 +1087,15 @@ function App() {
   const showLyricDialog = async (item: LibraryItem, mode: "add" | "edit") => {
     lyricRestoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setLyricDraft(mode === "edit" && native ? await invoke<string>("item_lyrics", { itemId: item.id }) : "");
+    setLyricTitle(item.title);
     setLyricDialog({ item, mode });
     setDrawerOpen(true);
   };
 
   const submitLyrics = () => lyricDialog && runBusy(async () => {
+    if (lyricDialog.item.canRename && lyricTitle !== lyricDialog.item.title) {
+      await invoke("rename_waiting_section", { itemId: lyricDialog.item.id, title: lyricTitle });
+    }
     const command = lyricDialog.mode === "edit" ? "revise_item_lyrics" : "provide_lyrics_text";
     await invoke(command, { itemId: lyricDialog.item.id, text: lyricDraft });
     setLyricDialog(undefined);
@@ -1452,6 +1424,7 @@ function App() {
       </section>
 
       <LibraryDrawer
+        scrollToTopToken={queueInsertion}
         open={drawerOpen}
         items={shownItems}
         catalog={catalog}
@@ -1513,48 +1486,26 @@ function App() {
           <div ref={lyricDialogRef} className="lyric-dialog panel">
             <header><div><p className="eyebrow">{lyricDialog.mode === "edit" ? "Confirmed revision" : "Authoritative lyrics"}</p><h2>{lyricDialog.item.title}</h2></div><IconButton className="dialog-close" icon="close" label="Close lyric editor" onClick={() => setLyricDialog(undefined)} /></header>
             <p>{lyricDialog.mode === "edit" ? "Nothing changes until you confirm. The original package remains valid until its revision authenticates." : "Paste exact UTF-8 lyrics, one semantic phrase per line."}</p>
+            {lyricDialog.item.canRename && <label className="clip-field"><span>Song title</span><input value={lyricTitle} maxLength={200} onChange={(event) => setLyricTitle(event.target.value)} /><button disabled={busy || !lyricTitle.trim()} onClick={() => runBusy(async () => { await invoke("rename_waiting_section", { itemId: lyricDialog.item.id, title: lyricTitle }); setLyricDialog({ ...lyricDialog, item: { ...lyricDialog.item, title: lyricTitle } }); }, "library", "Song title could not be saved")}>Save title</button></label>}
             <textarea ref={lyricInputRef} value={lyricDraft} onChange={(event) => setLyricDraft(event.target.value)} spellCheck />
             <footer><button onClick={() => setLyricDialog(undefined)}>Cancel</button><button className="primary" onClick={submitLyrics} disabled={busy || !lyricDraft.trim()}>{lyricDialog.mode === "edit" ? "Create revision" : "Add to queue"}</button></footer>
           </div>
         </div>
       )}
 
-      {clipDialogOpen && clipPreview && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="clip-editor-title">
-          <div ref={clipDialogRef} className="clip-dialog panel">
-            <header>
-              <div><p className="eyebrow">Local file</p><h2 id="clip-editor-title">Choose the section to process</h2></div>
-              <IconButton className="dialog-close" icon="close" label="Close clip editor" onClick={closeClipDialog} disabled={clipBusy} />
-            </header>
-            <p>The whole file is selected by default. A lightweight PCM audio preview works consistently for every supported source while processing keeps the original media unchanged.</p>
-            <audio className="clip-preview-audio" ref={clipAudioRef} src={clipPreview.previewUrl} controls preload="metadata" onPlay={(event) => { pauseElements(); handleClipPreviewTime(event.currentTarget); }} onTimeUpdate={(event) => handleClipPreviewTime(event.currentTarget)} onError={() => reportError("clip", "Clip preview failed", "The portable local audio preview could not be played.")} />
-            <label className="clip-field">
-              <span>Song title</span>
-              <input value={clipTitle} onChange={(event) => setClipTitle(event.target.value)} maxLength={200} disabled={clipBusy} />
-            </label>
-            <div className="clip-range-grid">
-              {(["start", "end"] as const).map((endpoint) => (
-                <label className="clip-field" key={endpoint}>
-                  <span>{endpoint === "start" ? "Start" : "End"}</span>
-                  <input value={endpoint === "start" ? clipStart : clipEnd} onChange={(event) => endpoint === "start" ? setClipStart(event.target.value) : setClipEnd(event.target.value)} disabled={clipBusy} />
-                  <div className="clip-time-actions">
-                    <button onClick={() => nudgeClipEndpoint(endpoint, -1)} disabled={clipBusy}>{clipPreview.frameDurationMillis ? "−1 frame" : "−10 ms"}</button>
-                    <button onClick={() => setClipEndpointFromPlayhead(endpoint)} disabled={clipBusy}>Set at playhead</button>
-                    <button onClick={() => nudgeClipEndpoint(endpoint, 1)} disabled={clipBusy}>{clipPreview.frameDurationMillis ? "+1 frame" : "+10 ms"}</button>
-                  </div>
-                </label>
-              ))}
-            </div>
-            <div className="clip-preview-meta">
-              <label><input type="checkbox" checked={clipLoop} onChange={(event) => setClipLoop(event.target.checked)} /> Loop selection</label>
-              <span>{formatTimecodeMillis(clipPreview.durationMillis)} · {(clipPreview.sizeBytes / 1024 / 1024).toFixed(1)} MiB{clipPreview.frameDurationMillis ? ` · ${clipPreview.frameDurationMillis.toFixed(3)} ms/frame` : ""}</span>
-            </div>
-            <footer>
-              <button onClick={closeClipDialog} disabled={clipBusy}>Cancel</button>
-              <button onClick={() => { void commitClip(true); }} disabled={clipBusy || !clipTitle.trim()}>Add whole file</button>
-              <button className="primary" onClick={() => { void commitClip(false); }} disabled={clipBusy || !clipTitle.trim()}>{clipBusy ? "Adding…" : "Add selected clip"}</button>
-            </footer>
+      {clipDialogOpen && clipPreparing && (
+        <div className="modal-layer" style={{ zIndex: 100 }} role="dialog" aria-modal="true" aria-labelledby="clip-preparing-title">
+          <div ref={clipPreparingRef} className="setup-dialog panel" tabIndex={-1}>
+            <h2 id="clip-preparing-title">{clipPreview ? "Preparing compatible preview" : "Opening local media"}</h2>
+            <p role="status">{clipPreview ? "Preparing this whole file may take minutes. Activity shows the current stage." : "Reading media information. Your original file stays unchanged."}</p>
+            <button onClick={cancelClipPreparation}>Cancel and close</button>
           </div>
+        </div>
+      )}
+
+      {clipDialogOpen && clipPreview && (
+        <div className="modal-layer" style={{ display: clipPreparing ? "none" : undefined }} role="dialog" aria-modal="true" aria-labelledby="clip-editor-title">
+          <ClipEditor preparationError={clipPreparationError} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed"); }} />
         </div>
       )}
 

@@ -22,6 +22,7 @@ export type LibraryItem = {
   statusMessage?: string;
   hasThumbnail: boolean;
   canProcess: boolean;
+  canRename?: boolean;
   sources: string[];
   lyricSnippet?: string;
 };

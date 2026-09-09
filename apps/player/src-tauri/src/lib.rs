@@ -1,4 +1,5 @@
 mod catalog;
+mod clip_video;
 #[cfg(target_os = "macos")]
 mod desktop_menu;
 mod google_drive;
@@ -595,6 +596,7 @@ fn catalog_item_from_reader(
             .unwrap_or_default()
     };
     CatalogItem {
+        section_id: None,
         id: package_id.clone(),
         package_id: Some(package_id),
         title,
@@ -1039,6 +1041,7 @@ fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<bool, String> {
             Ok(true)
         }
         tasks::TaskKind::ModelInstall => model_installer::cancel_active(&app),
+        tasks::TaskKind::ClipPreparation => local_clip::cancel_preparation(&app, None),
         _ => Err("This task cannot be cancelled".into()),
     }
 }
@@ -1298,9 +1301,30 @@ ipc_command! {
 async fn prepare_local_clip(
     app: tauri::AppHandle,
     path: PathBuf,
-) -> Result<local_clip::LocalClipPreview, String> {
+    request_id: String,
+    compatible: Option<bool>,
+    replace_clip_id: Option<String>,
+) -> Result<Option<local_clip::LocalClipPreview>, String> {
     let scheduler = app.state::<CloudState>().scheduler.clone();
-    local_clip::prepare(app, scheduler, path).await
+    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false), replace_clip_id).await
+}
+}
+
+ipc_command! {
+fn cancel_clip_preparation(app: tauri::AppHandle, request_id: String) -> Result<bool, String> {
+    local_clip::cancel_preparation(&app, Some(&request_id))
+}
+}
+
+ipc_command! {
+async fn local_clip_frames(app: tauri::AppHandle, clip_id: String, time_millis: u64, request_id: String) -> Result<local_clip::FrameWindow, String> {
+    local_clip::frames(app, clip_id, time_millis, request_id).await
+}
+}
+
+ipc_command! {
+fn cancel_clip_frames(app: tauri::AppHandle, request_id: String) -> Result<bool, String> {
+    local_clip::cancel_frames(&app, &request_id)
 }
 }
 
@@ -1334,6 +1358,22 @@ fn commit_local_clip(
     let snapshot = save_and_emit(&app)?;
     let _ = local_clip::cancel(&app, &clip_id);
     enqueue_ready(&app, vec![queued_item]);
+    Ok(snapshot)
+}
+}
+
+ipc_command! {
+fn commit_local_sections(app: tauri::AppHandle, clip_id: String, sections: Vec<local_clip::ClipSection>) -> Result<CatalogSnapshot, String> {
+    let snapshot = local_clip::commit_sections(&app, &clip_id, &sections)?;
+    let _ = app.emit("library-changed", snapshot.clone());
+    Ok(snapshot)
+}
+}
+
+ipc_command! {
+fn rename_waiting_section(app: tauri::AppHandle, item_id: String, title: String) -> Result<CatalogSnapshot, String> {
+    let snapshot = app.state::<CatalogState>().0.lock().map_err(|_| "Catalog lock is poisoned")?.rename_waiting_section(&item_id, &title)?;
+    let _ = app.emit("library-changed", snapshot.clone());
     Ok(snapshot)
 }
 }
@@ -1567,6 +1607,7 @@ fn drive_catalog_item(
                 *available = false;
             }
             CatalogItem {
+                section_id: None,
                 id: format!("drive-{}", file.id),
                 package_id: None,
                 title: file.name,
@@ -2330,8 +2371,13 @@ pub fn run() {
             add_local_files,
             add_local_folder,
             prepare_local_clip,
+            cancel_clip_preparation,
+            local_clip_frames,
+            cancel_clip_frames,
             cancel_local_clip,
             commit_local_clip,
+            commit_local_sections,
+            rename_waiting_section,
             rescan_local_sources,
             remove_library_source,
             provide_lyrics_file,
@@ -2570,6 +2616,7 @@ mod tests {
     #[test]
     fn retry_rebinds_lyrics_without_clearing_authenticated_job_identity() {
         let item = CatalogItem {
+            section_id: None,
             id: "local-item".into(),
             package_id: None,
             title: "Exact title".into(),

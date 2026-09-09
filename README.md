@@ -66,15 +66,38 @@ Large queues keep a bounded Activity snapshot/count, while every queued row can 
 its stable task directly by ID for View task and Cancel; no active task is rejected or hidden
 from its action path merely because it falls outside the snapshot window.
 
-The Clip Editor supports millisecond Start/End entry, playhead capture, frame or 10 ms
-nudging and a selection loop. Users can add the whole file or only the selected timeline.
-Native ffprobe/ffmpeg are time/output bounded and restricted to local files plus a fixed
-demuxer allowlist. For consistent WebView playback across all supported inputs, native
-code derives a lightweight mono PCM preview into an anonymous delete-on-close handle and
-serves it through an opaque range endpoint. Leading/trailing silence preserves the exact
-source timeline even when its audio starts late or ends early. The selected source is
-identity-bound while the editor is open; preview, cancel and commit never rewrite or
-delete it. Selecting one `.lrail` package or multiple files keeps direct add behavior.
+The Clip Editor focuses on one song at a time. Drag the green Start and gold End
+handles on the source timeline, or enter exact times beside the video. The arrows
+beside each time move that edge by one measured video frame (10 ms for audio).
+Listen to start/end plays up to five seconds inside the selected song; the slider
+below Play seeks within that song, and Pause/Play resumes from the current position.
+Whole file and Fit song set the timeline view. More controls contains zoom, pan,
+Go to Start/End, volume and keyboard help. Add another song creates another section;
+expand the song count to switch, reorder or remove songs, up to 128 sections.
+See [the editor guide](docs/CLIP_EDITOR.md) for the full workflow and shortcuts.
+All sections appear at the top of Library & queue in editor order, waiting for each
+song's exact lyrics. Edit song opens title and lyric editing. Existing active processing continues.
+Full-source sidecar lyrics are never silently assigned to an extracted section.
+
+Opening media probes metadata and streams the guarded source through opaque bounded
+ranges, without converting the whole file. Nearby measured frames load separately
+when paused or seeking; exact frame controls wait for that evidence while playback
+and seeking remain available. Rapid seeks replace pending frame work. Preparation has
+Cancel and close, and running preparation can also be cancelled from Activity.
+
+If the device cannot decode a source, explicitly choose Prepare compatible preview.
+Files with nonzero container start times require this mode before playback to keep
+editing on the source timeline. A failed conversion retains all selected songs and
+the original preview for retry. Frame controls load neighbors across probe boundaries;
+missing timestamps show a retry message instead of guessing or jumping to file edges.
+This cancellable fallback converts the whole file to anonymous PCM/H264 previews
+(video up to 640x360, 2 GiB and five minutes); it can take minutes on long media.
+Native ffprobe/ffmpeg retain local-file/demuxer allowlists and identity guards. Direct
+frame queries inspect a nearby nine-second interval, bounded to 1 MiB, 16,384 frames
+and 20 seconds; fallback frame inspection retains its one-million-frame/24 MiB/two-minute
+bound. Video sources are bounded to 8K pixel count. Preview failure
+is explicit; original media is never modified. Selecting one `.lrail` package or
+multiple files keeps direct add behavior.
 
 If the app stops after a package is published but before its stage status is saved,
 Retry authenticates and binds that exact output to the job request, then continues

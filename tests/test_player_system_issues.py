@@ -62,7 +62,7 @@ def test_missing_models_are_setup_required_with_an_allowlisted_resolver() -> Non
     assert '"PROCESSING_MODELS_MISSING"' in PYTHON
     assert "ItemStatus::SetupRequired" in PROCESSING
     assert "SetupRequired" in CATALOG
-    assert "const CATALOG_SCHEMA: u16 = 3" in CATALOG
+    assert "const CATALOG_SCHEMA: u16 = 4" in CATALOG
     assert "migrate_legacy_runtime_failures_to_setup_required" in CATALOG
     assert "setup_required_items" in CATALOG
     assert "queue_setup_required_after_verification" in CATALOG

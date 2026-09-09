@@ -32,26 +32,36 @@ const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SOURCE_DURATION_MILLIS: u64 = 24 * 60 * 60 * 1000;
 const MAX_PROBE_BYTES: usize = 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
-const SAFE_INPUT_FORMATS: &str = "mov,matroska,webm,mp3,aac,wav,ogg,flac,avi,asf";
-const SAFE_INPUT_PROTOCOLS: &str = "file";
+pub(super) const SAFE_INPUT_FORMATS: &str = "mov,matroska,webm,mp3,aac,wav,ogg,flac,avi,asf";
+pub(super) const SAFE_INPUT_PROTOCOLS: &str = "file";
 const CLIP_TASK_ID: &str = "clip-preparation";
 type ClipProgressReporter = Arc<dyn Fn(u64, u64) + Send + Sync>;
 
 #[derive(Default)]
 struct LocalClipInner {
     preparing: bool,
+    preparation_cancel: Option<Arc<AtomicBool>>,
+    request_id: Option<String>,
+    cancelled_requests: std::collections::VecDeque<String>,
+    frame_cancel: Option<Arc<AtomicBool>>,
+    frame_request_id: Option<String>,
     preview: Option<LocalClipSession>,
 }
 
 #[derive(Clone)]
 struct LocalClipSession {
     clip_id: String,
+    request_id: String,
     path: PathBuf,
     source_file: Arc<fs::File>,
     source_identity: SourceIdentity,
     preview_file: Arc<fs::File>,
     preview_size_bytes: u64,
+    video: Option<(Arc<fs::File>, u64)>,
     duration_millis: u64,
+    direct: bool,
+    content_type: String,
+    timeline_origin: f64,
 }
 
 #[derive(Default)]
@@ -67,7 +77,12 @@ pub struct LocalClipPreview {
     size_bytes: u64,
     duration_millis: u64,
     frame_duration_millis: Option<f64>,
+    frame_times_millis: Vec<f64>,
+    video_offset_millis: f64,
     preview_url: String,
+    video_url: Option<String>,
+    direct: bool,
+    requires_compatibility: bool,
 }
 
 struct PreparedLocalClip {
@@ -76,10 +91,16 @@ struct PreparedLocalClip {
     source_identity: SourceIdentity,
     preview_file: Arc<fs::File>,
     preview_size_bytes: u64,
+    video: Option<(Arc<fs::File>, u64)>,
     suggested_title: String,
     size_bytes: u64,
     duration_millis: u64,
     frame_duration_millis: Option<f64>,
+    frame_times_millis: Vec<f64>,
+    video_offset_millis: f64,
+    direct: bool,
+    content_type: String,
+    timeline_origin: f64,
 }
 
 #[cfg(unix)]
@@ -123,12 +144,17 @@ struct ProbeOutput {
 #[derive(Default, Deserialize)]
 struct ProbeFormat {
     duration: Option<String>,
+    format_name: Option<String>,
+    start_time: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ProbeStream {
     codec_type: Option<String>,
     avg_frame_rate: Option<String>,
+    start_time: Option<String>,
+    width: Option<u64>,
+    height: Option<u64>,
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
@@ -327,7 +353,11 @@ fn platform_read_at(file: &fs::File, buffer: &mut [u8], offset: u64) -> std::io:
     file.read(buffer)
 }
 
-fn read_exact_at(file: &fs::File, mut buffer: &mut [u8], mut offset: u64) -> Result<(), ()> {
+pub(super) fn read_exact_at(
+    file: &fs::File,
+    mut buffer: &mut [u8],
+    mut offset: u64,
+) -> Result<(), ()> {
     while !buffer.is_empty() {
         let read = platform_read_at(file, buffer, offset).map_err(|_| ())?;
         if read == 0 {
@@ -369,14 +399,20 @@ fn parse_frame_duration(rate: Option<&str>) -> Option<f64> {
         .then_some((1000.0 * denominator / numerator).clamp(1.0, 1000.0))
 }
 
-fn wait_bounded_child(
+pub(super) fn wait_cancellable_child(
     child: &mut Child,
     timeout: Duration,
     timeout_message: &str,
     aborted: Option<&AtomicBool>,
+    cancelled: Option<&AtomicBool>,
 ) -> Result<ExitStatus, String> {
     let deadline = Instant::now() + timeout;
     loop {
+        if cancelled.is_some_and(|value| value.load(Ordering::Acquire)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Clip preparation cancelled".into());
+        }
         if aborted.is_some_and(|aborted| aborted.load(Ordering::Acquire)) {
             let _ = child.kill();
             let _ = child.wait();
@@ -399,7 +435,18 @@ fn wait_bounded_child(
     }
 }
 
-fn bounded_command_output(mut command: Command) -> Result<Vec<u8>, String> {
+fn bounded_cancellable_output(
+    mut command: Command,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Clip preparation cancelled".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -418,17 +465,18 @@ fn bounded_command_output(mut command: Command) -> Result<Vec<u8>, String> {
             .read_to_end(&mut bytes)
             .map(|_| bytes)
     });
-    let status = wait_bounded_child(
+    let status = wait_cancellable_child(
         &mut child,
         Duration::from_secs(20),
         "Local media probe exceeded its time limit",
         None,
-    )?;
+        Some(cancelled),
+    );
     let bytes = reader
         .join()
         .map_err(|_| "Local media probe output failed".to_string())?
         .map_err(|_| "Local media probe output failed".to_string())?;
-    if !status.success() || bytes.len() > MAX_PROBE_BYTES {
+    if !status?.success() || bytes.len() > MAX_PROBE_BYTES {
         return Err("Selected file is not valid bounded audio/video media".into());
     }
     Ok(bytes)
@@ -443,11 +491,34 @@ fn report_command(command: &Command, report: &impl Fn(&str, &[String])) {
     report(&program, &arguments);
 }
 
-fn probe_media_with_report(
+struct MediaInfo {
+    duration_millis: u64,
+    frame_duration_millis: Option<f64>,
+    video_offset: Option<f64>,
+    format: String,
+    timeline_origin: f64,
+}
+
+pub(super) fn probe_media_with_report(
     ffprobe: &Path,
     path: &Path,
     report: &impl Fn(&str, &[String]),
-) -> Result<(u64, Option<f64>), String> {
+) -> Result<(u64, Option<f64>, Option<f64>), String> {
+    probe_media_cancellable(ffprobe, path, report, &AtomicBool::new(false)).map(|info| {
+        (
+            info.duration_millis,
+            info.frame_duration_millis,
+            info.video_offset,
+        )
+    })
+}
+
+fn probe_media_cancellable(
+    ffprobe: &Path,
+    path: &Path,
+    report: &impl Fn(&str, &[String]),
+    cancelled: &AtomicBool,
+) -> Result<MediaInfo, String> {
     let mut command = Command::new(ffprobe);
     command.args([
         "-v",
@@ -460,12 +531,12 @@ fn probe_media_with_report(
     ]);
     command.arg(path).args([
         "-show_entries",
-        "format=duration:stream=codec_type,avg_frame_rate",
+        "format=duration,start_time,format_name:stream=codec_type,avg_frame_rate,start_time,width,height",
         "-of",
         "json",
     ]);
     report_command(&command, report);
-    let output = bounded_command_output(command)?;
+    let output = bounded_cancellable_output(command, cancelled)?;
     let probe: ProbeOutput =
         serde_json::from_slice(&output).map_err(|_| "Local media probe is invalid")?;
     let duration = probe
@@ -490,15 +561,53 @@ fn probe_media_with_report(
     if !has_audio {
         return Err("Selected media contains no audio stream for karaoke preview".into());
     }
-    Ok((
+    let video_offset = video
+        .map(|stream| {
+            let pixels = stream
+                .width
+                .zip(stream.height)
+                .and_then(|(width, height)| width.checked_mul(height))
+                .ok_or("Video dimensions unavailable")?;
+            if pixels == 0 || pixels > 7680 * 4320 {
+                return Err("Video exceeds the 8K preview bound");
+            }
+            let start = stream
+                .start_time
+                .as_deref()
+                .and_then(|value| value.parse::<f64>().ok())
+                .ok_or("Video start timestamp unavailable")?;
+            let origin = probe
+                .format
+                .start_time
+                .as_deref()
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let offset = (start - origin) * 1000.0;
+            if !offset.is_finite() || offset < -1.0 || offset >= duration_millis as f64 {
+                return Err("Video start timestamp is outside the timeline");
+            }
+            Ok(offset.max(0.0))
+        })
+        .transpose()?;
+    Ok(MediaInfo {
         duration_millis,
-        video.and_then(|stream| parse_frame_duration(stream.avg_frame_rate.as_deref())),
-    ))
+        frame_duration_millis: video
+            .and_then(|stream| parse_frame_duration(stream.avg_frame_rate.as_deref())),
+        video_offset,
+        format: probe.format.format_name.unwrap_or_default(),
+        timeline_origin: probe
+            .format
+            .start_time
+            .as_deref()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite())
+            .unwrap_or(0.0),
+    })
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 fn probe_media_with_tool(ffprobe: &Path, path: &Path) -> Result<(u64, Option<f64>), String> {
-    probe_media_with_report(ffprobe, path, &|_, _| {})
+    probe_media_with_report(ffprobe, path, &|_, _| {}).map(|(duration, rate, _)| (duration, rate))
 }
 
 fn wav_header(data_bytes: u32) -> [u8; 44] {
@@ -543,6 +652,26 @@ fn portable_preview_with_report(
     duration_millis: u64,
     report: &impl Fn(&str, &[String]),
     progress: ClipProgressReporter,
+) -> Result<(Arc<fs::File>, u64), String> {
+    portable_preview_cancellable(
+        ffmpeg,
+        source,
+        preview_root,
+        duration_millis,
+        report,
+        progress,
+        &AtomicBool::new(false),
+    )
+}
+
+fn portable_preview_cancellable(
+    ffmpeg: &Path,
+    source: &Path,
+    preview_root: &Path,
+    duration_millis: u64,
+    report: &impl Fn(&str, &[String]),
+    progress: ClipProgressReporter,
+    cancelled: &AtomicBool,
 ) -> Result<(Arc<fs::File>, u64), String> {
     use std::io::{Seek, SeekFrom};
 
@@ -659,11 +788,12 @@ fn portable_preview_with_report(
         }
         result
     });
-    let status = wait_bounded_child(
+    let status = wait_cancellable_child(
         &mut child,
         Duration::from_secs(5 * 60),
         "Portable local preview exceeded its time limit",
         Some(&aborted),
+        Some(cancelled),
     );
     let produced_data_bytes = writer
         .join()
@@ -711,12 +841,207 @@ fn suggested_title(path: &Path) -> String {
     title.chars().take(MAX_TITLE_CHARS).collect()
 }
 
+fn media_content_type(format: &str, video: bool) -> &'static str {
+    let formats = format.split(',').collect::<Vec<_>>();
+    if formats.contains(&"mov") {
+        if video { "video/mp4" } else { "audio/mp4" }
+    } else if formats.contains(&"webm") || formats.contains(&"matroska") {
+        if video { "video/webm" } else { "audio/webm" }
+    } else if formats.contains(&"mp3") {
+        "audio/mpeg"
+    } else if formats.contains(&"wav") {
+        "audio/wav"
+    } else if formats.contains(&"flac") {
+        "audio/flac"
+    } else if formats.contains(&"ogg") {
+        if video { "video/ogg" } else { "audio/ogg" }
+    } else if formats.contains(&"aac") {
+        "audio/aac"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameWindow {
+    frame_times_millis: Vec<f64>,
+    from_millis: u64,
+    to_millis: u64,
+}
+
+fn source_frames(
+    ffprobe: &Path,
+    source: &Path,
+    origin: f64,
+    duration: u64,
+    time: u64,
+    cancelled: &AtomicBool,
+) -> Result<FrameWindow, String> {
+    if time > duration {
+        return Err("Frame position exceeds source duration".into());
+    }
+    let from = time.saturating_sub(3000);
+    let to = time.saturating_add(6000).min(duration);
+    let interval = format!(
+        "{:.6}%{:.6}",
+        origin + from as f64 / 1000.0,
+        origin + to as f64 / 1000.0
+    );
+    let mut command = Command::new(ffprobe);
+    command
+        .args([
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            SAFE_INPUT_PROTOCOLS,
+            "-format_whitelist",
+            SAFE_INPUT_FORMATS,
+            "-read_intervals",
+            &interval,
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "csv=p=0",
+            "-i",
+        ])
+        .arg(source);
+    let bytes = bounded_cancellable_output(command, cancelled)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| "Invalid frame evidence")?;
+    let mut frames = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let timestamp = line
+            .split(',')
+            .next()
+            .unwrap_or("")
+            .parse::<f64>()
+            .map_err(|_| "Frame timestamp unavailable")?;
+        let time = (timestamp - origin) * 1000.0;
+        if !time.is_finite() || time < -1.0 || time > duration as f64 + 1.0 || frames.len() >= 16384
+        {
+            return Err("Frame evidence exceeds source bounds".into());
+        }
+        let time = time.max(0.0);
+        if frames
+            .last()
+            .is_some_and(|previous: &f64| time <= *previous || time.floor() == previous.floor())
+        {
+            return Err("Frame evidence has ambiguous millisecond boundaries".into());
+        }
+        frames.push(time);
+    }
+    Ok(FrameWindow {
+        frame_times_millis: frames,
+        from_millis: from,
+        to_millis: to,
+    })
+}
+
+pub async fn frames(
+    app: AppHandle,
+    clip_id: String,
+    time: u64,
+    request_id: String,
+) -> Result<FrameWindow, String> {
+    validate_clip_id(&clip_id)?;
+    validate_clip_id(&request_id)?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let session = {
+        let state = app.state::<LocalClipState>();
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "Local clip state lock is poisoned")?;
+        if inner.cancelled_requests.contains(&request_id) {
+            return Err("Frame inspection cancelled".into());
+        }
+        if inner.frame_cancel.is_some() {
+            return Err("Frame inspection is already running".into());
+        }
+        let session = inner
+            .preview
+            .as_ref()
+            .filter(|session| session.clip_id == clip_id && session.direct)
+            .cloned()
+            .ok_or("Preview no longer exists")?;
+        inner.frame_cancel = Some(cancelled.clone());
+        inner.frame_request_id = Some(request_id);
+        session
+    };
+    let worker_cancelled = cancelled.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        verify_source_unchanged(
+            &session.source_file,
+            &session.path,
+            &session.source_identity,
+        )?;
+        let (ffprobe, _) = resolve_media_tools()?;
+        let frames = source_frames(
+            &ffprobe,
+            &session.path,
+            session.timeline_origin,
+            session.duration_millis,
+            time,
+            &worker_cancelled,
+        )?;
+        verify_source_unchanged(
+            &session.source_file,
+            &session.path,
+            &session.source_identity,
+        )?;
+        Ok::<_, String>(frames)
+    })
+    .await
+    .map_err(|_| "Frame inspection worker failed".to_string())
+    .and_then(|result| result);
+    let state = app.state::<LocalClipState>();
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Local clip state lock is poisoned")?;
+    inner.frame_cancel = None;
+    inner.frame_request_id = None;
+    if cancelled.load(Ordering::Acquire)
+        || inner
+            .preview
+            .as_ref()
+            .is_none_or(|session| session.clip_id != clip_id)
+    {
+        return Err("Frame inspection cancelled".into());
+    }
+    result
+}
+
+pub fn cancel_frames(app: &AppHandle, request_id: &str) -> Result<bool, String> {
+    validate_clip_id(request_id)?;
+    let state = app.state::<LocalClipState>();
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Local clip state lock is poisoned")?;
+    if inner.frame_request_id.as_deref() == Some(request_id) {
+        if let Some(cancel) = &inner.frame_cancel {
+            cancel.store(true, Ordering::Release);
+            return Ok(true);
+        }
+    }
+    if inner.cancelled_requests.len() >= 32 {
+        inner.cancelled_requests.pop_front();
+    }
+    inner.cancelled_requests.push_back(request_id.into());
+    Ok(false)
+}
+
 fn prepare_source(
     path: PathBuf,
     preview_root: PathBuf,
     report: impl Fn(&str, &str),
     report_command: impl Fn(&str, &[String]),
     report_units: impl Fn(u64, u64) + Send + Sync + 'static,
+    compatible: bool,
+    cancelled: &AtomicBool,
 ) -> Result<PreparedLocalClip, String> {
     report("validate", "Validate selected local media");
     let (path, size_bytes) = validate_local_source(&path)?;
@@ -727,18 +1052,66 @@ fn prepare_source(
     }
     report("probe", "Probe duration and streams");
     let (ffprobe, ffmpeg) = resolve_media_tools()?;
-    let (duration_millis, frame_duration_millis) =
-        probe_media_with_report(&ffprobe, &path, &report_command)?;
+    let MediaInfo {
+        duration_millis,
+        frame_duration_millis,
+        video_offset,
+        format,
+        timeline_origin,
+    } = probe_media_cancellable(&ffprobe, &path, &report_command, cancelled)?;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Clip preparation cancelled".into());
+    }
+    if !compatible {
+        verify_source_unchanged(&source_file, &path, &source_identity)?;
+        let content_type = media_content_type(&format, video_offset.is_some()).to_string();
+        return Ok(PreparedLocalClip {
+            suggested_title: suggested_title(&path),
+            path,
+            source_file: source_file.clone(),
+            source_identity,
+            preview_file: source_file.clone(),
+            preview_size_bytes: size_bytes,
+            video: video_offset.map(|_| (source_file, size_bytes)),
+            size_bytes,
+            duration_millis,
+            frame_duration_millis,
+            frame_times_millis: Vec::new(),
+            video_offset_millis: 0.0,
+            direct: true,
+            content_type,
+            timeline_origin,
+        });
+    }
     verify_source_unchanged(&source_file, &path, &source_identity)?;
     report("portable-preview", "Build portable realtime preview");
-    let (preview_file, preview_size_bytes) = portable_preview_with_report(
+    let (preview_file, preview_size_bytes) = portable_preview_cancellable(
         &ffmpeg,
         &path,
         &preview_root,
         duration_millis,
         &report_command,
         Arc::new(report_units),
+        cancelled,
     )?;
+    let (video, frame_times_millis) = if let Some(offset) = video_offset {
+        report(
+            "video-preview",
+            "Build compatible video preview (whole file)",
+        );
+        let (file, size, frames) = crate::clip_video::prepare_cancellable(
+            &ffmpeg,
+            &ffprobe,
+            &path,
+            &preview_root,
+            duration_millis,
+            offset,
+            cancelled,
+        )?;
+        (Some((file, size)), frames)
+    } else {
+        (None, Vec::new())
+    };
     verify_source_unchanged(&source_file, &path, &source_identity)?;
     Ok(PreparedLocalClip {
         suggested_title: suggested_title(&path),
@@ -750,6 +1123,12 @@ fn prepare_source(
         size_bytes,
         duration_millis,
         frame_duration_millis,
+        video,
+        frame_times_millis,
+        video_offset_millis: video_offset.unwrap_or(0.0),
+        direct: false,
+        content_type: "audio/wav".into(),
+        timeline_origin,
     })
 }
 
@@ -765,23 +1144,41 @@ pub async fn prepare(
     app: AppHandle,
     scheduler: Arc<PriorityScheduler>,
     path: PathBuf,
-) -> Result<LocalClipPreview, String> {
+    request_id: String,
+    compatible: bool,
+    replace_clip_id: Option<String>,
+) -> Result<Option<LocalClipPreview>, String> {
+    validate_clip_id(&request_id)?;
+    if let Some(id) = &replace_clip_id {
+        validate_clip_id(id)?;
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
     let preview_root = app
         .path()
         .app_cache_dir()
         .map_err(|_| "Unable to resolve the local clip preview directory")?
         .join("clip-preview");
-    {
+    let previous = {
         let state = app.state::<LocalClipState>();
         let mut inner = state
             .inner
             .lock()
             .map_err(|_| "Local clip state lock is poisoned".to_string())?;
-        if inner.preparing || inner.preview.is_some() {
+        if inner.cancelled_requests.contains(&request_id) {
+            return Ok(None);
+        }
+        let previous = replacement_session(&inner, compatible, replace_clip_id.as_deref())?;
+        if inner.preparing {
             return Err("Finish or cancel the current clip first".into());
         }
+        if let Some(cancel) = &inner.frame_cancel {
+            cancel.store(true, Ordering::Release);
+        }
         inner.preparing = true;
-    }
+        inner.preparation_cancel = Some(cancelled.clone());
+        inner.request_id = Some(request_id.clone());
+        previous
+    };
     if let Err(error) = tasks::start(
         &app,
         TaskSpec {
@@ -790,12 +1187,14 @@ pub async fn prepare(
             title: "Prepare local clip".into(),
             status: TaskStatus::Running,
             progress_mode: ProgressMode::Indeterminate,
-            cancellable: false,
+            cancellable: true,
             related_item_id: None,
         },
     ) {
         if let Ok(mut inner) = app.state::<LocalClipState>().inner.lock() {
             inner.preparing = false;
+            inner.preparation_cancel = None;
+            inner.request_id = None;
         }
         return Err(error);
     }
@@ -807,13 +1206,25 @@ pub async fn prepare(
         "Local clip preparation started",
     );
     let task_app = app.clone();
+    let worker_cancelled = cancelled.clone();
+    let worker_previous = previous.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _permit = scheduler.acquire(IoPriority::AlternateTrack)?;
+        let _permit =
+            scheduler.acquire_cancellable(IoPriority::AlternateTrack, &worker_cancelled)?;
         let stage_app = task_app.clone();
         let command_app = task_app.clone();
         let unit_app = task_app;
-        prepare_source(
-            path,
+        if let Some(session) = &worker_previous {
+            verify_source_unchanged(
+                &session.source_file,
+                &session.path,
+                &session.source_identity,
+            )?;
+        }
+        let prepared = prepare_source(
+            worker_previous
+                .as_ref()
+                .map_or(path, |session| session.path.clone()),
             preview_root,
             |stage, title| {
                 tasks::progress(
@@ -851,7 +1262,20 @@ pub async fn prepare(
                     },
                 );
             },
-        )
+            compatible,
+            &worker_cancelled,
+        )?;
+        if let Some(session) = &worker_previous {
+            verify_source_unchanged(
+                &session.source_file,
+                &session.path,
+                &session.source_identity,
+            )?;
+            if prepared.source_identity != session.source_identity {
+                return Err("Selected media changed while its preview was prepared".into());
+            }
+        }
+        Ok(prepared)
     })
     .await
     .map_err(|error| format!("Local clip task failed: {error}"));
@@ -861,6 +1285,24 @@ pub async fn prepare(
         .lock()
         .map_err(|_| "Local clip state lock is poisoned".to_string())?;
     inner.preparing = false;
+    inner.preparation_cancel = None;
+    inner.request_id = None;
+    if cancelled.load(Ordering::Acquire)
+        || previous.as_ref().is_some_and(|session| {
+            inner
+                .preview
+                .as_ref()
+                .is_none_or(|current| current.clip_id != session.clip_id)
+        })
+    {
+        tasks::finish(
+            &app,
+            CLIP_TASK_ID,
+            TaskStatus::Cancelled,
+            Some("Clip preparation cancelled".into()),
+        );
+        return Ok(None);
+    }
     let prepared = match result.and_then(|result| result) {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -876,15 +1318,30 @@ pub async fn prepare(
         duration_millis: prepared.duration_millis,
         frame_duration_millis: prepared.frame_duration_millis,
         preview_url: preview_url(&clip_id),
+        video_url: prepared
+            .video
+            .as_ref()
+            .map(|_| format!("{}/video", preview_url(&clip_id))),
+        frame_times_millis: prepared.frame_times_millis,
+        video_offset_millis: prepared.video_offset_millis,
+        direct: prepared.direct,
+        // Browser clocks for offset containers vary by demuxer and even change
+        // after loadeddata. Do not expose them as normalized editing clocks.
+        requires_compatibility: requires_compatibility(prepared.direct, prepared.timeline_origin),
     };
     inner.preview = Some(LocalClipSession {
         clip_id,
+        request_id,
         path: prepared.path,
         source_file: prepared.source_file,
         source_identity: prepared.source_identity,
         preview_file: prepared.preview_file,
         preview_size_bytes: prepared.preview_size_bytes,
+        video: prepared.video,
         duration_millis: prepared.duration_millis,
+        direct: prepared.direct,
+        content_type: prepared.content_type,
+        timeline_origin: prepared.timeline_origin,
     });
     tasks::finish(
         &app,
@@ -892,7 +1349,70 @@ pub async fn prepare(
         TaskStatus::Succeeded,
         Some("Local clip preview ready".into()),
     );
-    Ok(preview)
+    Ok(Some(preview))
+}
+
+fn replacement_session(
+    inner: &LocalClipInner,
+    compatible: bool,
+    replace_clip_id: Option<&str>,
+) -> Result<Option<LocalClipSession>, String> {
+    match (&inner.preview, replace_clip_id) {
+        (None, None) => Ok(None),
+        (Some(session), Some(id)) if compatible && session.clip_id == id => {
+            Ok(Some(session.clone()))
+        }
+        _ => Err("Finish or cancel the current clip first".into()),
+    }
+}
+
+fn requires_compatibility(direct: bool, timeline_origin: f64) -> bool {
+    direct && timeline_origin.abs() > 0.000001
+}
+
+pub fn cancel_preparation(app: &AppHandle, request_id: Option<&str>) -> Result<bool, String> {
+    if let Some(id) = request_id {
+        validate_clip_id(id)?;
+    }
+    let state = app.state::<LocalClipState>();
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Local clip state lock is poisoned")?;
+    Ok(cancel_preparation_inner(&mut inner, request_id))
+}
+
+fn cancel_preparation_inner(inner: &mut LocalClipInner, request_id: Option<&str>) -> bool {
+    if request_id.is_none() || request_id == inner.request_id.as_deref() {
+        if let Some(cancelled) = &inner.preparation_cancel {
+            cancelled.store(true, Ordering::Release);
+            return true;
+        }
+    }
+    if let Some(id) = request_id {
+        if inner
+            .preview
+            .as_ref()
+            .is_some_and(|session| session.request_id == id)
+        {
+            inner.preview = None;
+            if let Some(cancelled) = &inner.frame_cancel {
+                cancelled.store(true, Ordering::Release);
+            }
+            return true;
+        }
+        if !inner
+            .cancelled_requests
+            .iter()
+            .any(|existing| existing == id)
+        {
+            if inner.cancelled_requests.len() >= 32 {
+                inner.cancelled_requests.pop_front();
+            }
+            inner.cancelled_requests.push_back(id.to_string());
+        }
+    }
+    false
 }
 
 pub fn cancel(app: &AppHandle, clip_id: &str) -> Result<bool, String> {
@@ -912,6 +1432,9 @@ fn cancel_inner(inner: &mut LocalClipInner, clip_id: &str) -> bool {
         .is_some_and(|preview| preview.clip_id == clip_id)
     {
         inner.preview = None;
+        if let Some(cancelled) = &inner.frame_cancel {
+            cancelled.store(true, Ordering::Release);
+        }
         true
     } else {
         false
@@ -952,16 +1475,100 @@ pub fn commit(
     clipped_local_media_item_from_verified_path(path, title, start_millis, end_millis)
 }
 
-fn preview_file_response(
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipSection {
+    pub start_millis: u64,
+    pub end_millis: u64,
+    pub title: String,
+}
+
+fn section_items(
+    session: &LocalClipSession,
+    sections: &[ClipSection],
+) -> Result<Vec<CatalogItem>, String> {
+    if sections.is_empty() || sections.len() > 128 {
+        return Err("Choose between 1 and 128 sections".into());
+    }
+    for section in sections {
+        validate_title(&section.title)?;
+        if section.start_millis >= section.end_millis
+            || section.end_millis > session.duration_millis
+        {
+            return Err("Section range is outside the source timeline".into());
+        }
+    }
+    verify_source_unchanged(
+        &session.source_file,
+        &session.path,
+        &session.source_identity,
+    )?;
+    sections
+        .iter()
+        .map(|section| {
+            let mut item = clipped_local_media_item_from_verified_path(
+                session.path.clone(),
+                validate_title(&section.title)?,
+                section.start_millis,
+                section.end_millis,
+            )?;
+            item.id = Uuid::new_v4().to_string();
+            item.section_id = Some(item.id.clone());
+            item.lyric_text.clear();
+            item.first_lyric_line = None;
+            item.status = crate::catalog::ItemStatus::WaitingForLyrics;
+            item.status_message = None;
+            for location in &mut item.locations {
+                if let crate::catalog::ItemLocation::LocalMedia { lyrics_path, .. } = location {
+                    *lyrics_path = None;
+                }
+            }
+            Ok(item)
+        })
+        .collect()
+}
+
+pub fn commit_sections(
+    app: &AppHandle,
+    clip_id: &str,
+    sections: &[ClipSection],
+) -> Result<crate::catalog::CatalogSnapshot, String> {
+    validate_clip_id(clip_id)?;
+    let state = app.state::<LocalClipState>();
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Clip state lock is poisoned")?;
+    let session = inner
+        .preview
+        .as_ref()
+        .filter(|session| session.clip_id == clip_id)
+        .ok_or("Clip preview is no longer available")?;
+    let items = section_items(session, sections)?;
+    let snapshot = app
+        .state::<crate::CatalogState>()
+        .0
+        .lock()
+        .map_err(|_| "Catalog lock is poisoned")?
+        .admit_sections(items)?;
+    inner.preview = None;
+    if let Some(cancelled) = &inner.frame_cancel {
+        cancelled.store(true, Ordering::Release);
+    }
+    Ok(snapshot)
+}
+
+fn preview_file_response_with_type(
     source: &fs::File,
     length: u64,
     method: &Method,
     range: Option<&str>,
+    content_type: &str,
 ) -> Response<Vec<u8>> {
     if method == Method::HEAD {
         return Response::builder()
             .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "audio/wav")
+            .header(header::CONTENT_TYPE, content_type)
             .header(header::CONTENT_LENGTH, length)
             .header(header::ACCEPT_RANGES, "bytes")
             .header(header::CACHE_CONTROL, "no-store")
@@ -989,7 +1596,7 @@ fn preview_file_response(
         } else {
             StatusCode::OK
         })
-        .header(header::CONTENT_TYPE, "audio/wav")
+        .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_LENGTH, bytes.len())
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "no-store")
@@ -1006,6 +1613,16 @@ fn preview_file_response(
         .expect("valid local clip preview response")
 }
 
+#[cfg(test)]
+fn preview_file_response(
+    source: &fs::File,
+    length: u64,
+    method: &Method,
+    range: Option<&str>,
+) -> Response<Vec<u8>> {
+    preview_file_response_with_type(source, length, method, range, "audio/wav")
+}
+
 pub fn preview_protocol(
     context: UriSchemeContext<'_, tauri::Wry>,
     request: Request<Vec<u8>>,
@@ -1016,7 +1633,10 @@ pub fn preview_protocol(
     if request.method() != Method::GET && request.method() != Method::HEAD {
         return error_response(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed");
     }
-    let clip_id = request.uri().path().trim_start_matches('/');
+    let route = request.uri().path().trim_start_matches('/');
+    let (clip_id, video) = route
+        .strip_suffix("/video")
+        .map_or((route, false), |id| (id, true));
     if validate_clip_id(clip_id).is_err() {
         return error_response(StatusCode::NOT_FOUND, "Not found");
     }
@@ -1031,20 +1651,275 @@ pub fn preview_protocol(
                 .preview
                 .as_ref()
                 .filter(|preview| preview.clip_id == clip_id)
-                .map(|preview| (preview.preview_file.clone(), preview.preview_size_bytes))
+                .and_then(|preview| {
+                    if preview.direct
+                        && verify_source_unchanged(
+                            &preview.source_file,
+                            &preview.path,
+                            &preview.source_identity,
+                        )
+                        .is_err()
+                    {
+                        return None;
+                    }
+                    let file = if video {
+                        preview.video.clone()
+                    } else {
+                        Some((preview.preview_file.clone(), preview.preview_size_bytes))
+                    };
+                    file.map(|(file, size)| {
+                        (
+                            file,
+                            size,
+                            if preview.direct {
+                                preview.content_type.clone()
+                            } else if video {
+                                "video/mp4".into()
+                            } else {
+                                "audio/wav".into()
+                            },
+                        )
+                    })
+                })
         });
-    let Some((file, length)) = descriptor else {
+    let Some((file, length, content_type)) = descriptor else {
         return error_response(StatusCode::NOT_FOUND, "Not found");
     };
     let range = request
         .headers()
         .get(header::RANGE)
         .and_then(|value| value.to_str().ok());
-    preview_file_response(&file, length, request.method(), range)
+    preview_file_response_with_type(&file, length, request.method(), range, &content_type)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "Requires an explicitly authorized local media file; no media is committed"]
+    fn authorized_long_media_preview_benchmark() {
+        let path = std::path::PathBuf::from(
+            std::env::var_os("LYRICRAIL_PREVIEW_BENCHMARK_SOURCE")
+                .expect("Set an authorized source"),
+        );
+        let cache = tempfile::tempdir().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        let preview = super::prepare_source(
+            path,
+            cache.path().into(),
+            |_, _| {},
+            |_, _| {},
+            |_, _| {},
+            false,
+            &cancel,
+        )
+        .unwrap();
+        println!(
+            "direct_open_ms={} duration_ms={} source_bytes={}",
+            start.elapsed().as_millis(),
+            preview.duration_millis,
+            preview.size_bytes
+        );
+        assert!(preview.direct);
+        assert!(cache.path().read_dir().unwrap().next().is_none());
+        let (ffprobe, _) = super::resolve_media_tools().unwrap();
+        for time in [
+            0,
+            preview.duration_millis / 2,
+            preview.duration_millis.saturating_sub(1000),
+        ] {
+            let start = std::time::Instant::now();
+            let window = super::source_frames(
+                &ffprobe,
+                &preview.path,
+                preview.timeline_origin,
+                preview.duration_millis,
+                time,
+                &cancel,
+            )
+            .unwrap();
+            println!(
+                "seek_ms={time} frame_query_ms={} frame_count={}",
+                start.elapsed().as_millis(),
+                window.frame_times_millis.len()
+            );
+            assert!(!window.frame_times_millis.is_empty());
+            assert!(window.frame_times_millis.len() < 16384);
+        }
+        super::verify_source_unchanged(
+            &preview.source_file,
+            &preview.path,
+            &preview.source_identity,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cancelling_preparation_is_request_scoped_and_bounded() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let mut inner = super::LocalClipInner::default();
+        assert!(!super::cancel_preparation_inner(
+            &mut inner,
+            Some("before-start")
+        ));
+        assert!(
+            inner
+                .cancelled_requests
+                .iter()
+                .any(|id| id == "before-start")
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        inner.request_id = Some("active".into());
+        inner.preparation_cancel = Some(cancel.clone());
+        assert!(!super::cancel_preparation_inner(&mut inner, Some("stale")));
+        assert!(!cancel.load(Ordering::Acquire));
+        assert!(super::cancel_preparation_inner(&mut inner, None));
+        assert!(cancel.load(Ordering::Acquire));
+        for id in 0..100 {
+            super::cancel_preparation_inner(&mut inner, Some(&id.to_string()));
+        }
+        assert_eq!(inner.cancelled_requests.len(), 32);
+    }
+
+    #[test]
+    fn cancellation_reaps_a_running_media_child_promptly() {
+        use std::{
+            process::{Command, Stdio},
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+            time::{Duration, Instant},
+        };
+        let ffmpeg = available_tool("LYRICRAIL_FFMPEG", "ffmpeg").expect("FFmpeg test dependency");
+        let mut child = Command::new(ffmpeg)
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-re",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=16000",
+                "-f",
+                "null",
+                "-",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let signal = cancel.clone();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            signal.store(true, Ordering::Release);
+        });
+        let start = Instant::now();
+        assert!(
+            super::wait_cancellable_child(
+                &mut child,
+                Duration::from_secs(10),
+                "timeout",
+                None,
+                Some(&cancel)
+            )
+            .is_err()
+        );
+        thread.join().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn direct_source_frames_preserve_variable_timestamps_and_bounds() {
+        use std::{process::Command, sync::atomic::AtomicBool};
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("timing.mp4");
+        let ffprobe =
+            available_tool("LYRICRAIL_FFPROBE", "ffprobe").expect("FFprobe test dependency");
+        let ffmpeg = available_tool("LYRICRAIL_FFMPEG", "ffmpeg").expect("FFmpeg test dependency");
+        let output = Command::new(ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x48:rate=10:duration=1",
+                "-vf",
+                "select='eq(n,0)+eq(n,1)+eq(n,3)+eq(n,7)'",
+                "-fps_mode",
+                "vfr",
+                "-c:v",
+                "libx264",
+                "-y",
+            ])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let before = std::fs::read(&source).unwrap();
+        let cancel = AtomicBool::new(false);
+        let window = super::source_frames(&ffprobe, &source, 0.0, 1000, 300, &cancel).unwrap();
+        assert_eq!(window.frame_times_millis, [0.0, 100.0, 300.0, 700.0]);
+        assert!(super::source_frames(&ffprobe, &source, 0.0, 1000, 1001, &cancel).is_err());
+        assert_eq!(before, std::fs::read(&source).unwrap());
+        assert!(
+            super::source_frames(&ffprobe, &source, 0.0, 1000, 0, &AtomicBool::new(true)).is_err()
+        );
+    }
+
+    #[test]
+    fn offset_containers_require_compatible_clocks_before_editing() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("offset.mp4");
+        let ffprobe = available_tool("LYRICRAIL_FFPROBE", "ffprobe").unwrap();
+        let ffmpeg = available_tool("LYRICRAIL_FFMPEG", "ffmpeg").unwrap();
+        assert!(
+            Command::new(ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x48:rate=10:duration=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=duration=2",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    "-output_ts_offset",
+                    "5"
+                ])
+                .arg(&source)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let info = super::probe_media_cancellable(
+            &ffprobe,
+            &source,
+            &|_, _| {},
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(info.timeline_origin > 4.9);
+        assert!(super::requires_compatibility(true, info.timeline_origin));
+        assert!(super::requires_compatibility(true, -0.023));
+        assert!(!super::requires_compatibility(true, 0.0));
+        assert!(!super::requires_compatibility(false, info.timeline_origin));
+    }
+
     use super::{
         LocalClipInner, LocalClipSession, cancel_inner, open_source_guard, parse_frame_duration,
         portable_preview_with_tool, preview_file_response, read_exact_at, source_identity,
@@ -1131,8 +2006,18 @@ mod tests {
         let source_identity = source_identity(&source_file).unwrap();
         let preview_file = Arc::new(tempfile::tempfile().unwrap());
         let mut inner = LocalClipInner {
+            preparation_cancel: None,
+            request_id: None,
+            cancelled_requests: Default::default(),
+            frame_cancel: None,
+            frame_request_id: None,
             preparing: false,
             preview: Some(LocalClipSession {
+                request_id: String::new(),
+                direct: false,
+                content_type: "audio/wav".into(),
+                timeline_origin: 0.0,
+                video: None,
                 clip_id: "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b".into(),
                 path: canonical,
                 source_file,
@@ -1142,11 +2027,102 @@ mod tests {
                 duration_millis: 1_000,
             }),
         };
+        // Starting a compatible replacement borrows the authenticated session;
+        // a worker error or cancelled attempt cannot consume the existing preview.
+        let id = "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b";
+        assert!(super::replacement_session(&inner, false, Some(id)).is_err());
+        assert!(super::replacement_session(&inner, true, Some("wrong")).is_err());
+        assert!(super::replacement_session(&inner, true, None).is_err());
+        let previous = super::replacement_session(&inner, true, Some(id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            previous.source_identity,
+            inner.preview.as_ref().unwrap().source_identity
+        );
+        drop(previous);
+        assert_eq!(inner.preview.as_ref().unwrap().clip_id, id);
         assert!(cancel_inner(
             &mut inner,
             "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b"
         ));
         assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn section_batches_validate_all_ranges_and_never_reuse_whole_file_lyrics() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.mp4");
+        fs::write(&path, b"synthetic source").unwrap();
+        let lyrics = directory.path().join("source.txt");
+        fs::write(&lyrics, b"Exact whole source lyrics").unwrap();
+        let source_file = Arc::new(fs::File::open(&path).unwrap());
+        let session = LocalClipSession {
+            request_id: String::new(),
+            direct: false,
+            content_type: "audio/wav".into(),
+            timeline_origin: 0.0,
+            clip_id: uuid::Uuid::new_v4().to_string(),
+            path: path.canonicalize().unwrap(),
+            source_identity: source_identity(&source_file).unwrap(),
+            source_file,
+            preview_file: Arc::new(tempfile::tempfile().unwrap()),
+            preview_size_bytes: 44,
+            video: Some((Arc::new(tempfile::tempfile().unwrap()), 100)),
+            duration_millis: 1000,
+        };
+        let section = super::ClipSection {
+            start_millis: 10,
+            end_millis: 500,
+            title: "First song".into(),
+        };
+        for invalid in [
+            Vec::new(),
+            vec![section.clone(); 129],
+            vec![
+                section.clone(),
+                super::ClipSection {
+                    end_millis: 1001,
+                    ..section.clone()
+                },
+            ],
+            vec![super::ClipSection {
+                title: "".into(),
+                ..section.clone()
+            }],
+        ] {
+            assert!(super::section_items(&session, &invalid).is_err());
+        }
+        let items = super::section_items(&session, &[section.clone(), section]).unwrap();
+        assert_ne!(items[0].id, items[1].id);
+        for item in items {
+            assert_eq!(item.status, crate::catalog::ItemStatus::WaitingForLyrics);
+            assert!(item.lyric_text.is_empty());
+            assert!(matches!(
+                item.locations[0],
+                crate::catalog::ItemLocation::LocalMedia {
+                    lyrics_path: None,
+                    trim_start_millis: Some(10),
+                    trim_end_millis: Some(500),
+                    ..
+                }
+            ));
+        }
+        assert_eq!(fs::read(&path).unwrap(), b"synthetic source");
+        assert_eq!(fs::read(&lyrics).unwrap(), b"Exact whole source lyrics");
+        let video = Arc::downgrade(&session.video.as_ref().unwrap().0);
+        let id = session.clip_id.clone();
+        let mut inner = LocalClipInner {
+            preparation_cancel: None,
+            request_id: None,
+            cancelled_requests: Default::default(),
+            frame_cancel: None,
+            frame_request_id: None,
+            preparing: false,
+            preview: Some(session),
+        };
+        assert!(cancel_inner(&mut inner, &id));
+        assert!(video.upgrade().is_none());
     }
 
     #[test]

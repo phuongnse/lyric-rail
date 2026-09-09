@@ -37,16 +37,21 @@ The native registry admits the complete bounded catalog queue but selects only a
 priority window without cloning it. Rows outside that window use the same by-ID native
 lookup, so their View task/Cancel path remains available while frontend memory stays bounded.
 
-Selecting exactly one supported local media file opens the Clip Editor. Native code
-canonicalizes and identity-binds the regular file, runs bounded local-only ffprobe, and
-derives a 16 kHz mono PCM audio preview into an anonymous delete-on-close handle. Its
-opaque range responses are capped at 2 MiB; the frontend never receives a filesystem path.
-PTS normalization and bounded silence padding keep its playhead on the original source
-timeline even when an audio stream is delayed or shorter than the containing video.
-The whole timeline is selected by default, while exact Start/End values flow into the
-same sequential lyrics/processing queue. Preview, cancel and commit leave source bytes
-unchanged. Independent positional range reads remain correct under concurrent WebView
-requests. Packages and multi-file selections still enter the library directly.
+Selecting exactly one supported local media file opens the Clip Editor with the whole
+timeline selected. Native code canonicalizes and identity-binds the regular file,
+probes its metadata with bounded local-only ffprobe, and exposes the source through
+opaque range responses capped at 2 MiB. The frontend receives no filesystem media URL.
+Nearby measured frame timestamps load on demand. Unsupported clock origins or codecs
+use the explicit cancellable compatible preview, with anonymous PCM/H264 handles and
+PTS normalization to preserve source timing. Preview, cancel and commit leave source
+bytes unchanged. Packages and multi-file selections still enter the library directly.
+
+The editor keeps the current song's name, Start/End times and edge auditions beside
+the video. Its section seek and Pause/Play share the audio clock; source browsing and
+timeline zoom remain separate from that playback position. Frame buttons belong to
+their endpoint, and a new time draft cancels a pending frame nudge. Multi-song management
+appears only after adding another song. Invalid drafts survive switching and offer a
+direct route back to the song needing correction. See the [editor guide](../../docs/CLIP_EDITOR.md).
 
 The Player imports the canonical mark from `assets/brand/lyricrail-mark.svg`. Bundle
 icons are generated from that same source with `npm run brand:icons`; do not substitute

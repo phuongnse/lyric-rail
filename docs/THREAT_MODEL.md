@@ -87,10 +87,41 @@ The product must not claim otherwise.
    rejects links and unsupported/non-regular files, canonicalizes the path, bounds file
    size, and guards platform file identity/change metadata from probe through commit.
    ffprobe/ffmpeg use local-file and fixed-demuxer allowlists plus time/output limits.
-   A bounded 16 kHz mono PCM preview lives only in an anonymous delete-on-close handle;
-   normalized PTS plus leading/trailing silence bind its playhead to the source duration.
-   The main WebView receives a random opaque session identifier and positional range
-   bytes. Cancel and commit close session state but never mutate the source.
+   Initial preview reads metadata and serves the pinned source, rechecking identity at
+   each opaque positional range request (maximum 2 MiB). It does not transcode or decode
+   the full file. Nearby frame inspection uses decoded source PTS normalized by format
+   start time, with a nine-second requested interval, 1 MiB/16,384-frame/20-second bounds;
+   seeking may start at an earlier keyframe. One active query and one replaceable UI
+   destination bound rapid seeking; request IDs scope cancellation and stale rejection.
+   The UI retains at most two overlapping frame windows and fetches missing neighbors;
+   requested probe bounds alone are not evidence of adjacent frames. Empty or stalled
+   inspection is explicit and retryable. Nonzero container origins require explicit
+   compatibility preparation before playback; browser time is not assumed normalized.
+   Preparation is cancellable from its modal and Activity, including scheduler wait,
+   subprocess work and the final publication boundary. Owned children are killed/reaped.
+   Video sources are bounded to 8K pixel count. Unsupported webview codecs expose an
+   explicit whole-file compatibility fallback, never an automatic long conversion.
+   Replacement authenticates the existing clip ID and pinned source identity, retaining
+   the previous session and editor drafts until successful publication. A failed attempt
+   leaves the old preview usable; closing it prevents late replacement publication.
+   That fallback uses anonymous delete-on-close 16 kHz mono PCM with normalized PTS and
+   leading/trailing silence, plus an anonymous muted H264 proxy capped at 2 GiB/300 seconds,
+   with passthrough presentation timestamps and a bounded one-million-frame/24 MiB/
+   120-second frame inspection. Audio remains the source-timeline clock. Frame trim
+   boundaries are floored once to native integer milliseconds (less than 1 ms early);
+   frame preview seeks retain measured presentation timestamps. Explicit time entry
+   accepts source milliseconds, including audio before video begins, without resnapping.
+   Invalid drafts block batch admission. No raw source
+   path is served. Batches validate every range/title and source identity before one
+   encrypted catalog publication; a save failure retains the prior catalog and preview.
+   Successful admission consumes the locked session so retries cannot duplicate songs.
+   Typed optional section identity prevents path-based rescan deduplication from merging
+   independent songs, including after processing completion and package refresh.
+   Each section waits for its own exact lyrics. Cancel and commit
+   close session state but never mutate the source.
+   Catalog v4 reads/migrates v1-v3 with absent section identities. Its version prevents
+   older Players from opening and silently merging independently admitted sections;
+   package v1 and recovery bundle formats are unchanged.
 9. **Recovery.** A native executable owns passphrase input. Restore rejects active
    rotation, wrong/corrupt bundles and conflicting current keys, and verifies at least
    one complete package before storing a previously missing master. A cloud-only new

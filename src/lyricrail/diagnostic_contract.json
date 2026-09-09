@@ -29,6 +29,7 @@
     "Refresh Drive package metadata",
     "Cache encrypted Drive package",
     "Build portable realtime preview",
+    "Build compatible video preview (whole file)",
     "Download and verify pinned models",
     "Cancelling model installation",
     "Start local processing job",
@@ -87,6 +88,7 @@
     "cleanup_intermediates": "Remove verified cleartext intermediates",
     "download-and-verify": "Download and verify pinned models",
     "ciphertext-cache": "Cache encrypted Drive package",
-    "portable-preview": "Prepare local clip preview"
+    "portable-preview": "Prepare local clip preview",
+    "video-preview": "Build compatible video preview (whole file)"
   }
 }
