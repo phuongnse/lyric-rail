@@ -14,6 +14,18 @@ const MEDIA_EXTENSIONS = new Set([
   "wma",
 ]);
 
+export function frameAt(frames: number[], time: number): number {
+  let low = 0, high = frames.length;
+  while (low < high) { const middle = (low + high) >>> 1; if (frames[middle] <= time + .01) low = middle + 1; else high = middle; }
+  return Math.max(0, low - 1);
+}
+
+export function clipView(duration: number, center: number, span: number) {
+  const width = Math.min(duration, Math.max(1, span));
+  const start = Math.max(0, Math.min(duration - width, center - width / 2));
+  return { start: Math.floor(start), end: Math.ceil(start + width) };
+}
+
 function extension(path: string): string {
   const name = path.split(/[\\/]/).pop() ?? "";
   const dot = name.lastIndexOf(".");

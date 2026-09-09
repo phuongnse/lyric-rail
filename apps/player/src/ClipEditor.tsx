@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type RefObject, type KeyboardEvent } from "react";
-import { formatTimecodeMillis, parseTimecodeMillis } from "./clipSelection";
+import { useEffect, useRef, useState, type RefObject, type KeyboardEvent } from "react";
+import { clipView, frameAt, formatTimecodeMillis, parseTimecodeMillis } from "./clipSelection";
+export { frameAt } from "./clipSelection";
 import "./clipEditor.css";
-import { useClipFrames } from "./useClipFrames";
+import { useClipPlayback } from "./useClipPlayback";
 
 export type LocalClipPreview = {
   direct?: boolean; requiresCompatibility?: boolean; clipId: string; suggestedTitle: string; sizeBytes: number; durationMillis: number;
@@ -10,12 +11,6 @@ export type LocalClipPreview = {
 export type ClipSection = { startMillis: number; endMillis: number; title: string };
 type Section = ClipSection & { id: number };
 type Endpoint = "startMillis" | "endMillis";
-
-export function frameAt(frames: number[], time: number): number {
-  let low = 0, high = frames.length;
-  while (low < high) { const middle = (low + high) >>> 1; if (frames[middle] <= time + .01) low = middle + 1; else high = middle; }
-  return Math.max(0, low - 1);
-}
 
 export function validSections(sections: ClipSection[], duration: number): boolean {
   return sections.length > 0 && sections.length <= 128 && sections.every((section) => section.title.trim().length > 0 && section.title.length <= 200
@@ -29,25 +24,44 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
 }) {
   const [sections, setSections] = useState<Section[]>([{ id: 1, startMillis: 0, endMillis: preview.durationMillis, title: preview.suggestedTitle }]);
   const [selected, setSelected] = useState(1);
-  const [position, setPosition] = useState(0);
-  const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(false);
-  const [error, setError] = useState("");
-  const [review, setReview] = useState(false);
-  const [volume, setVolume] = useState(.8);
+  const [review, setReview] = useState(true);
+  const [audition, setAudition] = useState<"start" | "end" | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [pendingNudge, setPendingNudge] = useState<{ id: number; endpoint: Endpoint; time: number; direction: -1 | 1 }>();
+  const [view, setView] = useState(() => clipView(preview.durationMillis, preview.durationMillis / 2, preview.durationMillis));
   const nextId = useRef(2);
-  const audio = useRef<HTMLAudioElement>(null), video = useRef<HTMLVideoElement>(null);
   const active = sections.find((section) => section.id === selected)!;
-  const frameData = useClipFrames(preview, position, playing || busy);
+  const duration = preview.durationMillis, hasVideo = Boolean(preview.videoUrl);
+  const playbackRange = review ? {
+    startMillis: audition === "end" ? Math.max(active.startMillis, active.endMillis - 5000) : active.startMillis,
+    endMillis: audition === "start" ? Math.min(active.endMillis, active.startMillis + 5000) : active.endMillis,
+  } : null;
+  const { audio, video, position, playing, volume, setVolume, error, setError, mediaError, fail,
+    frameData, boundaries, seek, stop, play, ended } = useClipPlayback(preview, playbackRange, loop, busy, onPlay);
   const frames = frameData.frames;
-  const hasVideo = Boolean(preview.videoUrl);
-  const [mediaError, setMediaError] = useState(false);
-  useEffect(() => { setMediaError(false); setError(""); setPosition(0); setPlaying(false); setReview(false); }, [preview.clipId]);
-  // Native trim ranges use integer milliseconds. Quantize once, including for lookup,
-  // so a displayed boundary never snaps back to the preceding fractional frame.
-  const boundaries = useMemo(() => frames.map(Math.floor), [frames]);
-  const duration = preview.durationMillis;
+  const focusView = (time: number, span = 10000) => setView(clipView(duration, time, span));
+  const fitSection = (section = active) => focusView((section.startMillis + section.endMillis) / 2,
+    section.endMillis - section.startMillis + Math.min(10000, (section.endMillis - section.startMillis) / 5));
+  const userSeek = (time: number, selection: boolean) => {
+    setPendingNudge(undefined); setAudition(null); setReview(selection);
+    seek(selection ? Math.max(active.startMillis, Math.min(active.endMillis, time)) : time);
+  };
+  const goTo = (endpoint: Endpoint) => {
+    stop(); userSeek(active[endpoint], true); setAudition(endpoint === "endMillis" ? "end" : "start"); focusView(active[endpoint]);
+  };
+  const auditionEdge = (edge: "start" | "end") => {
+    stop(); setPendingNudge(undefined); setReview(true); setAudition(edge);
+    const bounds = { startMillis: edge === "end" ? Math.max(active.startMillis, active.endMillis - 5000) : active.startMillis,
+      endMillis: edge === "start" ? Math.min(active.endMillis, active.startMillis + 5000) : active.endMillis };
+    focusView((bounds.startMillis + bounds.endMillis) / 2);
+    void play(bounds.startMillis, bounds);
+  };
+  useEffect(() => {
+    setPendingNudge(undefined); setReview(true); setAudition(null);
+    setView(clipView(duration, duration / 2, duration));
+  }, [preview.clipId]);
+  useEffect(() => { if (busy) setPendingNudge(undefined); }, [busy]);
   const pendingSections = sections.map((section) => {
     const result = { ...section };
     for (const endpoint of ["startMillis", "endMillis"] as const) {
@@ -58,24 +72,6 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
   });
   const validDrafts = validSections(pendingSections, duration);
   const videoOffset = preview.videoOffsetMillis ?? 0;
-  const videoTime = (time: number) => {
-    const index = frameAt(boundaries, time);
-    const presentation = boundaries[index] === time ? frames[index] + .01 : time;
-    return Math.max(0, presentation - videoOffset) / 1000;
-  };
-  useEffect(() => { if (audio.current) audio.current.volume = volume; }, [volume]);
-  const stop = () => {
-    audio.current?.pause(); video.current?.pause();
-    const time = (audio.current?.currentTime ?? 0) * 1000;
-    if (video.current) video.current.currentTime = videoTime(time);
-    setPosition(time); setPlaying(false);
-  };
-  const seek = (time: number) => {
-    const bounded = Math.max(0, Math.min(duration, time));
-    if (audio.current) audio.current.currentTime = bounded / 1000;
-    if (video.current) video.current.currentTime = videoTime(bounded);
-    setPosition(bounded);
-  };
   const patch = (change: Partial<ClipSection>) => setSections((items) => items.map((item) => item.id === selected ? { ...item, ...change } : item));
   const clearDraft = (endpoint: Endpoint) => setDrafts((current) => {
     const next = { ...current }; delete next[`${selected}-${endpoint}`]; return next;
@@ -84,71 +80,63 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
     ? boundaries[frameAt(boundaries, time)] : Math.round(time);
   const boundary = (endpoint: Endpoint, time: number) => {
     const snapped = snap(time);
-    const value = endpoint === "startMillis" ? Math.max(0, Math.min(snapped, active.endMillis - 1)) : Math.min(duration, Math.max(active.startMillis + 1, snapped));
-    patch({ [endpoint]: value }); clearDraft(endpoint); return value;
+    const value = endpoint === "startMillis" ? snapped < active.endMillis ? Math.max(0, snapped) : active.startMillis
+      : snapped > active.startMillis ? Math.min(duration, snapped) : active.endMillis;
+    patch({ [endpoint]: value }); clearDraft(endpoint); setAudition(null); setPendingNudge(undefined); return value;
   };
   const mark = (endpoint: Endpoint) => {
-    if (hasVideo && !frameData.ready) return;
+    if (hasVideo && (!frameData.ready || !frames.length)) return;
     boundary(endpoint, position);
   };
-  const handleBoundaryKey = (event: KeyboardEvent<HTMLInputElement>, endpoint: Endpoint) => {
-    if (busy || event.ctrlKey || event.metaKey || event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-    event.preventDefault(); event.stopPropagation(); stop();
-    if (event.key === "Home" || event.key === "End") { seek(boundary(endpoint, event.key === "Home" ? 0 : duration)); return; }
-    const current = active[endpoint];
-    if (hasVideo && (!frameData.covers(current) || !frames.length)) { seek(current); frameData.retry(); return; }
-    const forward = event.key === "ArrowRight" || event.key === "ArrowUp";
-    let time = current + (forward ? 10 : -10);
-    if (boundaries.length && current >= boundaries[0]) {
-      const index = frameAt(boundaries, current);
-      time = forward ? boundaries[index + 1] ?? duration : boundaries[index] < current ? boundaries[index] : boundaries[index - 1] ?? 0;
-    } else if (forward && boundaries.length) time = Math.min(time, boundaries[0]);
-    if (event.key === "Home") time = 0;
-    if (event.key === "End") time = duration;
-    seek(boundary(endpoint, time));
+  const adjacent = (time: number, direction: -1 | 1) => {
+    const current = Math.floor(time);
+    if (!boundaries.length) return current + direction * 10;
+    if (current < boundaries[0]) return direction > 0 ? boundaries[0] : current - 10;
+    const index = frameAt(boundaries, current);
+    return direction > 0 ? boundaries[index + 1] ?? duration
+      : boundaries[index] < current ? boundaries[index] : boundaries[index - 1] ?? 0;
   };
-  const step = (direction: -1 | 1) => {
-    stop(); setReview(false);
-    if (hasVideo && (!frameData.ready || !frames.length)) return;
-    if (frames.length) {
-      if (position < boundaries[0]) { seek(direction > 0 ? frames[0] + .01 : position - 10); return; }
-      const index = Math.max(0, Math.min(frames.length - 1, frameAt(boundaries, position) + direction));
-      seek(frames[index] + .01);
-    } else seek(position + direction * 10);
+  const applyNudge = (endpoint: Endpoint, time: number) => {
+    const next = boundary(endpoint, time);
+    setReview(true); setAudition(endpoint === "endMillis" ? "end" : "start");
+    seek(next); focusView(next, Math.min(10000, view.end - view.start));
   };
-  const play = async (selection: boolean) => {
-    if (preview.requiresCompatibility) return;
-    setError(""); onPlay(); setReview(selection);
-    if (selection) seek(active.startMillis);
-    else if (position >= duration) seek(0);
-    try {
-      await Promise.all([audio.current?.play(), position >= Math.floor(videoOffset) ? video.current?.play() : undefined]);
-      setPlaying(true);
-    } catch { stop(); setMediaError(true); setError("Preview could not play on this device."); }
+  const nudge = (endpoint: Endpoint, direction: -1 | 1) => {
+    stop(); setAudition(null); setPendingNudge(undefined);
+    const time = active[endpoint];
+    if (hasVideo && (!frameData.covers(time) || !frames.length)) {
+      seek(time); focusView(time); setPendingNudge({ id: selected, endpoint, time, direction }); frameData.retry();
+      return;
+    }
+    applyNudge(endpoint, adjacent(time, direction));
   };
   useEffect(() => {
-    if (!playing) return;
-    let frame = 0;
-    const tick = () => {
-      const time = (audio.current?.currentTime ?? 0) * 1000;
-      if (review && (time >= active.endMillis || time < active.startMillis - 5)) {
-        if (loop) seek(active.startMillis);
-        else { stop(); seek(active.endMillis); return; }
-      } else {
-        setPosition(time);
-        if (video.current) {
-          const videoTime = Math.max(0, time - videoOffset) / 1000;
-          if (time < Math.floor(videoOffset)) video.current.pause();
-          else if (video.current.paused && !video.current.ended) void video.current.play().catch(() => { stop(); setError("Video preview could not play."); });
-          if (Math.abs(video.current.currentTime - videoTime) > .08) video.current.currentTime = videoTime;
-        }
-      }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [playing, review, loop, active.startMillis, active.endMillis]);
-  const choose = (section: Section) => { stop(); setReview(false); setSelected(section.id); seek(section.startMillis); };
+    if (!pendingNudge || busy || pendingNudge.id !== selected) return;
+    if (frameData.error) { setPendingNudge(undefined); return; }
+    if (!frameData.covers(pendingNudge.time) || !frames.length) return;
+    applyNudge(pendingNudge.endpoint, adjacent(pendingNudge.time, pendingNudge.direction));
+  }, [pendingNudge, frameData.ready, frameData.error, frames, busy, selected]);
+  const handleBoundaryKey = (event: KeyboardEvent<HTMLInputElement>, endpoint: Endpoint) => {
+    if (busy || event.ctrlKey || event.metaKey || event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    if (event.key === "Home" || event.key === "End") { stop(); seek(boundary(endpoint, event.key === "Home" ? 0 : duration)); return; }
+    nudge(endpoint, event.key === "ArrowRight" || event.key === "ArrowUp" ? 1 : -1);
+  };
+  const step = (direction: -1 | 1) => {
+    stop(); setPendingNudge(undefined); setAudition(null);
+    if (hasVideo && (!frameData.ready || !frames.length)) return;
+    const target = Math.max(0, Math.min(duration, adjacent(position, direction)));
+    const index = boundaries.indexOf(target);
+    seek(index >= 0 ? frames[index] + .01 : target);
+    if (target < view.start || target > view.end) focusView(target, view.end - view.start);
+  };
+  const choose = (section: Section) => {
+    stop(); setPendingNudge(undefined); setReview(true); setAudition(null); setSelected(section.id); seek(section.startMillis); fitSection(section);
+  };
+  const sectionPosition = Math.max(active.startMillis, Math.min(active.endMillis, position));
+  const viewSpan = view.end - view.start;
+  const viewPercent = (time: number) => Math.max(0, Math.min(100, (time - view.start) / viewSpan * 100));
+  const zoom = (factor: number) => focusView(position, Math.max(250, Math.min(duration, viewSpan * factor)));
   const reorder = (index: number, delta: number) => setSections((items) => {
     const reordered = [...items]; const target = index + delta;
     if (target >= 0 && target < items.length) [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
@@ -158,38 +146,68 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
     if (busy || (event.target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); step(event.key === "ArrowLeft" ? -1 : 1); }
     if (event.key.toLowerCase() === "i" || event.key.toLowerCase() === "o") { event.preventDefault(); mark(event.key.toLowerCase() === "i" ? "startMillis" : "endMillis"); }
-    if (event.code === "Space" && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); if (playing) stop(); else void play(false); }
+    if (event.code === "Space" && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); if (playing) stop(); else void play(); }
   }}>
-    <header><div><p className="eyebrow">Local media · {sections.length} {sections.length === 1 ? "song" : "songs"}</p><h2 id="clip-editor-title">Choose your songs</h2><p>Select a section, fine-tune its edges, then add every song to your queue.</p></div><button aria-label="Close clip editor" onClick={onClose} disabled={busy}>✕</button></header>
+    <header><div><p className="eyebrow">Local media · {sections.length} {sections.length === 1 ? "song" : "songs"}</p><h2 id="clip-editor-title">Choose your songs</h2><p>Find your song, listen near each edge, then fine-tune Start and End.</p></div><button aria-label="Close clip editor" onClick={onClose} disabled={busy}>✕</button></header>
     <div className="clip-workspace">
       <section className="clip-viewer" aria-label="Section player">
         <div className="clip-screen" tabIndex={0} aria-label="Preview player. Left and Right step frames. I sets Start, O sets End, Space plays.">
-          {preview.videoUrl && !preview.requiresCompatibility ? <video ref={video} src={preview.videoUrl} style={{ visibility: position < Math.floor(videoOffset) ? "hidden" : "visible" }} muted playsInline preload="metadata" onError={() => { stop(); setMediaError(true); setError("Video preview could not be decoded on this device."); }} />
+          {preview.videoUrl && !preview.requiresCompatibility ? <video ref={video} src={preview.videoUrl} style={{ visibility: position < Math.floor(videoOffset) ? "hidden" : "visible" }} muted playsInline preload="metadata" onError={() => fail("Video preview could not be decoded on this device.")} />
             : <div className="clip-audio-art"><span>♫</span><strong>{preview.requiresCompatibility ? "Compatible preview needed" : "Audio preview"}</strong><p>{preview.suggestedTitle}</p></div>}
-          <audio ref={audio} src={preview.requiresCompatibility ? undefined : preview.previewUrl} preload="metadata" onEnded={() => { if (review && loop) void play(true); else stop(); }} onError={() => { stop(); setMediaError(true); setError("Audio preview is unavailable."); }} />
+          <audio ref={audio} src={preview.requiresCompatibility ? undefined : preview.previewUrl} preload="metadata" onEnded={ended} onError={() => fail("Audio preview is unavailable.")} />
           <span className="clip-time-badge">{formatTimecodeMillis(position)}</span>
         </div>
         <div className="clip-transport">
           <button aria-label={hasVideo ? "Previous frame" : "Back 10 milliseconds"} onClick={() => step(-1)} disabled={busy || (hasVideo && (!frameData.ready || !frames.length))}>←</button>
-          <button className="primary" onClick={() => playing ? stop() : void play(false)} disabled={busy || preview.requiresCompatibility}>{playing ? "Pause" : "Play"}</button>
+          <button className="primary" onClick={() => playing ? stop() : void play()} disabled={busy || preview.requiresCompatibility}>{playing ? "Pause" : "Play"}</button>
           <button aria-label={hasVideo ? "Next frame" : "Forward 10 milliseconds"} onClick={() => step(1)} disabled={busy || (hasVideo && (!frameData.ready || !frames.length))}>→</button>
-          <span>{formatTimecodeMillis(position)} / {formatTimecodeMillis(duration)}{frames.length > 0 && <small>{preview.direct ? "Nearby frame" : "Frame"} {frameAt(boundaries, position) + 1} / {frames.length}</small>}</span>
-          <button onClick={() => void play(true)} disabled={busy || preview.requiresCompatibility}>▶ Review section</button>
+          <span><strong>{review ? audition === "end" ? "Last 5 seconds" : audition === "start" ? "First 5 seconds" : "Selected section" : "Full source"}</strong>{formatTimecodeMillis(position)} / {formatTimecodeMillis(duration)}{frames.length > 0 && <small>{preview.direct ? "Nearby frame" : "Frame"} {frameAt(boundaries, position) + 1} / {frames.length}</small>}</span>
           <label className="clip-volume"><span>Volume</span><input aria-label="Preview volume" type="range" min={0} max={1} step={.05} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
         </div>
-        <label className="clip-scrub"><span>Playhead</span><input aria-label="Seek preview" type="range" min={0} max={duration} step={1} value={position} disabled={busy} onChange={(event) => { setReview(false); seek(Number(event.target.value)); }} /></label>
-        <div className="clip-timeline" aria-label="Selected sections">
-          {sections.map((section, index) => <button key={section.id} className={section.id === selected ? "active" : ""} style={{ left: `${section.startMillis / duration * 100}%`, width: `${(section.endMillis - section.startMillis) / duration * 100}%`, top: `${index % 3 * 9}px` }} onClick={() => choose(section)} aria-label={`Select section ${index + 1}: ${section.title}`} disabled={busy}>{index + 1}</button>)}
+        <div className="clip-review-panel" aria-label="Review selected section">
+          <div className="clip-review-heading"><strong>Listen to this section</strong><span>{formatTimecodeMillis(sectionPosition - active.startMillis)} / {formatTimecodeMillis(active.endMillis - active.startMillis)}</span></div>
+          <input aria-label="Seek within section" aria-valuetext={formatTimecodeMillis(sectionPosition - active.startMillis) + " into section"} type="range" min={active.startMillis} max={active.endMillis} step={1} value={sectionPosition} disabled={busy || preview.requiresCompatibility} onChange={(event) => userSeek(Number(event.target.value), true)} />
+          <div className="clip-review-actions">
+            <button onClick={() => { setReview(true); setAudition(null); void play(undefined, active); }} disabled={busy || preview.requiresCompatibility}>▶ Review section</button>
+            <button onClick={() => auditionEdge("start")} disabled={busy || preview.requiresCompatibility}>Play first 5 seconds</button>
+            <button className="clip-audition-end" onClick={() => auditionEdge("end")} disabled={busy || preview.requiresCompatibility}>Play last 5 seconds</button>
+          </div>
+          <p>Seek anywhere above, then Play. Pause keeps your place.</p>
         </div>
-        <div className="clip-trim-track" style={{ "--clip-start": `${active.startMillis / duration * 100}%`, "--clip-end": `${active.endMillis / duration * 100}%` } as React.CSSProperties}>
-          <div className="clip-selected-range" />
-          <input aria-label="Drag section start" type="range" min={0} max={duration} step={1} value={active.startMillis} disabled={busy} onKeyDown={(event) => handleBoundaryKey(event, "startMillis")} onChange={(event) => { stop(); seek(boundary("startMillis", Number(event.target.value))); }} />
-          <input aria-label="Drag section end" type="range" min={0} max={duration} step={1} value={active.endMillis} disabled={busy} onKeyDown={(event) => handleBoundaryKey(event, "endMillis")} onChange={(event) => { stop(); seek(boundary("endMillis", Number(event.target.value))); }} />
+        <div className="clip-boundaries">{(["startMillis", "endMillis"] as const).map((endpoint) => {
+          const name = endpoint === "startMillis" ? "Start" : "End";
+          return <div className="clip-boundary-card" key={endpoint}>
+            <div className="clip-boundary-heading"><label htmlFor={"clip-" + endpoint}>{name} <kbd>{endpoint === "startMillis" ? "I" : "O"}</kbd></label><button aria-label={"Go to " + name} disabled={busy} onClick={() => goTo(endpoint)}>Go to {name}</button></div>
+            <input id={"clip-" + endpoint} key={selected + "-" + endpoint} aria-label={"Section " + name.toLowerCase() + " time"} value={drafts[selected + "-" + endpoint] ?? formatTimecodeMillis(active[endpoint])} disabled={busy} aria-invalid={!validDrafts} onChange={(event) => { stop(); setDrafts({ ...drafts, [selected + "-" + endpoint]: event.target.value }); }} onBlur={() => {
+              const pending = pendingSections.find((section) => section.id === selected)!;
+              if (validSections([pending], duration)) {
+                patch({ startMillis: pending.startMillis, endMillis: pending.endMillis }); setAudition(null); setPendingNudge(undefined);
+                setDrafts((current) => { const next = { ...current }; delete next[selected + "-startMillis"]; delete next[selected + "-endMillis"]; return next; });
+              }
+            }} />
+            <div className="clip-edge-actions">
+              <button aria-label={"Move " + name + " back " + (hasVideo ? "one frame" : "10 milliseconds")} disabled={busy || preview.requiresCompatibility} onClick={() => nudge(endpoint, -1)}>− {hasVideo ? "1 frame" : "10 ms"}</button>
+              <button aria-label={"Move " + name + " forward " + (hasVideo ? "one frame" : "10 milliseconds")} disabled={busy || preview.requiresCompatibility} onClick={() => nudge(endpoint, 1)}>+ {hasVideo ? "1 frame" : "10 ms"}</button>
+              <button disabled={busy || (hasVideo && (!frameData.ready || !frames.length))} onClick={() => mark(endpoint)}>Set at playhead</button>
+            </div>
+          </div>;
+        })}</div>
+        <div className="clip-detail" aria-label="Fine trim timeline">
+          <div className="clip-zoom-controls"><strong>Fine trim</strong><button onClick={() => fitSection()} disabled={busy}>Fit section</button><button onClick={() => focusView(position)} disabled={busy}>At playhead</button><button aria-label="Zoom in timeline" onClick={() => zoom(.5)} disabled={busy || viewSpan <= 250}>＋</button><button aria-label="Zoom out timeline" onClick={() => zoom(2)} disabled={busy || viewSpan >= duration}>−</button><button aria-label="Pan timeline earlier" disabled={busy || view.start <= 0} onClick={() => focusView((view.start + view.end) / 2 - viewSpan / 2, viewSpan)}>←</button><button aria-label="Pan timeline later" disabled={busy || view.end >= duration} onClick={() => focusView((view.start + view.end) / 2 + viewSpan / 2, viewSpan)}>→</button></div>
+          <div className="clip-ruler"><span>{formatTimecodeMillis(view.start)}</span><span>{formatTimecodeMillis((view.start + view.end) / 2)}</span><span>{formatTimecodeMillis(view.end)}</span></div>
+          <input className="clip-detail-seek" aria-label="Seek in zoomed timeline" type="range" min={view.start} max={view.end} step={1} value={Math.max(view.start, Math.min(view.end, position))} disabled={busy} onChange={(event) => userSeek(Number(event.target.value), review)} />
+          <div className="clip-trim-track" style={{ "--clip-start": viewPercent(active.startMillis) + "%", "--clip-end": viewPercent(active.endMillis) + "%" } as React.CSSProperties}>
+            <div className="clip-selected-range" />
+            <input aria-label="Drag section start" title="Drag Start; arrow keys move one frame" type="range" min={view.start} max={view.end} step={1} value={Math.max(view.start, Math.min(view.end, active.startMillis))} style={{ visibility: active.startMillis < view.start || active.startMillis > view.end ? "hidden" : "visible" }} disabled={busy} onKeyDown={(event) => handleBoundaryKey(event, "startMillis")} onChange={(event) => { stop(); seek(boundary("startMillis", Number(event.target.value))); }} />
+            <input aria-label="Drag section end" title="Drag End; arrow keys move one frame" type="range" min={view.start} max={view.end} step={1} value={Math.max(view.start, Math.min(view.end, active.endMillis))} style={{ visibility: active.endMillis < view.start || active.endMillis > view.end ? "hidden" : "visible" }} disabled={busy} onKeyDown={(event) => handleBoundaryKey(event, "endMillis")} onChange={(event) => { stop(); seek(boundary("endMillis", Number(event.target.value))); }} />
+          </div>
         </div>
-        <div className="clip-boundaries">{(["startMillis", "endMillis"] as const).map((endpoint) => <label key={endpoint}><span>{endpoint === "startMillis" ? "Start · I" : "End · O"}</span><input key={`${selected}-${active[endpoint]}`} aria-label={endpoint === "startMillis" ? "Section start time" : "Section end time"} value={drafts[`${selected}-${endpoint}`] ?? formatTimecodeMillis(active[endpoint])} disabled={busy} aria-invalid={!validDrafts} onChange={(event) => setDrafts({ ...drafts, [`${selected}-${endpoint}`]: event.target.value })} onBlur={() => {
-          const pending = pendingSections.find((section) => section.id === selected)!;
-          if (validSections([pending], duration)) { patch({ startMillis: pending.startMillis, endMillis: pending.endMillis }); setDrafts((current) => { const next = { ...current }; delete next[`${selected}-startMillis`]; delete next[`${selected}-endMillis`]; return next; }); }
-        }} /><button disabled={busy || (hasVideo && !frameData.ready)} onClick={() => mark(endpoint)}>Set at playhead</button></label>)}</div>
+        <div className="clip-source-overview">
+          <label className="clip-scrub"><span>Browse full source</span><input aria-label="Seek preview" type="range" min={0} max={duration} step={1} value={position} disabled={busy} onChange={(event) => userSeek(Number(event.target.value), false)} /></label>
+          <div className="clip-timeline" aria-label="Selected sections">
+            {sections.map((section, index) => <button key={section.id} className={section.id === selected ? "active" : ""} style={{ left: (section.startMillis / duration * 100) + "%", width: ((section.endMillis - section.startMillis) / duration * 100) + "%", top: (index % 3 * 9) + "px" }} onClick={() => choose(section)} aria-label={"Select section " + (index + 1) + ": " + section.title} disabled={busy}>{index + 1}</button>)}
+          </div>
+        </div>
         <div className="clip-help"><label><input type="checkbox" checked={loop} onChange={(event) => setLoop(event.target.checked)} /> Loop section</label><span><kbd>←</kbd> <kbd>→</kbd> {hasVideo ? "one frame" : "10 ms"} · <kbd>I</kbd> Start · <kbd>O</kbd> End · <kbd>Space</kbd> play</span></div>
       </section>
       <aside className="clip-sections" aria-label="Songs to add">
@@ -207,6 +225,7 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
         <p className="clip-queue-note">Added to the top of Library & queue in this order. Add each song’s lyrics there to start processing.</p>
       </aside>
     </div>
+    {pendingNudge && <p className="clip-help" role="status">Loading the next frame at {pendingNudge.endpoint === "startMillis" ? "Start" : "End"}… Your adjustment will apply when it is ready.</p>}
     {preview.direct && !preview.requiresCompatibility && hasVideo && !frameData.ready && !playing && <p className="clip-help" role="status">{frameData.error || "Loading nearby frames… Playback and seeking are ready."}{frameData.error && <button onClick={frameData.retry}>Retry frame details</button>}</p>}
     {preview.direct && (mediaError || preview.requiresCompatibility) && onCompatible && <p className="clip-help">{preview.requiresCompatibility ? "This file needs a compatible preview for accurate timing." : "This device may need a compatible preview."} Preparing the whole file can take minutes; you can cancel it.<button disabled={busy} onClick={() => { stop(); onCompatible(); }}>Prepare compatible preview</button></p>}
     {preparationError && <p className="clip-error" role="alert">{preparationError}</p>}

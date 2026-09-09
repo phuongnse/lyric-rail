@@ -23,7 +23,7 @@ beforeEach(async () => {
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const button = (label: string) => [...host.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === label || button.textContent === label)!;
-const key = async (value: string) => { await act(async () => host.querySelector(".clip-screen")!.dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true }))); };
+const key = async (value: string) => { await act(async () => host.querySelector(".clip-screen")!.dispatchEvent(new KeyboardEvent("keydown", { key: value, code: value === " " ? "Space" : "", bubbles: true, cancelable: true }))); };
 const input = (label: string) => host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
 const change = async (label: string, value: string) => {
   await act(async () => {
@@ -59,7 +59,6 @@ it("loads earlier neighbors at a lower window edge without moving a section to f
   await handleKey("Drag section start", "ArrowLeft");
   expect(input("Drag section start").value).toBe("47000");
   await settleFrames();
-  await handleKey("Drag section start", "ArrowLeft");
   expect(input("Drag section start").value).toBe("46000");
   expect(host.querySelector("audio")!.currentTime).toBe(46);
 });
@@ -77,7 +76,6 @@ it("loads forward neighbors for sparse timestamps before stepping beyond a probe
   await handleKey("Drag section end", "ArrowRight");
   expect(input("Drag section end").value).toBe("4000");
   await settleFrames();
-  await handleKey("Drag section end", "ArrowRight");
   expect(input("Drag section end").value).toBe("5000");
   await key("ArrowRight");
   expect(host.querySelector("audio")!.currentTime).toBeCloseTo(6.00001);
@@ -280,4 +278,133 @@ it("retains all selected songs when batch publication fails", async () => {
   await act(async () => button("Add 2 songs to queue").click());
   expect(commit).toHaveBeenCalledTimes(2);
   expect(commit.mock.calls[0][0]).toEqual(commit.mock.calls[1][0]);
+});
+
+const renderReview = async (start = 20000, end = 80000, duration = 120000, offset = 0) => {
+  await act(async () => root.render(<ClipEditor key="review" preview={{ clipId: "review", suggestedTitle: "Review song", sizeBytes: 100,
+    durationMillis: duration, previewUrl: "http://fixture/audio", videoUrl: "http://fixture/video", videoOffsetMillis: offset,
+    frameTimesMillis: [...new Set([offset, start, start + 40, end - 80, end - 40, end, duration])].filter((time) => time >= offset && time <= duration).sort((a, b) => a - b) }}
+    busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
+  await change("Section start time", String(start / 1000)); await blur("Section start time");
+  await change("Section end time", String(end / 1000)); await blur("Section end time");
+};
+
+it("auditions the last five seconds, resumes there and replays the tail after reaching End", async () => {
+  await renderReview();
+  await act(async () => button("Play last 5 seconds").click());
+  const audio = host.querySelector("audio")!;
+  expect(audio.currentTime).toBe(75);
+  audio.currentTime = 77.25; await act(async () => tick(1));
+  await act(async () => button("Pause").click());
+  await act(async () => button("Play").click());
+  expect(audio.currentTime).toBe(77.25);
+  audio.currentTime = 80.1; await act(async () => tick(2));
+  expect(audio.currentTime).toBe(80);
+  expect(button("Play")).toBeDefined();
+  await act(async () => button("Play").click());
+  expect(audio.currentTime).toBe(75);
+  expect(input("Section start time").value).toBe("00:00:20.000");
+  expect(input("Section end time").value).toBe("00:01:20.000");
+});
+
+it("seeks within a playing section, cancels only the short audition and keeps review bounds on resume", async () => {
+  await renderReview();
+  await act(async () => button("Play last 5 seconds").click());
+  await change("Seek within section", "45000");
+  expect(button("Pause")).toBeDefined();
+  expect(host.querySelector("audio")!.currentTime).toBe(45);
+  await key(" "); await key(" ");
+  expect(host.querySelector("audio")!.currentTime).toBe(45);
+  host.querySelector("audio")!.currentTime = 81;
+  await act(async () => tick(1));
+  expect(host.querySelector("audio")!.currentTime).toBe(80);
+  await act(async () => button("Play").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(20);
+});
+
+it("starts section review at the scrubbed point rather than resetting to Start", async () => {
+  await renderReview();
+  await change("Seek within section", "73500");
+  await act(async () => button("▶ Review section").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(73.5);
+  await act(async () => button("Pause").click());
+  await change("Seek preview", "90000");
+  await act(async () => button("▶ Review section").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(20);
+});
+
+it("bounds short auditions to a section shorter than five seconds and loops that interval", async () => {
+  await renderReview(40000, 43000);
+  await act(async () => host.querySelector<HTMLInputElement>('.clip-help input[type="checkbox"]')!.click());
+  await act(async () => button("Play last 5 seconds").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(40);
+  host.querySelector("audio")!.currentTime = 43.1; await act(async () => tick(1));
+  expect(host.querySelector("audio")!.currentTime).toBe(40);
+  await act(async () => button("Pause").click());
+  await act(async () => button("Play first 5 seconds").click());
+  host.querySelector("audio")!.currentTime = 43.1; await act(async () => tick(2));
+  expect(host.querySelector("audio")!.currentTime).toBe(40);
+});
+
+it("moves End by a measured frame and immediately auditions the changed tail", async () => {
+  await renderReview();
+  await act(async () => button("Move End back one frame").click());
+  expect(input("Section end time").value).toBe("00:01:19.960");
+  expect(input("Section start time").value).toBe("00:00:20.000");
+  expect(host.querySelector("video")!.currentTime).toBeCloseTo(79.96001, 6);
+  await act(async () => button("Play").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(74.96);
+  await act(async () => button("Pause").click());
+  await act(async () => button("Move End forward one frame").click());
+  await act(async () => button("Play last 5 seconds").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(75);
+});
+
+it("keeps the selected song readable on a long source and zooms to the exact end", async () => {
+  await renderReview(3600000, 3780000, 7800000);
+  expect(input("Seek within section").min).toBe("3600000");
+  expect(input("Seek within section").max).toBe("3780000");
+  await act(async () => button("Go to End").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(3780);
+  expect(Number(input("Seek in zoomed timeline").max) - Number(input("Seek in zoomed timeline").min)).toBe(10000);
+  await act(async () => button("Zoom in timeline").click());
+  expect(Number(input("Seek in zoomed timeline").max) - Number(input("Seek in zoomed timeline").min)).toBe(5000);
+  await change("Seek in zoomed timeline", "3779000");
+  await act(async () => button("Play").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(3779);
+  host.querySelector("audio")!.currentTime = 3781; await act(async () => tick(1));
+  expect(host.querySelector("audio")!.currentTime).toBe(3780);
+});
+
+it("cancels a waiting endpoint nudge when the user seeks elsewhere", async () => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => command === "local_clip_frames"
+    ? { frameTimesMillis: [(args as { timeMillis: number }).timeMillis, (args as { timeMillis: number }).timeMillis + 40], fromMillis: 0, toMillis: 120000 } : true);
+  await renderDirect();
+  await act(async () => button("Move Start forward one frame").click());
+  expect(host.textContent).toContain("Your adjustment will apply");
+  await change("Seek preview", "50000"); await settleFrames();
+  expect(input("Section start time").value).toBe("00:00:00.000");
+  expect(host.querySelector("audio")!.currentTime).toBe(50);
+  expect(host.textContent).not.toContain("Your adjustment will apply");
+});
+
+it("does not restart a paused preview when delayed play promises settle", async () => {
+  await renderReview();
+  const resolves: Array<() => void> = [];
+  vi.mocked(HTMLMediaElement.prototype.play).mockImplementation(() => new Promise<void>((resolve) => resolves.push(resolve)));
+  await act(async () => button("Play last 5 seconds").click());
+  expect(button("Pause")).toBeDefined();
+  await act(async () => button("Pause").click());
+  await act(async () => resolves.forEach((resolve) => resolve()));
+  expect(button("Play")).toBeDefined();
+  expect(button("Pause")).toBeUndefined();
+});
+
+it("starts offset video using the destination time of the end audition", async () => {
+  await renderReview(20000, 30000, 120000, 10000);
+  const calls = vi.mocked(HTMLMediaElement.prototype.play); calls.mockClear();
+  await act(async () => button("Play last 5 seconds").click());
+  expect(host.querySelector("audio")!.currentTime).toBe(25);
+  expect(host.querySelector("video")!.currentTime).toBe(15);
+  expect(calls.mock.contexts).toContain(host.querySelector("video"));
 });
