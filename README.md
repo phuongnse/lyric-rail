@@ -66,10 +66,15 @@ Large queues keep a bounded Activity snapshot/count, while every queued row can 
 its stable task directly by ID for View task and Cancel; no active task is rejected or hidden
 from its action path merely because it falls outside the snapshot window.
 
-The Clip Editor shows video with synchronized audio and supports up to 128 separately
-titled sections. Drag Start/End handles, scrub the playhead, use Left/Right for actual
-video frames (10 ms for audio), I/O to mark boundaries, and Space to play/pause.
-Review or loop the active section; reorder or remove songs before confirming.
+The Clip Editor focuses on one song at a time. Drag the green Start and gold End
+handles on the source timeline, or enter exact times beside the video. The arrows
+beside each time move that edge by one measured video frame (10 ms for audio).
+Listen to start/end plays up to five seconds inside the selected song; the slider
+below Play seeks within that song, and Pause/Play resumes from the current position.
+Whole file and Fit song set the timeline view. More controls contains zoom, pan,
+Go to Start/End, volume and keyboard help. Add another song creates another section;
+expand the song count to switch, reorder or remove songs, up to 128 sections.
+See [the editor guide](docs/CLIP_EDITOR.md) for the full workflow and shortcuts.
 All sections appear at the top of Library & queue in editor order, waiting for each
 song's exact lyrics. Edit song opens title and lyric editing. Existing active processing continues.
 Full-source sidecar lyrics are never silently assigned to an extracted section.
