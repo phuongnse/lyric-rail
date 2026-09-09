@@ -50,6 +50,7 @@ export function clientIssue(
   error: unknown,
   summary = "The action could not be completed. Review the details, then try again.",
   action?: IssueAction,
+  relatedTaskId?: string,
 ): SystemIssue {
   const now = Date.now();
   const code = `${scope}.${issueKind(title)}`;
@@ -66,6 +67,7 @@ export function clientIssue(
     createdAtMillis: now,
     updatedAtMillis: now,
     actions: action ? [action] : [],
+    relatedTaskId,
     native: false,
   };
 }

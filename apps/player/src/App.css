@@ -232,6 +232,8 @@ input[type="range"]::-webkit-slider-thumb { width: 15px; height: 15px; border: 2
 .row-actions button { min-width: 32px; min-height: 30px; padding: 0 7px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; background: rgba(255,255,255,.04); font-size: var(--font-caption); white-space: nowrap; }
 .row-actions .row-icon { width: 32px; height: 32px; padding: 0; }
 .row-actions button:hover { border-color: rgba(255,204,77,.32); color: var(--accent); }
+.row-actions button.danger, .setup-dialog footer button.danger { border-color: rgba(255,116,124,.34); color: #ff9ca3; }
+.row-actions button.danger:hover, .setup-dialog footer button.danger:hover { border-color: rgba(255,116,124,.7); color: #ffccd0; background: rgba(255,116,124,.08); }
 .list-empty { display: flex; height: 100%; min-height: 240px; align-items: center; justify-content: center; flex-direction: column; padding: 30px; color: var(--muted); text-align: center; }
 .list-empty strong { color: var(--soft); font-size: 16px; }
 .list-empty span { margin-top: 7px; font-size: var(--font-small); line-height: 1.6; }

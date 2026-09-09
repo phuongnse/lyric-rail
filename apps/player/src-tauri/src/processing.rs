@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -23,7 +23,7 @@ use crate::{
     issues,
     local_source::scan_files,
     model_installer,
-    runtime::{ResolvedRuntime, resolve_runtime, runtime_available_hint},
+    runtime::{ResolvedRuntime, model_files_present_at, resolve_runtime, runtime_available_hint},
     tasks::{
         self, OutputStream, ProgressMode, TaskKind, TaskProgress, TaskRecord, TaskSpec, TaskStatus,
     },
@@ -70,11 +70,26 @@ struct ProcessingInner {
     pending: HashMap<String, PendingJob>,
     waiting: VecDeque<WorkerRequest>,
     active_request: Option<String>,
+    removal_reservations: HashSet<String>,
 }
 
 #[derive(Default)]
 pub struct ProcessingState {
     inner: Mutex<ProcessingInner>,
+}
+
+#[derive(Debug)]
+pub enum RemovalPreparation {
+    Active,
+    Ready(Box<RemovalReservation>),
+}
+
+#[derive(Debug)]
+pub struct RemovalReservation {
+    item_id: String,
+    request: Option<WorkerRequest>,
+    pending: Option<PendingJob>,
+    waiting_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +120,7 @@ struct DispatchFailure {
 struct DispatchFailureProjection<'a> {
     request_id: &'a str,
     message: &'a str,
+    models_missing: bool,
     evidence_status: ProcessingEvidenceStatus,
     item_status: ItemStatus,
     task_status: TaskStatus,
@@ -115,14 +131,26 @@ fn dispatch_failure_projection(
     failure: &DispatchFailure,
     index: usize,
 ) -> DispatchFailureProjection<'_> {
+    let models_missing = failure.message.starts_with(MODEL_PROVENANCE_FAILURE_PREFIX);
     DispatchFailureProjection {
         request_id: &failure.request_id,
         message: &failure.message,
+        models_missing,
         evidence_status: ProcessingEvidenceStatus::Failed,
-        item_status: ItemStatus::Failed,
+        item_status: if models_missing {
+            ItemStatus::SetupRequired
+        } else {
+            ItemStatus::Failed
+        },
         task_status: TaskStatus::Failed,
         report_issue: index < 100,
     }
+}
+
+fn model_provenance_failure_detail(message: &str) -> &str {
+    message
+        .strip_prefix(MODEL_PROVENANCE_FAILURE_PREFIX)
+        .unwrap_or(message)
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,6 +186,7 @@ const MAX_DURABLE_LYRIC_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_DURABLE_LOG_BYTES: u64 = 1024 * 1024;
 const MAX_DURABLE_LOG_LINES: usize = 1_000;
 const WORKER_EXIT_MESSAGE: &str = "Processing worker exited unexpectedly before reporting completion. Retry this task; its diagnostic output has been preserved.";
+const MODEL_PROVENANCE_FAILURE_PREFIX: &str = "Model provenance gate failed: ";
 const VALID_DURABLE_STAGES: &[&str] = &[
     "probe",
     "extract_audio",
@@ -974,6 +1003,8 @@ fn ensure_worker(app: &AppHandle, inner: &mut ProcessingInner) -> Result<(), Str
         }
     }
     let runtime = resolve_runtime()?;
+    model_files_present_at(&runtime.root)
+        .map_err(|error| format!("{MODEL_PROVENANCE_FAILURE_PREFIX}{error}"))?;
     let data_root = app
         .path()
         .app_data_dir()
@@ -1085,6 +1116,87 @@ fn commit_waiting_request(
     Ok(true)
 }
 
+impl ProcessingInner {
+    fn prepare_item_removal(&mut self, item_id: &str) -> Result<RemovalPreparation, String> {
+        if self.active_request.as_deref() == Some(item_id) {
+            return Ok(RemovalPreparation::Active);
+        }
+        if self.removal_reservations.contains(item_id) {
+            return Err("This item is already being removed".into());
+        }
+
+        let waiting_index = self
+            .waiting
+            .iter()
+            .position(|request| request.request_id == item_id);
+        let (request, pending) = match waiting_index {
+            Some(index) => {
+                if !self.pending.contains_key(item_id) {
+                    return Err("Processing state is missing the queued item".into());
+                }
+                let request = self
+                    .waiting
+                    .get(index)
+                    .cloned()
+                    .expect("the queued request remains at its recorded index");
+                let pending = self
+                    .pending
+                    .remove(item_id)
+                    .expect("the queued item was checked above");
+                self.waiting.remove(index);
+                (Some(request), Some(pending))
+            }
+            None => {
+                if self.pending.contains_key(item_id) {
+                    return Err("Processing state has an unowned pending item".into());
+                }
+                (None, None)
+            }
+        };
+        self.removal_reservations.insert(item_id.to_owned());
+        Ok(RemovalPreparation::Ready(Box::new(RemovalReservation {
+            item_id: item_id.to_owned(),
+            request,
+            pending,
+            waiting_index,
+        })))
+    }
+
+    fn rollback_item_removal(&mut self, reservation: RemovalReservation) -> Result<(), String> {
+        if !self.removal_reservations.contains(&reservation.item_id) {
+            return Err("Item removal reservation is no longer active".into());
+        }
+        if reservation.request.is_some() != reservation.pending.is_some()
+            || reservation
+                .pending
+                .as_ref()
+                .is_some_and(|_| self.pending.contains_key(&reservation.item_id))
+            || reservation.request.as_ref().is_some_and(|request| {
+                self.waiting
+                    .iter()
+                    .any(|candidate| candidate.request_id == request.request_id)
+            })
+        {
+            return Err("Processing state changed while restoring the queued item".into());
+        }
+
+        self.removal_reservations.remove(&reservation.item_id);
+        if let (Some(request), Some(pending)) = (reservation.request, reservation.pending) {
+            self.pending.insert(reservation.item_id, pending);
+            let index = reservation.waiting_index.unwrap_or(self.waiting.len());
+            self.waiting.insert(index.min(self.waiting.len()), request);
+        }
+        Ok(())
+    }
+
+    fn commit_item_removal(&mut self, reservation: RemovalReservation) -> Result<bool, String> {
+        if !self.removal_reservations.remove(&reservation.item_id) {
+            return Err("Item removal reservation is no longer active".into());
+        }
+        Ok(reservation.pending.is_some())
+    }
+}
+
 fn drain_dispatch_failures(inner: &mut ProcessingInner, message: &str) -> Vec<DispatchFailure> {
     inner
         .waiting
@@ -1186,7 +1298,11 @@ fn handle_dispatch_failures(app: &AppHandle, failures: Vec<DispatchFailure>) {
                 projection.request_id,
                 projection.item_status,
                 0.0,
-                Some(projection.message.to_owned()),
+                Some(if projection.models_missing {
+                    "Processing models are not installed; open Issues to resolve setup".into()
+                } else {
+                    projection.message.to_owned()
+                }),
             );
         }
     }
@@ -1197,7 +1313,11 @@ fn handle_dispatch_failures(app: &AppHandle, failures: Vec<DispatchFailure>) {
             app,
             projection.request_id,
             projection.task_status,
-            Some(projection.message.to_owned()),
+            Some(if projection.models_missing {
+                "Processing setup required".into()
+            } else {
+                projection.message.to_owned()
+            }),
         );
     }
     for (index, failure) in failures.into_iter().enumerate() {
@@ -1205,14 +1325,24 @@ fn handle_dispatch_failures(app: &AppHandle, failures: Vec<DispatchFailure>) {
         if !projection.report_issue {
             continue;
         }
-        issues::report(
-            app,
-            issues::processing_failure_issue(
-                projection.request_id,
-                &item_title(app, projection.request_id),
-                projection.message,
-            ),
-        );
+        if projection.models_missing {
+            issues::report(
+                app,
+                issues::models_missing_issue(
+                    &safe_runtime_detail(model_provenance_failure_detail(projection.message)),
+                    model_installer::install_is_allowed(),
+                ),
+            );
+        } else {
+            issues::report(
+                app,
+                issues::processing_failure_issue(
+                    projection.request_id,
+                    &item_title(app, projection.request_id),
+                    projection.message,
+                ),
+            );
+        }
     }
 }
 
@@ -1628,6 +1758,17 @@ pub fn enqueue_item(
     let request = worker_request(item)?;
     let request_id = request.request_id.clone();
     let resume_job_id = request.resume_job_id.clone();
+    let state = app.state::<ProcessingState>();
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Processing state lock is poisoned".to_string())?;
+    if inner.removal_reservations.contains(&request_id) {
+        return Err("This item is being removed from the Library".into());
+    }
+    if inner.pending.contains_key(&request_id) {
+        return Ok(());
+    }
     tasks::start(
         app,
         TaskSpec {
@@ -1657,19 +1798,18 @@ pub fn enqueue_item(
                 false,
             ),
         );
+        catalog.set_progress(
+            &request_id,
+            ItemStatus::Queued,
+            0.0,
+            Some("Waiting for the local worker".into()),
+        );
         Ok::<(), String>(())
     })();
     if let Err(error) = evidence_result {
+        drop(inner);
         tasks::finish(app, &request_id, TaskStatus::Failed, Some(error.clone()));
         return Err(error);
-    }
-    let state = app.state::<ProcessingState>();
-    let mut inner = state
-        .inner
-        .lock()
-        .map_err(|_| "Processing state lock is poisoned".to_string())?;
-    if inner.pending.contains_key(&request_id) {
-        return Ok(());
     }
     inner.pending.insert(
         request_id.clone(),
@@ -1690,14 +1830,6 @@ pub fn enqueue_item(
         return Err(error);
     }
     drop(inner);
-    if let Ok(mut catalog) = app.state::<CatalogState>().0.lock() {
-        catalog.set_progress(
-            &request_id,
-            ItemStatus::Queued,
-            0.0,
-            Some("Waiting for the local worker".into()),
-        );
-    }
     Ok(())
 }
 
@@ -1781,13 +1913,62 @@ fn request_cancel(app: AppHandle, job_id: String) {
     });
 }
 
+pub fn prepare_item_removal(app: &AppHandle, item_id: &str) -> Result<RemovalPreparation, String> {
+    let state = app.state::<ProcessingState>();
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Processing state lock is poisoned".to_string())?;
+    inner.prepare_item_removal(item_id)
+}
+
+pub fn rollback_item_removal(
+    app: &AppHandle,
+    reservation: RemovalReservation,
+) -> Result<(), String> {
+    let state = app.state::<ProcessingState>();
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Processing state lock is poisoned".to_string())?;
+    inner.rollback_item_removal(reservation)
+}
+
+pub fn commit_item_removal(app: &AppHandle, reservation: RemovalReservation) -> Result<(), String> {
+    let item_id = reservation.item_id.clone();
+    let cancelled_waiting = {
+        let state = app.state::<ProcessingState>();
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "Processing state lock is poisoned".to_string())?;
+        inner.commit_item_removal(reservation)?
+    };
+    if cancelled_waiting {
+        tasks::finish(
+            app,
+            &item_id,
+            TaskStatus::Cancelled,
+            Some("Removed from Library before processing started".into()),
+        );
+    }
+    Ok(())
+}
+
 pub fn cancel_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
+    cancel_item_inner(app, item_id).map(|_| ())
+}
+
+fn cancel_item_inner(app: &AppHandle, item_id: &str) -> Result<bool, String> {
     let (job_id, cancelled_waiting, transient) = {
         let state = app.state::<ProcessingState>();
         let mut inner = state
             .inner
             .lock()
             .map_err(|_| "Processing state lock is poisoned".to_string())?;
+        if inner.removal_reservations.contains(item_id) {
+            return Err("This item is being removed from the Library".into());
+        }
         let waiting = inner.active_request.as_deref() != Some(item_id);
         if waiting {
             inner
@@ -1883,7 +2064,7 @@ pub fn cancel_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
             },
         );
     }
-    Ok(())
+    Ok(!cancelled_waiting)
 }
 
 pub fn set_playback_state(app: &AppHandle, playing: bool) -> Result<(), String> {
@@ -1908,11 +2089,11 @@ mod tests {
     #[cfg(windows)]
     use super::encode_worker_request;
     use super::{
-        PendingJob, ProcessingInner, WorkerRequest, apply_current_generation,
-        commit_waiting_request, dispatch_failure_projection, drain_dispatch_failures,
-        durable_task_record, error_code, load_durable_manifest, read_bounded_lines,
-        read_durable_output, read_worker_stdout, recover_worker_disconnect,
-        take_worker_disconnect_failure, worker_command, worker_request,
+        DispatchFailure, MODEL_PROVENANCE_FAILURE_PREFIX, PendingJob, ProcessingInner,
+        RemovalPreparation, WorkerRequest, apply_current_generation, commit_waiting_request,
+        dispatch_failure_projection, drain_dispatch_failures, durable_task_record, error_code,
+        load_durable_manifest, read_bounded_lines, read_durable_output, read_worker_stdout,
+        recover_worker_disconnect, take_worker_disconnect_failure, worker_command, worker_request,
     };
     use crate::catalog::{
         CatalogItem, ItemLocation, ItemStatus, MediaOrigin, ProcessingEvidenceStatus,
@@ -1926,6 +2107,104 @@ mod tests {
         fs,
         path::PathBuf,
     };
+
+    fn test_request(request_id: &str) -> WorkerRequest {
+        WorkerRequest {
+            request_id: request_id.into(),
+            resume_job_id: None,
+            media_path: PathBuf::from(format!("{request_id}.mp4")),
+            lyrics_path: PathBuf::from(format!("{request_id}.txt")),
+            start_seconds: None,
+            end_seconds: None,
+            title: request_id.into(),
+            artist: None,
+            composer: None,
+        }
+    }
+
+    fn test_pending(transient_lyrics: Option<PathBuf>) -> PendingJob {
+        PendingJob {
+            transient_lyrics,
+            job_id: Some("job".into()),
+            cancel_requested: false,
+        }
+    }
+
+    #[test]
+    fn removal_rejects_active_request_without_cancellation_side_effects() {
+        let mut inner = ProcessingInner {
+            active_request: Some("active-item".into()),
+            ..Default::default()
+        };
+        inner
+            .pending
+            .insert("active-item".into(), test_pending(None));
+
+        assert!(matches!(
+            inner.prepare_item_removal("active-item").unwrap(),
+            RemovalPreparation::Active
+        ));
+        assert_eq!(inner.active_request.as_deref(), Some("active-item"));
+        assert!(!inner.removal_reservations.contains("active-item"));
+        assert!(!inner.pending["active-item"].cancel_requested);
+    }
+
+    #[test]
+    fn queued_removal_reservation_rolls_back_without_losing_transient_lyrics() {
+        let transient = PathBuf::from("transient-lyrics.txt");
+        let request = test_request("queued-item");
+        let mut inner = ProcessingInner {
+            waiting: VecDeque::from([request.clone()]),
+            ..Default::default()
+        };
+        inner.pending.insert(
+            request.request_id.clone(),
+            test_pending(Some(transient.clone())),
+        );
+
+        let RemovalPreparation::Ready(reservation) =
+            inner.prepare_item_removal("queued-item").unwrap()
+        else {
+            panic!("queued request must be reserved, not treated as active");
+        };
+        assert!(inner.waiting.is_empty());
+        assert!(!inner.pending.contains_key("queued-item"));
+        assert!(inner.removal_reservations.contains("queued-item"));
+
+        inner.rollback_item_removal(*reservation).unwrap();
+        assert_eq!(inner.waiting.front().unwrap().request_id, "queued-item");
+        assert_eq!(
+            inner.pending["queued-item"].transient_lyrics.as_deref(),
+            Some(transient.as_path())
+        );
+        assert!(!inner.removal_reservations.contains("queued-item"));
+    }
+
+    #[test]
+    fn queued_removal_commit_detaches_only_the_selected_request() {
+        let selected = test_request("selected-item");
+        let sibling = test_request("sibling-item");
+        let mut inner = ProcessingInner {
+            waiting: VecDeque::from([selected.clone(), sibling.clone()]),
+            ..Default::default()
+        };
+        inner
+            .pending
+            .insert(selected.request_id.clone(), test_pending(None));
+        inner
+            .pending
+            .insert(sibling.request_id.clone(), test_pending(None));
+
+        let RemovalPreparation::Ready(reservation) =
+            inner.prepare_item_removal("selected-item").unwrap()
+        else {
+            panic!("queued request must be reserved, not treated as active");
+        };
+        assert!(inner.commit_item_removal(*reservation).unwrap());
+        assert!(!inner.pending.contains_key("selected-item"));
+        assert!(inner.pending.contains_key("sibling-item"));
+        assert_eq!(inner.waiting.front().unwrap().request_id, "sibling-item");
+    }
 
     #[test]
     fn worker_command_forces_utf8_before_module_execution_in_every_integrity_mode() {
@@ -2052,6 +2331,24 @@ mod tests {
         assert!(!inner.pending.contains_key("active-item"));
         assert!(inner.pending.contains_key("next-item"));
         assert_eq!(inner.waiting.front().unwrap().request_id, "next-item");
+    }
+
+    #[test]
+    fn model_preflight_failure_projects_to_setup_required() {
+        let failure = DispatchFailure {
+            request_id: "song".into(),
+            transient_lyrics: None,
+            message: format!(
+                "{MODEL_PROVENANCE_FAILURE_PREFIX}2 pinned processing model files are missing or invalid"
+            ),
+        };
+        let projection = dispatch_failure_projection(&failure, 0);
+        assert!(projection.models_missing);
+        assert_eq!(projection.item_status, ItemStatus::SetupRequired);
+        assert_eq!(
+            super::model_provenance_failure_detail(&failure.message),
+            "2 pinned processing model files are missing or invalid"
+        );
     }
 
     #[test]

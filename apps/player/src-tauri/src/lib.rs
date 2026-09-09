@@ -1419,6 +1419,50 @@ fn remove_library_source(
 }
 
 ipc_command! {
+fn remove_unprocessed_local_item(
+    app: tauri::AppHandle,
+    item_id: String,
+) -> Result<CatalogSnapshot, String> {
+    let reservation = match processing::prepare_item_removal(&app, &item_id)? {
+        processing::RemovalPreparation::Active => {
+            return Err(
+                "This item is already processing; stop processing before removing it from the Library".into(),
+            );
+        }
+        processing::RemovalPreparation::Ready(reservation) => *reservation,
+    };
+    let state = app.state::<CatalogState>();
+    let mut catalog = match state.0.lock() {
+        Ok(catalog) => catalog,
+        Err(_) => {
+            let error = "Catalog lock is poisoned".to_string();
+            if let Err(rollback) = processing::rollback_item_removal(&app, reservation) {
+                return Err(format!("{error}; unable to restore queued processing: {rollback}"));
+            }
+            return Err(error);
+        }
+    };
+    let candidate = catalog.remove_unprocessed_item_candidate(&item_id, |candidate| candidate.save());
+    let candidate = match candidate {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            drop(catalog);
+            if let Err(rollback) = processing::rollback_item_removal(&app, reservation) {
+                return Err(format!("{error}; unable to restore queued processing: {rollback}"));
+            }
+            return Err(error);
+        }
+    };
+    *catalog = candidate;
+    let snapshot = catalog.snapshot();
+    drop(catalog);
+    processing::commit_item_removal(&app, reservation)?;
+    let _ = app.emit("library-changed", snapshot.clone());
+    Ok(snapshot)
+}
+}
+
+ipc_command! {
 fn provide_lyrics_file(
     app: tauri::AppHandle,
     item_id: String,
@@ -2380,6 +2424,7 @@ pub fn run() {
             rename_waiting_section,
             rescan_local_sources,
             remove_library_source,
+            remove_unprocessed_local_item,
             provide_lyrics_file,
             provide_lyrics_text,
             retry_processing_item,

@@ -38,7 +38,13 @@ priority window without cloning it. Rows outside that window use the same by-ID 
 lookup, so their View task/Cancel path remains available while frontend memory stays bounded.
 
 Selecting exactly one supported local media file opens the Clip Editor with the whole
-timeline selected. Native code canonicalizes and identity-binds the regular file,
+file selected, so an uncut song can be edited and queued immediately. Its **Trim your
+song** view contains one source progress line with all section blocks on one row and
+Start/End brackets on the selected block. Click the timeline once for Start and again
+for End; later pairs create sections in order. It can play the selected range
+immediately; brackets, exact frame timestamps and time fields update the same range.
+Double-click opens Edit video, and remove stays in this view. Native
+code canonicalizes and identity-binds the regular file,
 probes its metadata with bounded local-only ffprobe, and exposes the source through
 opaque range responses capped at 2 MiB. The frontend receives no filesystem media URL.
 Nearby measured frame timestamps load on demand. Unsupported clock origins or codecs
@@ -46,12 +52,19 @@ use the explicit cancellable compatible preview, with anonymous PCM/H264 handles
 PTS normalization to preserve source timing. Preview, cancel and commit leave source
 bytes unchanged. Packages and multi-file selections still enter the library directly.
 
-The editor keeps the current song's name, Start/End times and edge auditions beside
-the video. Its section seek and Pause/Play share the audio clock; source browsing and
-timeline zoom remain separate from that playback position. Frame buttons belong to
-their endpoint, and a new time draft cancels a pending frame nudge. Multi-song management
-appears only after adding another song. Invalid drafts survive switching and offer a
-direct route back to the song needing correction. See the [editor guide](../../docs/CLIP_EDITOR.md).
+Library rows expose **Remove from library** only for confirmed, unfinished local media
+that is not actively processing. The action removes that one row, leaves its source
+file and lyric sidecar untouched, and never directly deletes `.lrail` packages or
+cloud items. Sections sharing one source remain independent rows.
+
+Selecting a block and pressing **Edit video** opens a separate shared metadata
+dialog over the paused timeline. Its zero-based seek and clock are bounded to the
+selected interval. It edits only Video name, Artist, Composer and exact lyrics;
+Save returns metadata without changing boundaries, and Cancel discards the draft.
+All section trimming, frame stepping and management actions stay on the timeline.
+`VideoEditor` accepts media, a playback range and metadata independently of clipping,
+so a future Library action can use the same component. Only the final Add N songs
+to queue action publishes sections. See the [editor guide](../../docs/CLIP_EDITOR.md).
 
 The Player imports the canonical mark from `assets/brand/lyricrail-mark.svg`. Bundle
 icons are generated from that same source with `npm run brand:icons`; do not substitute

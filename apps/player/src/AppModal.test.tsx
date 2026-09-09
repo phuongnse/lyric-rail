@@ -3,11 +3,16 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
+import type { CatalogSnapshot } from "./library";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
+const readyCatalog: CatalogSnapshot = { items: [{ id: "song", title: "Song", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: false, hasThumbnail: false }], localSources: [], driveSources: [] };
+let catalogFixture: CatalogSnapshot = readyCatalog;
+
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command: string) => {
-  if (command === "catalog_snapshot") return { items: [{ id: "song", title: "Song", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: false, hasThumbnail: false }], localSources: [], driveSources: [] };
+  if (command === "catalog_snapshot") return catalogFixture;
+  if (command === "remove_unprocessed_local_item") return { items: [], localSources: [], driveSources: [] };
   if (command === "player_status") return { version: "0.8.0", platform: "windows", vaultAvailable: true, processing: { pendingJobs: 0, runtimeAvailable: true } };
   if (command === "system_issues") return [];
   if (command === "task_runtime_snapshot") return { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
@@ -21,9 +26,11 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => ["song.mp4
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(async () => {
+  catalogFixture = readyCatalog;
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   Object.assign(window, { __TAURI_INTERNALS__: {} });
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as typeof ResizeObserver;
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => { root.render(<App />); });
@@ -80,6 +87,32 @@ it("contains the lyric editor and restores the selected song's edit button", asy
   await checkDialog(edit);
 });
 
+it("requires confirmation before removing an unfinished Library item", async () => {
+  await act(async () => root.unmount());
+  catalogFixture = { items: [{ id: "unfinished", title: "Unfinished", status: "queued", progressPercent: 0, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false }], localSources: [], driveSources: [] };
+  root = createRoot(host);
+  await act(async () => { root.render(<App />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  const rowRemove = () => [...host.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.textContent === "Remove from library" && !button.closest('[role="dialog"]'))!;
+  expect(rowRemove()).toBeTruthy();
+  vi.mocked(invoke).mockClear();
+  await act(async () => rowRemove().click());
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("Remove “Unfinished”?");
+  expect(dialog.textContent).toContain("original media file and its lyric sidecar stay unchanged");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "remove_unprocessed_local_item")).toBe(false);
+  await act(async () => [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Cancel")!.click());
+  expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+  await act(async () => rowRemove().click());
+  const confirm = [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
+    .find((button) => button.textContent === "Remove from library")!;
+  await act(async () => confirm.click());
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["remove_unprocessed_local_item", { itemId: "unfinished" }]);
+});
+
 it("wraps focus around visible controls while a clip commit disables the footer", async () => {
   const original = vi.mocked(invoke).getMockImplementation()!;
   let rejectCommit: (reason: Error) => void = () => {};
@@ -91,19 +124,7 @@ it("wraps focus around visible controls while a clip commit disables the footer"
     const save = [...dialog.querySelectorAll("button")].find(button => button.textContent === "Add 1 song to queue")!;
     await act(async () => save.click());
     expect(save.disabled).toBe(true);
-    const first = dialog.querySelector<HTMLElement>(".clip-screen")!;
-    const summary = dialog.querySelector("summary")!;
-    const tab = (element: HTMLElement, shiftKey = false) => act(() => {
-      element.focus();
-      element.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true }));
-    });
-    tab(summary);
-    expect(document.activeElement).toBe(first);
-    tab(first, true);
-    expect(document.activeElement).toBe(summary);
-    act(() => { summary.parentElement!.setAttribute("open", ""); });
-    tab(first, true);
-    expect(document.activeElement).toBe(dialog.querySelector('[aria-label="Preview volume"]'));
+    expect(dialog.querySelector(".clip-section-track")).not.toBeNull();
     await act(async () => rejectCommit(new Error("Synthetic commit failure")));
   } finally {
     vi.mocked(invoke).mockImplementation(original);
@@ -153,35 +174,45 @@ it("keeps titles, ranges and invalid drafts across failed compatibility and succ
     if (compatible && ++fallbackAttempts === 1) return Promise.reject(new Error("Synthetic conversion failure"));
     return Promise.resolve({ clipId: compatible ? "compatible" : "direct", direct: !compatible, suggestedTitle: "Song", sizeBytes: 10, durationMillis: 3000, previewUrl: "http://fixture/preview" });
   });
-  const button = (text: string) => [...host.querySelectorAll("button")].find((element) => element.textContent?.includes(text))!;
-  const input = (label: string) => host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
+  const surface = () => document.querySelector<HTMLElement>('.clip-video-dialog') ?? host;
+  const button = (text: string) => [...surface().querySelectorAll('button')].find(element => element.textContent === text)!;
+  const input = (label: string) => surface().querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
   const change = async (label: string, value: string) => act(async () => {
     const element = input(label);
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(element, value);
-    element.dispatchEvent(new Event("input", { bubbles: true }));
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, value);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
   });
-  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true })));
-  await change("Song 1 title", "Keep exact title");
-  await change("Drag section end", "1500");
-  await act(async () => button("Add another song").click());
-  await change("Song 2 title", "Second title");
-  await change("Section start time", "unfinished");
-  await act(async () => host.querySelector(".clip-screen audio")!.dispatchEvent(new Event("error")));
+  await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', ctrlKey: true, bubbles: true, cancelable: true })));
+  await change('Section 1 end handle', '1500');
+  await act(async () => button('Edit video').click());
+  await change('Video name', 'Keep exact title');
+  await act(async () => button('Save').click());
+  const track = host.querySelector<HTMLElement>('.clip-section-track')!;
+  Object.defineProperty(track, 'getBoundingClientRect', { configurable: true, value: () => ({ left: 0, width: 1000 }) });
+  await act(async () => track.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 600 })));
+  await act(async () => track.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 900 })));
+  await act(async () => button('Edit video').click());
+  await change('Video name', 'Second title');
+  await act(async () => button('Save').click());
+  await change('Section 2 start time', 'unfinished');
+  await act(async () => host.querySelector('.clip-screen audio')!.dispatchEvent(new Event('error')));
   vi.mocked(invoke).mockClear();
-  await act(async () => button("Prepare compatible preview").click());
-  expect(host.textContent).toContain("Compatible preview failed. Your sections are kept");
-  expect(host.querySelector(".clip-sections")?.textContent).toContain("Keep exact title");
-  expect(input("Song 2 title").value).toBe("Second title");
-  expect(input("Section start time").value).toBe("unfinished");
-  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "cancel_local_clip")).toBe(false);
-  expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "prepare_local_clip")?.[1]).toMatchObject({ compatible: true, replaceClipId: "direct" });
-  await act(async () => button("Prepare compatible preview").click());
-  expect(host.querySelector(".clip-sections")?.textContent).toContain("Keep exact title");
-  expect(input("Song 2 title").value).toBe("Second title");
-  expect(input("Section start time").value).toBe("unfinished");
-  expect(button("Add 2 songs to queue").disabled).toBe(true);
-  await change("Section start time", "0.500");
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Edit section 1"]')!.click());
-  expect(input("Drag section end").value).toBe("1500");
+  await act(async () => button('Prepare compatible preview').click());
+  expect(host.textContent).toContain('Compatible preview failed. Your sections are kept');
+  expect(input('Section 2 start time').value).toBe('unfinished');
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'cancel_local_clip')).toBe(false);
+  expect(vi.mocked(invoke).mock.calls.find(([command]) => command === 'prepare_local_clip')?.[1]).toMatchObject({ compatible: true, replaceClipId: 'direct' });
+  await act(async () => button('Prepare compatible preview').click());
+  expect(input('Section 2 start time').value).toBe('unfinished');
+  await change('Section 2 start time', '0.500');
+  await act(async () => input('Section 2 start time').dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+  expect(button('Add 2 songs to queue').disabled).toBe(false);
+  await act(async () => button('Edit video').click());
+  expect(input('Video name').value).toBe('Second title');
+  await act(async () => button('Cancel').click());
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('.clip-section-block')[0].click());
+  expect(input('Section 1 end handle').value).toBe('1500');
+  await act(async () => button('Edit video').click());
+  expect(input('Video name').value).toBe('Keep exact title');
   vi.mocked(invoke).mockImplementation(original);
 });

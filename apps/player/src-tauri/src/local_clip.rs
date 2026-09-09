@@ -1,5 +1,5 @@
 use std::{
-    env, fs,
+    fs,
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
@@ -22,7 +22,7 @@ use crate::{
     catalog::CatalogItem,
     local_source::{clipped_local_media_item_from_verified_path, is_media},
     parse_single_range,
-    runtime::resolve_runtime,
+    runtime::{development_tool_path, resolve_runtime},
     scheduler::{IoPriority, PriorityScheduler},
     tasks::{self, OutputStream, ProgressMode, TaskKind, TaskProgress, TaskSpec, TaskStatus},
 };
@@ -32,6 +32,8 @@ const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SOURCE_DURATION_MILLIS: u64 = 24 * 60 * 60 * 1000;
 const MAX_PROBE_BYTES: usize = 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
+const MAX_METADATA_CHARS: usize = 200;
+const MAX_LYRICS_BYTES: usize = 1_000_000;
 pub(super) const SAFE_INPUT_FORMATS: &str = "mov,matroska,webm,mp3,aac,wav,ogg,flac,avi,asf";
 pub(super) const SAFE_INPUT_PROTOCOLS: &str = "file";
 const CLIP_TASK_ID: &str = "clip-preparation";
@@ -183,6 +185,33 @@ fn validate_title(value: &str) -> Result<String, String> {
         return Err("Title must be 1 to 200 visible characters".into());
     }
     Ok(title.to_owned())
+}
+
+fn validate_metadata(value: Option<&str>, label: &str) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > MAX_METADATA_CHARS || value.chars().any(char::is_control) {
+        return Err(format!("{label} must be at most 200 visible characters"));
+    }
+    Ok(Some(value.to_owned()))
+}
+
+fn validate_lyrics(value: Option<&str>) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if value.len() > MAX_LYRICS_BYTES || value.contains('\0') {
+        return Err("Lyrics must be UTF-8 text no larger than 1,000,000 bytes".into());
+    }
+    if !value.trim().is_empty() && value.lines().all(|line| line.trim().is_empty()) {
+        return Err("Lyrics must contain a non-empty line".into());
+    }
+    Ok(())
 }
 
 fn validate_local_source(path: &Path) -> Result<(PathBuf, u64), String> {
@@ -373,11 +402,19 @@ fn resolve_media_tools() -> Result<(PathBuf, PathBuf), String> {
     let runtime = resolve_runtime()?;
     let ffprobe = runtime
         .ffprobe
-        .or_else(|| env::var_os("LYRICRAIL_FFPROBE").map(PathBuf::from))
+        .or_else(|| {
+            (runtime.integrity == "development-unverified")
+                .then(|| development_tool_path("ffprobe", "LYRICRAIL_FFPROBE"))
+                .flatten()
+        })
         .ok_or_else(|| "Clip preview requires the verified ffprobe tool".to_string())?;
     let ffmpeg = runtime
         .ffmpeg
-        .or_else(|| env::var_os("LYRICRAIL_FFMPEG").map(PathBuf::from))
+        .or_else(|| {
+            (runtime.integrity == "development-unverified")
+                .then(|| development_tool_path("ffmpeg", "LYRICRAIL_FFMPEG"))
+                .flatten()
+        })
         .ok_or_else(|| "Clip preview requires the verified ffmpeg tool".to_string())?;
     let ffprobe = ffprobe
         .canonicalize()
@@ -1481,6 +1518,12 @@ pub struct ClipSection {
     pub start_millis: u64,
     pub end_millis: u64,
     pub title: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub composer: Option<String>,
+    #[serde(default)]
+    pub lyrics: Option<String>,
 }
 
 fn section_items(
@@ -1492,6 +1535,9 @@ fn section_items(
     }
     for section in sections {
         validate_title(&section.title)?;
+        validate_metadata(section.artist.as_deref(), "Artist")?;
+        validate_metadata(section.composer.as_deref(), "Composer")?;
+        validate_lyrics(section.lyrics.as_deref())?;
         if section.start_millis >= section.end_millis
             || section.end_millis > session.duration_millis
         {
@@ -1514,6 +1560,8 @@ fn section_items(
             )?;
             item.id = Uuid::new_v4().to_string();
             item.section_id = Some(item.id.clone());
+            item.artist = validate_metadata(section.artist.as_deref(), "Artist")?;
+            item.composer = validate_metadata(section.composer.as_deref(), "Composer")?;
             item.lyric_text.clear();
             item.first_lyric_line = None;
             item.status = crate::catalog::ItemStatus::WaitingForLyrics;
@@ -1522,6 +1570,17 @@ fn section_items(
                 if let crate::catalog::ItemLocation::LocalMedia { lyrics_path, .. } = location {
                     *lyrics_path = None;
                 }
+            }
+            if let Some(lyrics) = section
+                .lyrics
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                item.lyric_text = lyrics.to_owned();
+                item.first_lyric_line = lyrics
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .map(str::to_owned);
             }
             Ok(item)
         })
@@ -1550,7 +1609,7 @@ pub fn commit_sections(
         .0
         .lock()
         .map_err(|_| "Catalog lock is poisoned")?
-        .admit_sections(items)?;
+        .admit_clip_sections(items)?;
     inner.preview = None;
     if let Some(cancelled) = &inner.frame_cancel {
         cancelled.store(true, Ordering::Release);
@@ -2075,6 +2134,9 @@ mod tests {
             start_millis: 10,
             end_millis: 500,
             title: "First song".into(),
+            artist: None,
+            composer: None,
+            lyrics: None,
         };
         for invalid in [
             Vec::new(),
@@ -2093,7 +2155,7 @@ mod tests {
         ] {
             assert!(super::section_items(&session, &invalid).is_err());
         }
-        let items = super::section_items(&session, &[section.clone(), section]).unwrap();
+        let items = super::section_items(&session, &[section.clone(), section.clone()]).unwrap();
         assert_ne!(items[0].id, items[1].id);
         for item in items {
             assert_eq!(item.status, crate::catalog::ItemStatus::WaitingForLyrics);
@@ -2108,6 +2170,19 @@ mod tests {
                 }
             ));
         }
+        let detailed = super::ClipSection {
+            artist: Some("Artist".into()),
+            composer: Some("Composer".into()),
+            lyrics: Some("\nDòng một\nDòng hai".into()),
+            ..section
+        };
+        let detailed_item = super::section_items(&session, &[detailed])
+            .unwrap()
+            .remove(0);
+        assert_eq!(detailed_item.artist.as_deref(), Some("Artist"));
+        assert_eq!(detailed_item.composer.as_deref(), Some("Composer"));
+        assert_eq!(detailed_item.lyric_text, "\nDòng một\nDòng hai");
+        assert_eq!(detailed_item.first_lyric_line.as_deref(), Some("Dòng một"));
         assert_eq!(fs::read(&path).unwrap(), b"synthetic source");
         assert_eq!(fs::read(&lyrics).unwrap(), b"Exact whole source lyrics");
         let video = Arc::downgrade(&session.video.as_ref().unwrap().0);

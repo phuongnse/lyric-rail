@@ -19,6 +19,8 @@ LIB = (ROOT / "apps" / "player" / "src-tauri" / "src" / "lib.rs").read_text(
 )
 APP = (ROOT / "apps" / "player" / "src" / "App.tsx").read_text(encoding="utf-8")
 EDITOR = (ROOT / "apps/player/src/ClipEditor.tsx").read_text(encoding="utf-8")
+VIDEO_EDITOR = (ROOT / "apps/player/src/VideoEditor.tsx").read_text(encoding="utf-8")
+EDITOR_CSS = (ROOT / "apps/player/src/clipEditor.css").read_text(encoding="utf-8")
 CSS = (ROOT / "apps" / "player" / "src" / "App.css").read_text(encoding="utf-8")
 SELECTION = (ROOT / "apps" / "player" / "src" / "clipSelection.ts").read_text(
     encoding="utf-8"
@@ -137,8 +139,19 @@ def test_clip_preview_is_opaque_main_only_and_range_bounded() -> None:
     assert "preview.videoUrl" in EDITOR
     assert "<video" in EDITOR and "<audio" in EDITOR
     assert "frameAt(boundaries" in EDITOR
-    assert "Drag section start" in EDITOR and "Drag section end" in EDITOR
-    assert "Add another song" in EDITOR
+    assert 'endpoint === "startMillis" ? "start" : "end"' in EDITOR and "clip-section-handle" in EDITOR
+    assert ">Trim your song<" in EDITOR
+    assert ">Edit video<" in EDITOR
+    assert "clip-section-track" in EDITOR_CSS
+    assert "clip-section-handle" in EDITOR_CSS
+    assert "clip-video-editor" in EDITOR_CSS
+    assert 'aria-label="Section video preview"' in EDITOR
+    assert 'aria-label="Section preview audio clock"' in EDITOR
+    assert "onDoubleClick" in EDITOR
+    assert 'aria-label="Artist"' in VIDEO_EDITOR
+    assert 'aria-label="Composer"' in VIDEO_EDITOR
+    assert 'aria-label="Lyrics"' in VIDEO_EDITOR
+    assert "Add another song" not in EDITOR
 
 
 def test_local_clip_trim_reuses_the_existing_catalog_and_worker_contract() -> None:
@@ -148,6 +161,12 @@ def test_local_clip_trim_reuses_the_existing_catalog_and_worker_contract() -> No
     assert "is_trim_metadata_downgrade" in CATALOG
     assert "preserve_local_media_content" in CATALOG
     assert "disk_rescan_cannot_downgrade_local_clip_title_or_trim" in CATALOG
+    assert "admit_clip_sections" in CATALOG
+    assert "allow_lyrics" in CATALOG
+    assert "artist: Option<String>" in LOCAL_CLIP_RUNTIME
+    assert "composer: Option<String>" in LOCAL_CLIP_RUNTIME
+    assert "lyrics: Option<String>" in LOCAL_CLIP_RUNTIME
+    assert 'provide_lyrics_text"' in APP
     assert "start_seconds: Option<f64>" in PROCESSING
     assert "end_seconds: Option<f64>" in PROCESSING
     assert "trim_start_millis.map(|value| value as f64 / 1000.0)" in PROCESSING

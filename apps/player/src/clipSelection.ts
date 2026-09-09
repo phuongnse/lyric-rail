@@ -20,6 +20,15 @@ export function frameAt(frames: number[], time: number): number {
   return Math.max(0, low - 1);
 }
 
+export function adjacentFrame(boundaries: number[], time: number, direction: -1 | 1, duration: number): number {
+  const current = Math.floor(time);
+  if (!boundaries.length) return current + direction * 10;
+  if (current < boundaries[0]) return direction > 0 ? boundaries[0] : current - 10;
+  const index = frameAt(boundaries, current);
+  return direction > 0 ? boundaries[index + 1] ?? duration
+    : boundaries[index] < current ? boundaries[index] : boundaries[index - 1] ?? 0;
+}
+
 export function clipView(duration: number, center: number, span: number) {
   const width = Math.min(duration, Math.max(1, span));
   const start = Math.max(0, Math.min(duration - width, center - width / 2));

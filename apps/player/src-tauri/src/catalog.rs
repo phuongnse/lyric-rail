@@ -167,6 +167,44 @@ pub struct CatalogItem {
 }
 
 impl CatalogItem {
+    pub fn can_delete_unprocessed_media(&self) -> bool {
+        self.unprocessed_local_media_path().is_some()
+    }
+
+    pub fn unprocessed_local_media_path(&self) -> Option<PathBuf> {
+        if self.package_id.is_some()
+            || !matches!(
+                self.status,
+                ItemStatus::Queued
+                    | ItemStatus::WaitingForLyrics
+                    | ItemStatus::Failed
+                    | ItemStatus::SetupRequired
+            )
+            || self
+                .processing_task_evidence
+                .as_ref()
+                .is_some_and(|evidence| {
+                    matches!(evidence.status, ProcessingEvidenceStatus::Running)
+                })
+        {
+            return None;
+        }
+        let [
+            ItemLocation::LocalMedia {
+                path,
+                available: true,
+                ..
+            },
+        ] = self.locations.as_slice()
+        else {
+            return None;
+        };
+        (path.is_absolute()
+            && crate::local_source::is_media(path)
+            && !crate::local_source::is_lrail(path))
+        .then(|| path.clone())
+    }
+
     pub fn source_labels(&self) -> Vec<&'static str> {
         let mut labels = self
             .locations
@@ -272,11 +310,12 @@ pub struct CatalogItemView {
     pub has_thumbnail: bool,
     pub can_process: bool,
     pub can_rename: bool,
+    pub can_delete: bool,
     pub sources: Vec<String>,
 }
 
-impl From<&CatalogItem> for CatalogItemView {
-    fn from(item: &CatalogItem) -> Self {
+impl CatalogItemView {
+    fn from_item(item: &CatalogItem, can_delete: bool) -> Self {
         Self {
             id: item.id.clone(),
             package_id: item.package_id.clone(),
@@ -289,6 +328,7 @@ impl From<&CatalogItem> for CatalogItemView {
             status_message: item.status_message.clone(),
             has_thumbnail: item.has_thumbnail,
             can_rename: item.section_id.is_some() && item.status == ItemStatus::WaitingForLyrics,
+            can_delete,
             can_process: item
                 .locations
                 .iter()
@@ -423,7 +463,9 @@ impl Catalog {
                 .document
                 .items
                 .iter()
-                .map(CatalogItemView::from)
+                .map(|item| {
+                    CatalogItemView::from_item(item, self.can_delete_unprocessed_media(&item.id))
+                })
                 .collect(),
             local_sources: self.document.local_sources.clone(),
             drive_sources: self.document.drive_sources.clone(),
@@ -647,6 +689,34 @@ impl Catalog {
     pub fn item_mut(&mut self, id: &str) -> Option<&mut CatalogItem> {
         let index = *self.item_lookup.get(id)?;
         self.document.items.get_mut(index)
+    }
+
+    pub fn can_delete_unprocessed_media(&self, id: &str) -> bool {
+        self.item(id)
+            .is_some_and(CatalogItem::can_delete_unprocessed_media)
+    }
+
+    pub fn remove_item(&mut self, id: &str) -> Option<CatalogItem> {
+        let index = *self.item_lookup.get(id)?;
+        let removed = self.document.items.remove(index);
+        self.rebuild_indexes();
+        Some(removed)
+    }
+
+    pub fn remove_unprocessed_item_candidate(
+        &self,
+        id: &str,
+        persist: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        if !self.can_delete_unprocessed_media(id) {
+            return Err("Only unfinished local media items can be removed".into());
+        }
+        let mut candidate = self.clone();
+        candidate
+            .remove_item(id)
+            .ok_or_else(|| "Library item no longer exists".to_string())?;
+        persist(&candidate)?;
+        Ok(candidate)
     }
 
     pub fn setup_required_items(&self) -> Vec<CatalogItem> {
@@ -995,9 +1065,25 @@ impl Catalog {
         self.admit_sections_with(items, |candidate| candidate.save())
     }
 
+    pub fn admit_clip_sections(
+        &mut self,
+        items: Vec<CatalogItem>,
+    ) -> Result<CatalogSnapshot, String> {
+        self.admit_sections_mode(items, true, |candidate| candidate.save())
+    }
+
     fn admit_sections_with(
         &mut self,
         items: Vec<CatalogItem>,
+        persist: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<CatalogSnapshot, String> {
+        self.admit_sections_mode(items, false, persist)
+    }
+
+    fn admit_sections_mode(
+        &mut self,
+        items: Vec<CatalogItem>,
+        allow_lyrics: bool,
         persist: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<CatalogSnapshot, String> {
         if items.is_empty()
@@ -1011,9 +1097,12 @@ impl Catalog {
             item.section_id.is_none()
                 || !ids.insert(item.id.clone())
                 || self.item_lookup.contains_key(&item.id)
-                || !item.lyric_text.is_empty()
+                || (!allow_lyrics && !item.lyric_text.is_empty())
         }) {
             return Err("Section batch identity or lyrics are invalid".into());
+        }
+        if allow_lyrics {
+            self.validate_upserts(items.iter())?;
         }
         let mut candidate = self.clone();
         candidate.document.items.splice(0..0, items);
@@ -1058,7 +1147,10 @@ impl Catalog {
                 .iter()
                 .take(MAX_SEARCH_RESULTS)
                 .map(|item| SearchResult {
-                    item: CatalogItemView::from(item),
+                    item: CatalogItemView::from_item(
+                        item,
+                        self.can_delete_unprocessed_media(&item.id),
+                    ),
                     lyric_snippet: None,
                 })
                 .collect();
@@ -1088,7 +1180,10 @@ impl Catalog {
                     Reverse(score),
                     item.title.clone(),
                     SearchResult {
-                        item: CatalogItemView::from(item),
+                        item: CatalogItemView::from_item(
+                            item,
+                            self.can_delete_unprocessed_media(&item.id),
+                        ),
                         lyric_snippet: lyric_match.then(|| lyric_snippet(&item.lyric_text, &query)),
                     },
                 ))
@@ -1399,10 +1494,12 @@ fn lyric_snippet(original: &str, normalized_query: &str) -> String {
 mod tests {
     use super::{
         CATALOG_SCHEMA, Catalog, CatalogDocument, CatalogItem, ItemLocation, ItemStatus,
-        MediaOrigin, migrate_catalog_document, normalize,
+        MediaOrigin, ProcessingEvidenceStatus, ProcessingTaskEvidence, migrate_catalog_document,
+        normalize,
     };
     use std::{
         collections::{HashMap, HashSet},
+        fs,
         path::PathBuf,
     };
 
@@ -1451,6 +1548,189 @@ mod tests {
         };
         catalog.rebuild_indexes();
         catalog
+    }
+
+    fn unfinished_item(path: PathBuf) -> CatalogItem {
+        let mut item = item(0);
+        item.id = "unfinished".into();
+        item.package_id = None;
+        item.status = ItemStatus::WaitingForLyrics;
+        item.progress_percent = 0.0;
+        item.locations = vec![ItemLocation::LocalMedia {
+            source_id: None,
+            path,
+            lyrics_path: None,
+            origin: MediaOrigin::Disk,
+            trim_start_millis: None,
+            trim_end_millis: None,
+            available: true,
+        }];
+        item
+    }
+
+    #[test]
+    fn remove_capability_requires_one_available_unfinished_media_location() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut waiting = unfinished_item(directory.path().join("unfinished.mp4"));
+        assert!(waiting.can_delete_unprocessed_media());
+
+        waiting.status = ItemStatus::Queued;
+        assert!(waiting.can_delete_unprocessed_media());
+
+        waiting.locations[0] = ItemLocation::LocalMedia {
+            path: directory.path().join("unfinished.lrail"),
+            source_id: None,
+            lyrics_path: None,
+            origin: MediaOrigin::Disk,
+            trim_start_millis: None,
+            trim_end_millis: None,
+            available: true,
+        };
+        assert!(!waiting.can_delete_unprocessed_media());
+
+        let mut section = unfinished_item(directory.path().join("section.mp4"));
+        section.section_id = Some("section".into());
+        assert!(section.can_delete_unprocessed_media());
+
+        let mut processing = unfinished_item(directory.path().join("processing.mp4"));
+        processing.status = ItemStatus::Processing;
+        assert!(!processing.can_delete_unprocessed_media());
+
+        let mut terminal = unfinished_item(directory.path().join("failed.mp4"));
+        terminal.status = ItemStatus::Failed;
+        terminal.processing_task_evidence = Some(ProcessingTaskEvidence {
+            job_id: Some("job".into()),
+            status: ProcessingEvidenceStatus::Running,
+            progress_percent: 10.0,
+            stage_key: None,
+            stage_title: None,
+            stage_progress_percent: None,
+            started_at_millis: 1,
+            updated_at_millis: 2,
+            finished_at_millis: None,
+        });
+        assert!(!terminal.can_delete_unprocessed_media());
+
+        terminal.processing_task_evidence.as_mut().unwrap().status =
+            ProcessingEvidenceStatus::Queued;
+        assert!(terminal.can_delete_unprocessed_media());
+
+        terminal.status = ItemStatus::Queued;
+        assert!(terminal.can_delete_unprocessed_media());
+    }
+
+    #[test]
+    fn catalog_remove_capability_allows_each_shared_unfinished_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("shared.mp4");
+        let mut catalog = catalog(0);
+        catalog.document.items = (1..=5)
+            .map(|index| {
+                let mut item = unfinished_item(path.clone());
+                item.id = format!("section-{index}");
+                item.section_id = Some(item.id.clone());
+                item
+            })
+            .collect();
+        catalog.rebuild_indexes();
+        for index in 1..=5 {
+            assert!(catalog.can_delete_unprocessed_media(&format!("section-{index}")));
+        }
+        assert_eq!(
+            catalog.remove_item("section-3").map(|item| item.id),
+            Some("section-3".into())
+        );
+        assert_eq!(catalog.items().len(), 4);
+        assert!(catalog.item("section-3").is_none());
+        for index in [1, 2, 4, 5] {
+            assert!(catalog.can_delete_unprocessed_media(&format!("section-{index}")));
+        }
+    }
+
+    #[test]
+    fn catalog_snapshot_exposes_remove_for_an_unshared_queued_section() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(0);
+        let mut section = unfinished_item(directory.path().join("queued.mp4"));
+        section.id = "queued-section".into();
+        section.section_id = Some("section".into());
+        section.status = ItemStatus::Queued;
+        catalog.document.items.push(section);
+        catalog.rebuild_indexes();
+        assert!(catalog.snapshot().items[0].can_delete);
+    }
+
+    #[test]
+    fn removing_item_rebuilds_catalog_indexes() {
+        let mut catalog = catalog(3);
+        assert_eq!(
+            catalog.remove_item("1").map(|item| item.id),
+            Some("1".into())
+        );
+        assert_eq!(catalog.items().len(), 2);
+        assert!(catalog.item("1").is_none());
+        assert!(catalog.search("bai hat 1").is_empty());
+        assert_eq!(catalog.item("2").unwrap().title, "Bài hát 2");
+    }
+
+    #[test]
+    fn removal_candidate_preserves_catalog_and_source_bytes_when_persistence_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let media = directory.path().join("unfinished.mp4");
+        let lyrics = directory.path().join("unfinished.txt");
+        fs::write(&media, b"source bytes").unwrap();
+        fs::write(&lyrics, "Exact supplied lyrics\n").unwrap();
+        let mut item = unfinished_item(media.clone());
+        if let ItemLocation::LocalMedia { lyrics_path, .. } = &mut item.locations[0] {
+            *lyrics_path = Some(lyrics.clone());
+        }
+        let mut catalog = catalog(0);
+        catalog.document.items.push(item);
+        catalog.rebuild_indexes();
+        let media_before = fs::read(&media).unwrap();
+        let lyrics_before = fs::read(&lyrics).unwrap();
+
+        let failed =
+            catalog.remove_unprocessed_item_candidate("unfinished", |_| Err("disk full".into()));
+        assert_eq!(failed.as_ref().err().map(String::as_str), Some("disk full"));
+        assert!(catalog.item("unfinished").is_some());
+        assert_eq!(fs::read(&media).unwrap(), media_before);
+        assert_eq!(fs::read(&lyrics).unwrap(), lyrics_before);
+
+        let candidate = catalog
+            .remove_unprocessed_item_candidate("unfinished", |candidate| {
+                assert!(candidate.item("unfinished").is_none());
+                Ok(())
+            })
+            .unwrap();
+        assert!(candidate.item("unfinished").is_none());
+        assert!(catalog.item("unfinished").is_some());
+        assert_eq!(fs::read(&media).unwrap(), media_before);
+        assert_eq!(fs::read(&lyrics).unwrap(), lyrics_before);
+    }
+
+    #[test]
+    fn removal_candidate_rejects_authenticated_package_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut item = unfinished_item(directory.path().join("package.lrail"));
+        item.package_id = Some("package-id".into());
+        item.locations[0] = ItemLocation::LocalPackage {
+            source_id: None,
+            path: directory.path().join("package.lrail"),
+            available: true,
+        };
+        let mut catalog = catalog(0);
+        catalog.document.items.push(item);
+        catalog.rebuild_indexes();
+
+        let result = catalog.remove_unprocessed_item_candidate("unfinished", |_| {
+            panic!("protected package rows must not reach persistence")
+        });
+        assert_eq!(
+            result.as_ref().err().map(String::as_str),
+            Some("Only unfinished local media items can be removed")
+        );
+        assert!(catalog.item("unfinished").is_some());
     }
 
     #[test]
@@ -1530,6 +1810,26 @@ mod tests {
         assert_eq!(catalog.item(&second.id).unwrap().title, "Second");
         assert!(catalog.item(&first.id).is_some());
         assert_eq!(catalog.items().len(), 5);
+
+        let mut with_lyrics = first.clone();
+        with_lyrics.id = "with-lyrics".into();
+        with_lyrics.section_id = Some(with_lyrics.id.clone());
+        with_lyrics.artist = Some("Artist".into());
+        with_lyrics.composer = Some("Composer".into());
+        with_lyrics.lyric_text = "Exact section lyrics".into();
+        with_lyrics.first_lyric_line = Some("Exact section lyrics".into());
+        catalog
+            .admit_sections_mode(vec![with_lyrics.clone()], true, |_| Ok(()))
+            .unwrap();
+        assert_eq!(
+            catalog.item("with-lyrics").unwrap().lyric_text,
+            "Exact section lyrics"
+        );
+        assert!(
+            catalog
+                .admit_sections_mode(vec![with_lyrics], false, |_| Ok(()))
+                .is_err()
+        );
     }
 
     #[test]

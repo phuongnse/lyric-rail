@@ -56,6 +56,12 @@ Opening files or local folders produces one unified list:
 - media without lyrics waits in place for Paste or TXT;
 - processing progress, failures and completed packages update the same row.
 
+An unfinished local media row may be removed only through its confirmed **Remove from
+library** action. The action removes exactly that row, leaves the source media and
+lyric sidecar untouched, never directly deletes authenticated `.lrail` packages or
+cloud items, and cancels a queued worker only when it has not started. Sections sharing
+one source remain independent rows.
+
 The compact row is only a summary/link projection of the same processing task ID;
 processing Cancel lives in Activity rather than a second row action. Status,
 stage, progress and timestamps used after restart come from task evidence inside the
@@ -66,17 +72,20 @@ Large queues keep a bounded Activity snapshot/count, while every queued row can 
 its stable task directly by ID for View task and Cancel; no active task is rejected or hidden
 from its action path merely because it falls outside the snapshot window.
 
-The Clip Editor focuses on one song at a time. Drag the green Start and gold End
-handles on the source timeline, or enter exact times beside the video. The arrows
-beside each time move that edge by one measured video frame (10 ms for audio).
-Listen to start/end plays up to five seconds inside the selected song; the slider
-below Play seeks within that song, and Pause/Play resumes from the current position.
-Whole file and Fit song set the timeline view. More controls contains zoom, pan,
-Go to Start/End, volume and keyboard help. Add another song creates another section;
-expand the song count to switch, reorder or remove songs, up to 128 sections.
-See [the editor guide](docs/CLIP_EDITOR.md) for the full workflow and shortcuts.
+The Clip Editor opens with the whole file selected, so an uncut song can be edited and
+queued immediately. Click the source timeline for Start, click again for End, then
+continue clicking pairs to create ordered sections. Select, trim exact Start/End
+points, step measured frames, preview and remove sections there.
+
+Double-click a block or press **Edit video** to open the shared information dialog.
+It previews only the selected interval with a zero-based clock and seek control,
+and edits Video name, Artist, Composer and exact UTF-8 lyrics. Save applies this
+information without changing the cut; Cancel discards the draft. Section operations
+remain on the timeline. The shared dialog is also ready for a future Library edit action.
+The editor supports up to 128 sections. See [the editor guide](docs/CLIP_EDITOR.md).
 All sections appear at the top of Library & queue in editor order, waiting for each
-song's exact lyrics. Edit song opens title and lyric editing. Existing active processing continues.
+section's exact lyrics when lyrics were not entered in Edit video. Existing active
+processing continues.
 Full-source sidecar lyrics are never silently assigned to an extracted section.
 
 Opening media probes metadata and streams the guarded source through opaque bounded
@@ -96,8 +105,9 @@ Native ffprobe/ffmpeg retain local-file/demuxer allowlists and identity guards. 
 frame queries inspect a nearby nine-second interval, bounded to 1 MiB, 16,384 frames
 and 20 seconds; fallback frame inspection retains its one-million-frame/24 MiB/two-minute
 bound. Video sources are bounded to 8K pixel count. Preview failure
-is explicit; original media is never modified. Selecting one `.lrail` package or
-multiple files keeps direct add behavior.
+is explicit; clip preparation and the confirmed Library **Remove from library** action
+never modify original media. Selecting one `.lrail` package or multiple files keeps
+direct add behavior.
 
 If the app stops after a package is published but before its stage status is saved,
 Retry authenticates and binds that exact output to the job request, then continues

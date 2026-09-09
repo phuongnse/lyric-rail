@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from lyricrail.model_provenance import (
+    _snapshot_entry,
     valid_pinned_audio_filename,
     valid_pinned_audio_url,
     verify_model_provenance,
@@ -90,6 +91,71 @@ class ModelProvenanceTests(unittest.TestCase):
             self.assertFalse(report["valid"])
             self.assertTrue(
                 any("configuration hash mismatch" in item for item in report["errors"])
+            )
+
+    def test_huggingface_snapshot_links_must_resolve_inside_the_cache(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = "a" * 40
+            cache = root / "models" / "huggingface"
+            snapshot = cache / "models--owner--model" / "snapshots" / revision
+            blobs = cache / "models--owner--model" / "blobs"
+            snapshot.mkdir(parents=True)
+            blobs.mkdir(parents=True)
+            config_blob = blobs / "config-blob"
+            config_blob.write_text("{}", encoding="utf-8")
+            (snapshot / "config.json").symlink_to(config_blob)
+            manifest = {
+                "schemaVersion": 1,
+                "models": {
+                    "aligner": {
+                        "type": "huggingface-snapshot",
+                        "repository": "owner/model",
+                        "revision": revision,
+                        "requiredFiles": ["config.json"],
+                        "repositoryConfigPath": "aligner.model",
+                        "revisionConfigPath": "aligner.revision",
+                    }
+                },
+            }
+            config = root / "config"
+            config.mkdir()
+            (config / "model-manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            pipeline = {
+                "aligner": {
+                    "model": "owner/model",
+                    "revision": revision,
+                }
+            }
+            report = verify_model_provenance(
+                root, pipeline, require_files=True, verify_hashes=False
+            )
+            self.assertTrue(report["valid"])
+
+            outside = root / "outside.json"
+            outside.write_text("{}", encoding="utf-8")
+            (snapshot / "config.json").unlink()
+            (snapshot / "config.json").symlink_to(outside)
+            report = verify_model_provenance(
+                root, pipeline, require_files=True, verify_hashes=False
+            )
+            self.assertFalse(report["valid"])
+            self.assertFalse(report["checks"][0]["present"])
+
+    def test_model_cache_grammar_uses_the_shared_policy_fixtures(self) -> None:
+        policy = json.loads(
+            (Path(__file__).resolve().parents[1] / "src/lyricrail/model_cache_policy.json")
+            .read_text(encoding="utf-8")
+        )
+        snapshot = Path("snapshot")
+        for case in policy["lexicalCases"]:
+            filename = case["filename"]
+            self.assertEqual(
+                _snapshot_entry(snapshot, filename) is not None,
+                case["accepted"],
+                case["name"],
             )
 
     def test_audio_download_mapping_must_be_complete_safe_and_bounded(self) -> None:

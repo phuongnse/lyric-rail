@@ -37,6 +37,7 @@ import {
   latestModelTransferProgress,
   outputStageLabel,
 } from "./modelProgress";
+import { formatIssueDiagnostics, selectDiagnosticTasks } from "./diagnostics";
 import {
   EMPTY_TASK_STATE,
   applyTaskSnapshot,
@@ -131,6 +132,7 @@ type DrawerProps = {
   onEditLyrics: (item: LibraryItem) => void;
   onRetry: (item: LibraryItem) => void;
   onShowContext: (item: LibraryItem) => void;
+  onRemoveItem: (item: LibraryItem) => void;
   onRemoveSource: (id: string) => void;
   onRecoveryExport: () => void;
   onRecoveryRestore: () => void;
@@ -273,6 +275,7 @@ export function LibraryDrawer(props: DrawerProps) {
                       {waiting && <button onClick={() => props.onLyricsFile(item)}>TXT</button>}
                       {item.status === "failed" && item.canProcess && <button onClick={() => props.onRetry(item)}>Retry</button>}
                       {(task || ["queued", "processing", "failed", "setup-required"].includes(item.status)) && <button onClick={() => props.onShowContext(item)}>{item.status === "failed" || item.status === "setup-required" ? "View issue" : "View task"}</button>}
+                      {item.canDelete && <button className="danger" onClick={() => props.onRemoveItem(item)}>Remove from library</button>}
                       {playable && item.sources.includes("Disk") && <IconButton className="row-icon" icon="edit" iconSize={16} label={`Edit lyrics for ${item.title}`} onClick={() => props.onEditLyrics(item)} />}
                     </div>
                   </article>
@@ -282,7 +285,7 @@ export function LibraryDrawer(props: DrawerProps) {
           )}
         </div>
         <footer className="drawer-footer">
-          <p className="processing-note">Local processing uses clear temporary job files; source media is never deleted.</p>
+          <p className="processing-note">Remove from library is available only for unfinished local media after confirmation. The source file, lyric sidecar, and .lrail packages are protected.</p>
           <div className="source-pills">
             {props.catalog.localSources.map((source) => (
               <span key={source.id}>Local <IconButton className="source-remove" icon="close" iconSize={13} label={`Remove local source ${source.path}`} onClick={() => props.onRemoveSource(source.id)} /></span>
@@ -535,7 +538,7 @@ export function ActivityCenter({
               {issue.state === "resolving" && <p className="issue-resolving">{issue.progressMessage || "Resolution is running"}. Realtime output is available here when the resolution has a linked task.</p>}
               {issue.detail && <details><summary>Technical details</summary><pre>{issue.detail}</pre></details>}
               <footer>
-                {issue.detail && <button onClick={() => onCopyDiagnostics(issue)}>Copy diagnostics</button>}
+                <button onClick={() => onCopyDiagnostics(issue)}>Copy diagnostics</button>
                 {issue.relatedTaskId && <button onClick={() => onOpenIssueTask(issue)}>{outputOpen ? "Hide output" : "View output"}</button>}
                 {issue.state !== "resolving" && issue.actions.map((action) => (
                   <button className="primary" key={action.kind} onClick={() => onResolve(issue, action)}>{action.label}</button>
@@ -589,6 +592,7 @@ function App() {
   const [lyricDialog, setLyricDialog] = useState<{ item: LibraryItem; mode: "add" | "edit" }>();
   const [lyricDraft, setLyricDraft] = useState("");
   const [lyricTitle, setLyricTitle] = useState("");
+  const [deleteCandidate, setDeleteCandidate] = useState<LibraryItem>();
   const [clipDialogOpen, setClipDialogOpen] = useState(false);
   const [clipPreview, setClipPreview] = useState<LocalClipPreview>();
   const [queueInsertion, setQueueInsertion] = useState(0);
@@ -607,9 +611,11 @@ function App() {
   const setupDialogRef = useRef<HTMLDivElement>(null);
   const aboutDialogRef = useRef<HTMLDivElement>(null);
   const lyricDialogRef = useRef<HTMLDivElement>(null);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
   const clipDialogRef = useRef<HTMLDivElement>(null);
   const lyricInputRef = useRef<HTMLTextAreaElement>(null);
   const lyricRestoreRef = useRef<HTMLElement>(null);
+  const deleteRestoreRef = useRef<HTMLElement>(null);
   const clipRestoreRef = useRef<HTMLElement>(null);
   const lastAudibleVolumeRef = useRef(0.9);
   const selectedTaskIdRef = useRef<string | undefined>(undefined);
@@ -639,11 +645,12 @@ function App() {
     [taskState.tasks],
   );
   const showUtilityMenu = !native || status?.platform === "windows" || status?.platform === "linux";
-  const systemModalOpen = Boolean(confirmIssue) || aboutOpen || Boolean(lyricDialog) || clipDialogOpen;
+  const systemModalOpen = Boolean(confirmIssue) || aboutOpen || Boolean(lyricDialog) || Boolean(deleteCandidate) || clipDialogOpen;
   const anyModalOpen = systemModalOpen;
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
   useFocusContainment(aboutOpen, aboutDialogRef, undefined, utilityToggleRef);
   useFocusContainment(Boolean(lyricDialog), lyricDialogRef, lyricInputRef, lyricRestoreRef);
+  useFocusContainment(Boolean(deleteCandidate), deleteDialogRef, undefined, deleteRestoreRef);
   useFocusContainment(clipDialogOpen && !clipPreparing, clipDialogRef, undefined, clipRestoreRef);
   useFocusContainment(clipDialogOpen && clipPreparing, clipPreparingRef, undefined, clipRestoreRef);
   const reportError = useCallback((
@@ -652,10 +659,11 @@ function App() {
     reason: unknown,
     summary?: string,
     action?: IssueAction,
+    relatedTaskId?: string,
   ) => {
     setClientIssues((current) => upsertIssue(
       current,
-      clientIssue(scope, title, reason, summary, action),
+      clientIssue(scope, title, reason, summary, action, relatedTaskId),
     ));
   }, []);
 
@@ -680,7 +688,7 @@ function App() {
           setTaskOutputTruncated((current) => ({ ...current, [taskId]: snapshot.truncated }));
         } while (replay.dirty);
       } catch (reason) {
-        reportError("tasks", "Task output could not be replayed", reason);
+        reportError("tasks", "Task output could not be replayed", reason, undefined, undefined, taskId);
       } finally {
         taskReplayRef.current.delete(taskId);
       }
@@ -825,6 +833,7 @@ function App() {
         }
         else if (aboutOpen) setAboutOpen(false);
         else if (lyricDialog) setLyricDialog(undefined);
+        else if (deleteCandidate) setDeleteCandidate(undefined);
         else if (clipDialogOpen) {
           if (clipRequest.current) { cancelClipPreparation(); return; }
           if (clipBusy) return;
@@ -841,7 +850,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, confirmIssue, issuesOpen, licenseConfirmed, lyricDialog, native, utilityOpen]);
+  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, confirmIssue, deleteCandidate, issuesOpen, licenseConfirmed, lyricDialog, native, utilityOpen]);
 
   useEffect(() => {
     if (issuesOpen) {
@@ -918,16 +927,38 @@ function App() {
     action: () => Promise<unknown>,
     scope = "system",
     title = "Action could not be completed",
+    relatedTaskId?: string,
   ) => {
     setBusy(true);
     try { await action(); }
-    catch (reason) { reportError(scope, title, reason); }
+    catch (reason) { reportError(scope, title, reason, undefined, undefined, relatedTaskId); }
     finally { setBusy(false); }
+  };
+
+  const requestRemove = (item: LibraryItem) => {
+    deleteRestoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setDeleteCandidate(item);
+  };
+
+  const confirmRemove = async () => {
+    const item = deleteCandidate;
+    if (!native || !item || busy) return;
+    setBusy(true);
+    try {
+      const snapshot = await invoke<CatalogSnapshot>("remove_unprocessed_local_item", { itemId: item.id });
+      setCatalog(snapshot);
+      if (selectedId === item.id) setSelectedId(undefined);
+      setDeleteCandidate(undefined);
+    } catch (reason) {
+      reportError("library", "Library item could not be removed", reason, "Only unfinished local media items can be removed here; the source file is never changed.", undefined, item.id);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const cancelClipPreparation = () => {
     const request = clipRequest.current;
-    if (request) { request.cancelled = true; void invoke("cancel_clip_preparation", { requestId: request.id }).catch((reason) => reportError("tasks", "Could not cancel clip preparation", reason)); }
+    if (request) { request.cancelled = true; void invoke("cancel_clip_preparation", { requestId: request.id }).catch((reason) => reportError("tasks", "Could not cancel clip preparation", reason, undefined, undefined, "clip-preparation")); }
     if (clipPreview) void invoke("cancel_local_clip", { clipId: clipPreview.clipId }).catch(() => {});
     setClipDialogOpen(false);
   };
@@ -966,7 +997,7 @@ function App() {
     }
     setClipPreview(undefined);
     await prepareClip(paths[0]);
-    }, "library", "Files could not be added");
+    }, "library", "Files could not be added", "clip-preparation");
   };
 
   const addFolder = () => runBusy(async () => {
@@ -1004,11 +1035,21 @@ function App() {
     if (!clipPreview || clipBusy) return;
     setClipBusy(true);
     try {
-      const snapshot = await invoke<CatalogSnapshot>("commit_local_sections", { clipId: clipPreview.clipId, sections });
+      let snapshot = await invoke<CatalogSnapshot>("commit_local_sections", { clipId: clipPreview.clipId, sections });
+      for (const [index, section] of sections.entries()) {
+        const lyrics = section.lyrics?.trim() ? section.lyrics : undefined;
+        const item = snapshot.items[index];
+        if (!lyrics || !item) continue;
+        try {
+          snapshot = await invoke<CatalogSnapshot>("provide_lyrics_text", { itemId: item.id, text: lyrics });
+        } catch (reason) {
+          reportError("lyrics", `Lyrics could not be queued for ${section.title}`, reason, undefined, undefined, item.id);
+        }
+      }
       setCatalog(snapshot); setShownItems(snapshot.items); setQuery("");
       setQueueInsertion((value) => value + 1);
       setClipPreview(undefined); setClipDialogOpen(false); setDrawerOpen(true);
-    } catch (reason) { reportError("clip", "Songs could not be added", reason); throw reason; }
+    } catch (reason) { reportError("clip", "Songs could not be added", reason, undefined, undefined, "clip-preparation"); throw reason; }
     finally { setClipBusy(false); }
   };
 
@@ -1171,19 +1212,52 @@ function App() {
     }
   };
 
-  const copyIssueDiagnostics = (issue: SystemIssue) => {
+  const copyIssueDiagnostics = async (issue: SystemIssue) => {
     if (!navigator.clipboard) {
       reportError("issues", "Diagnostics could not be copied", "Clipboard access is unavailable");
       return;
     }
-    const report = [
-      `LyricRail ${status?.version || "0.8.0"}`,
-      `Issue: ${issue.code}`,
-      `Scope: ${issue.scope}`,
-      issue.detail || issue.summary,
-    ].join("\n");
-    navigator.clipboard.writeText(report)
-      .catch((reason) => reportError("issues", "Diagnostics could not be copied", reason));
+    const knownTasks = [...taskState.tasks];
+    if (selectedTaskRecord && !knownTasks.some((task) => task.id === selectedTaskRecord.id)) {
+      knownTasks.push(selectedTaskRecord);
+    }
+    if (native && issue.relatedTaskId && !knownTasks.some((task) => task.id === issue.relatedTaskId)) {
+      try {
+        const relatedTask = await invoke<TaskRecord | null>("task_record", { taskId: issue.relatedTaskId });
+        if (relatedTask) knownTasks.push(normalizeTaskRecord(relatedTask));
+      } catch {
+        // The issue and runtime state remain useful when the bounded task record has expired.
+      }
+    }
+    const tasks = selectDiagnosticTasks(issue, knownTasks);
+    const taskReports = await Promise.all(tasks.map(async (task) => {
+      let lines = taskState.output[task.id] ?? [];
+      let truncated = Boolean(taskOutputTruncated[task.id]) || task.outputTruncated;
+      if (native) {
+        try {
+          const snapshot = await invoke<TaskOutputSnapshot>("task_output_snapshot", {
+            taskId: task.id,
+            afterSequence: 0,
+          });
+          lines = snapshot.lines;
+          truncated ||= snapshot.truncated;
+        } catch {
+          // Use the already-received ring-buffer lines if replay is unavailable.
+        }
+      }
+      return { task, lines, truncated };
+    }));
+    const report = formatIssueDiagnostics({
+      status,
+      issue,
+      tasks: taskReports,
+      capturedAtMillis: Date.now(),
+    });
+    try {
+      await navigator.clipboard.writeText(report);
+    } catch (reason) {
+      reportError("issues", "Diagnostics could not be copied", reason);
+    }
   };
 
   const openTaskOutput = (task: TaskRecord) => {
@@ -1243,7 +1317,7 @@ function App() {
         const nativeTask = await invoke<TaskRecord | null>("task_record", { taskId });
         task = nativeTask ? normalizeTaskRecord(nativeTask) : undefined;
       } catch (reason) {
-        reportError("tasks", "Linked task output could not be opened", reason);
+        reportError("tasks", "Linked task output could not be opened", reason, undefined, undefined, taskId);
         return;
       }
     }
@@ -1251,7 +1325,7 @@ function App() {
       openTaskOutput(task);
       setSelectedIssueId(issue.id);
     }
-    else reportError("tasks", "Linked task output is no longer available", "The bounded task record has expired. Issue details and actions are still available.");
+    else reportError("tasks", "Linked task output is no longer available", "The bounded task record has expired. Issue details and actions are still available.", undefined, undefined, taskId);
   };
 
   const showItemContext = async (item: LibraryItem) => {
@@ -1267,7 +1341,7 @@ function App() {
         const nativeTask = await invoke<TaskRecord | null>("task_record", { taskId: item.id });
         task = nativeTask ? normalizeTaskRecord(nativeTask) : undefined;
       } catch (reason) {
-        reportError("tasks", "Task details could not be opened", reason);
+        reportError("tasks", "Task details could not be opened", reason, undefined, undefined, item.id);
       }
     }
     setDrawerOpen(false);
@@ -1278,13 +1352,13 @@ function App() {
 
   const cancelActivityTask = (task: TaskRecord) => {
     invoke("cancel_task", { taskId: task.id })
-      .catch((reason) => reportError("tasks", `Could not cancel ${task.title}`, reason));
+      .catch((reason) => reportError("tasks", `Could not cancel ${task.title}`, reason, undefined, undefined, task.id));
   };
 
   const copyTaskOutput = () => {
     const lines = selectedTaskId ? taskState.output[selectedTaskId] ?? [] : [];
     if (!navigator.clipboard) {
-      reportError("tasks", "Task output could not be copied", "Clipboard access is unavailable");
+      reportError("tasks", "Task output could not be copied", "Clipboard access is unavailable", undefined, undefined, selectedTaskId);
       return;
     }
     const report = lines.map((line) => [
@@ -1295,7 +1369,7 @@ function App() {
       line.text,
     ].join("\t")).join("\n");
     navigator.clipboard.writeText(report)
-      .catch((reason) => reportError("tasks", "Task output could not be copied", reason));
+      .catch((reason) => reportError("tasks", "Task output could not be copied", reason, undefined, undefined, selectedTaskId));
   };
 
   useEffect(() => {
@@ -1445,8 +1519,9 @@ function App() {
         onLyricsFile={chooseLyrics}
         onLyricsPaste={(item) => showLyricDialog(item, "add").catch((reason) => reportError("lyrics", "Lyric editor could not open", reason))}
         onEditLyrics={(item) => showLyricDialog(item, "edit").catch((reason) => reportError("lyrics", "Lyric editor could not open", reason))}
-        onRetry={(item) => runBusy(() => invoke("retry_processing_item", { itemId: item.id }), "processing", `Retry failed for ${item.title}`)}
+        onRetry={(item) => runBusy(() => invoke("retry_processing_item", { itemId: item.id }), "processing", `Retry failed for ${item.title}`, item.id)}
         onShowContext={showItemContext}
+        onRemoveItem={requestRemove}
         onRemoveSource={(id) => runBusy(() => invoke("remove_library_source", { sourceId: id }), "library", "Library source could not be removed")}
         onRecoveryExport={exportRecovery}
         onRecoveryRestore={restoreRecovery}
@@ -1493,6 +1568,18 @@ function App() {
         </div>
       )}
 
+      {deleteCandidate && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="delete-item-title">
+          <div ref={deleteDialogRef} className="setup-dialog panel" tabIndex={-1}>
+            <header><div><p className="eyebrow">Unfinished Library item</p><h2 id="delete-item-title">Remove “{deleteCandidate.title}”?</h2></div><IconButton className="dialog-close" icon="close" label="Cancel removing item" onClick={() => setDeleteCandidate(undefined)} /></header>
+            <p>This removes only this unfinished item from Library. The original media file and its lyric sidecar stay unchanged.</p>
+            {deleteCandidate.status === "queued" && <p className="processing-note">This song is queued but has not finished processing; confirming will cancel only its pending work first.</p>}
+            <p className="processing-note">Authenticated <code>.lrail</code> packages are protected and never use this action.</p>
+            <footer><button onClick={() => setDeleteCandidate(undefined)} disabled={busy}>Cancel</button><button className="danger" onClick={() => { void confirmRemove(); }} disabled={busy}>Remove from library</button></footer>
+          </div>
+        </div>
+      )}
+
       {clipDialogOpen && clipPreparing && (
         <div className="modal-layer" style={{ zIndex: 100 }} role="dialog" aria-modal="true" aria-labelledby="clip-preparing-title">
           <div ref={clipPreparingRef} className="setup-dialog panel" tabIndex={-1}>
@@ -1505,7 +1592,7 @@ function App() {
 
       {clipDialogOpen && clipPreview && (
         <div className="modal-layer" style={{ display: clipPreparing ? "none" : undefined }} role="dialog" aria-modal="true" aria-labelledby="clip-editor-title">
-          <ClipEditor preparationError={clipPreparationError} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed"); }} />
+            <ClipEditor preparationError={clipPreparationError} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed", "clip-preparation"); }} />
         </div>
       )}
 
