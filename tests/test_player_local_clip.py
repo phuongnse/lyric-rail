@@ -136,9 +136,9 @@ def test_clip_preview_is_opaque_main_only_and_range_bounded() -> None:
     assert "concurrent_preview_ranges_do_not_share_a_cursor" in LOCAL_CLIP
     assert "preview.videoUrl" in EDITOR
     assert "<video" in EDITOR and "<audio" in EDITOR
-    assert "frameAt(frames" in EDITOR
+    assert "frameAt(boundaries" in EDITOR
     assert "Drag section start" in EDITOR and "Drag section end" in EDITOR
-    assert "Add section at playhead" in EDITOR
+    assert "Add another song" in EDITOR
 
 
 def test_local_clip_trim_reuses_the_existing_catalog_and_worker_contract() -> None:
