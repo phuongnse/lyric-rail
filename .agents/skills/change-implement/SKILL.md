@@ -21,6 +21,13 @@ items produce the planned objective evidence. If implementation proves an
 applicability decision wrong, preserve the accepted contract and implement the
 required structure; the independent review records the corrected semantic result.
 
+Complete the accepted design work before final verification. Re-read the affected
+end-to-end flow and its callers using **production-engineering** design guidance;
+refactor within scope when the implemented structure obscures responsibility,
+weakens contracts, or adds unnecessary coupling or indirection. Preserve behavior
+and protective checks during refactoring. Working code and passing tests do not
+replace meeting accepted design criteria.
+
 Do not weaken an affected enforced readiness capability or silently change its pack,
 version, profile mapping, state, or gap. A planned-to-enforced transition must be an
 explicit implementation diff backed by the planned checks. Never auto-promote a

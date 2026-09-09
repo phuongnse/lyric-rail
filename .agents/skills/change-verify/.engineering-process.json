@@ -1,6 +1,6 @@
 {
-  "digest": "sha256:a54253989190a291c46f7f6c5f782e1de74d9b6fed07ef903e9be4637ff72041",
+  "digest": "sha256:046205ef0ffeec304bc075649bcd6408c5c56b1f5d3ec3578d168419f515d3bb",
   "managedBy": "engineering-process",
   "schemaVersion": 1,
-  "version": "2.0.2"
+  "version": "2.2.0"
 }

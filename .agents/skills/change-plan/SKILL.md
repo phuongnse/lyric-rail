@@ -10,6 +10,14 @@ approach, bounded work items with owned paths, and concrete risks with mitigatio
 The plan must bind the exact contract digest and must not add behavior that the
 contract did not accept.
 
+Use the existing `approach` to explain material design decisions against the accepted
+criteria and inspected consumer code: responsibility and state ownership,
+collaboration contracts, reusable structures, and actual sources of variation.
+Explain how the chosen structure helps trace the behavior and contains a concrete
+maintenance change, accounting for indirection and coupling. Bind needed design work
+to existing work-item outcomes. Keep reasoning proportional; retaining a clear
+existing structure is a valid choice.
+
 Read **production-engineering** and add one `productionEngineering` assessment for
 each canonical invariant in its defined order. Decide applicability from the stated
 trigger, give a concrete rationale, and bind every applicable invariant to the work
