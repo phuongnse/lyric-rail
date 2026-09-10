@@ -53,7 +53,6 @@ struct LocalClipInner {
 #[derive(Clone)]
 struct LocalClipSession {
     clip_id: String,
-    request_id: String,
     path: PathBuf,
     source_file: Arc<fs::File>,
     source_identity: SourceIdentity,
@@ -1368,7 +1367,6 @@ pub async fn prepare(
     };
     inner.preview = Some(LocalClipSession {
         clip_id,
-        request_id,
         path: prepared.path,
         source_file: prepared.source_file,
         source_identity: prepared.source_identity,
@@ -1427,17 +1425,6 @@ fn cancel_preparation_inner(inner: &mut LocalClipInner, request_id: Option<&str>
         }
     }
     if let Some(id) = request_id {
-        if inner
-            .preview
-            .as_ref()
-            .is_some_and(|session| session.request_id == id)
-        {
-            inner.preview = None;
-            if let Some(cancelled) = &inner.frame_cancel {
-                cancelled.store(true, Ordering::Release);
-            }
-            return true;
-        }
         if !inner
             .cancelled_requests
             .iter()
@@ -1562,13 +1549,21 @@ fn section_items(
             item.section_id = Some(item.id.clone());
             item.artist = validate_metadata(section.artist.as_deref(), "Artist")?;
             item.composer = validate_metadata(section.composer.as_deref(), "Composer")?;
-            item.lyric_text.clear();
-            item.first_lyric_line = None;
-            item.status = crate::catalog::ItemStatus::WaitingForLyrics;
-            item.status_message = None;
-            for location in &mut item.locations {
-                if let crate::catalog::ItemLocation::LocalMedia { lyrics_path, .. } = location {
-                    *lyrics_path = None;
+            let keep_existing_lyrics = section.start_millis == 0
+                && section.end_millis == session.duration_millis
+                && section
+                    .lyrics
+                    .as_deref()
+                    .is_none_or(|lyrics| lyrics.trim().is_empty());
+            if !keep_existing_lyrics {
+                item.lyric_text.clear();
+                item.first_lyric_line = None;
+                item.status = crate::catalog::ItemStatus::WaitingForLyrics;
+                item.status_message = None;
+                for location in &mut item.locations {
+                    if let crate::catalog::ItemLocation::LocalMedia { lyrics_path, .. } = location {
+                        *lyrics_path = None;
+                    }
                 }
             }
             if let Some(lyrics) = section
@@ -1591,7 +1586,7 @@ pub fn commit_sections(
     app: &AppHandle,
     clip_id: &str,
     sections: &[ClipSection],
-) -> Result<crate::catalog::CatalogSnapshot, String> {
+) -> Result<(crate::catalog::CatalogSnapshot, Vec<CatalogItem>), String> {
     validate_clip_id(clip_id)?;
     let state = app.state::<LocalClipState>();
     let mut inner = state
@@ -1604,6 +1599,7 @@ pub fn commit_sections(
         .filter(|session| session.clip_id == clip_id)
         .ok_or("Clip preview is no longer available")?;
     let items = section_items(session, sections)?;
+    let admitted_items = items.clone();
     let snapshot = app
         .state::<crate::CatalogState>()
         .0
@@ -1614,7 +1610,7 @@ pub fn commit_sections(
     if let Some(cancelled) = &inner.frame_cancel {
         cancelled.store(true, Ordering::Release);
     }
-    Ok(snapshot)
+    Ok((snapshot, admitted_items))
 }
 
 fn preview_file_response_with_type(
@@ -2072,7 +2068,6 @@ mod tests {
             frame_request_id: None,
             preparing: false,
             preview: Some(LocalClipSession {
-                request_id: String::new(),
                 direct: false,
                 content_type: "audio/wav".into(),
                 timeline_origin: 0.0,
@@ -2101,6 +2096,8 @@ mod tests {
         );
         drop(previous);
         assert_eq!(inner.preview.as_ref().unwrap().clip_id, id);
+        assert!(!super::cancel_preparation_inner(&mut inner, Some(id)));
+        assert_eq!(inner.preview.as_ref().unwrap().clip_id, id);
         assert!(cancel_inner(
             &mut inner,
             "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b"
@@ -2117,7 +2114,6 @@ mod tests {
         fs::write(&lyrics, b"Exact whole source lyrics").unwrap();
         let source_file = Arc::new(fs::File::open(&path).unwrap());
         let session = LocalClipSession {
-            request_id: String::new(),
             direct: false,
             content_type: "audio/wav".into(),
             timeline_origin: 0.0,
@@ -2170,6 +2166,50 @@ mod tests {
                 }
             ));
         }
+        let whole_source = super::ClipSection {
+            start_millis: 0,
+            end_millis: 1000,
+            title: "Whole source".into(),
+            artist: None,
+            composer: None,
+            lyrics: None,
+        };
+        let whole_item = super::section_items(&session, &[whole_source])
+            .unwrap()
+            .remove(0);
+        assert_eq!(whole_item.lyric_text, "Exact whole source lyrics");
+        assert!(matches!(
+            whole_item.locations[0],
+            crate::catalog::ItemLocation::LocalMedia {
+                lyrics_path: Some(_),
+                trim_start_millis: Some(0),
+                trim_end_millis: Some(1000),
+                ..
+            }
+        ));
+        let explicit_whole = super::ClipSection {
+            start_millis: 0,
+            end_millis: 1000,
+            title: "Explicit whole source".into(),
+            artist: None,
+            composer: None,
+            lyrics: Some("Replacement lyrics".into()),
+        };
+        let explicit_item = super::section_items(&session, &[explicit_whole])
+            .unwrap()
+            .remove(0);
+        assert_eq!(explicit_item.lyric_text, "Replacement lyrics");
+        assert_eq!(
+            explicit_item.status,
+            crate::catalog::ItemStatus::WaitingForLyrics
+        );
+        assert!(matches!(
+            explicit_item.locations[0],
+            crate::catalog::ItemLocation::LocalMedia {
+                lyrics_path: None,
+                ..
+            }
+        ));
         let detailed = super::ClipSection {
             artist: Some("Artist".into()),
             composer: Some("Composer".into()),

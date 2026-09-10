@@ -216,3 +216,38 @@ it("keeps titles, ranges and invalid drafts across failed compatibility and succ
   expect(input('Video name').value).toBe('Keep exact title');
   vi.mocked(invoke).mockImplementation(original);
 });
+
+it("keeps the old editor when compatible preview preparation is cancelled", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let resolveCompatible: (value: unknown) => void = () => {};
+  vi.mocked(invoke).mockImplementation((command, args, options) => {
+    if (command !== "prepare_local_clip") return original(command, args, options);
+    const compatible = (args as { compatible: boolean }).compatible;
+    return compatible
+      ? new Promise((resolve) => { resolveCompatible = resolve; })
+      : Promise.resolve({ clipId: "direct", direct: true, suggestedTitle: "Song", sizeBytes: 10, durationMillis: 3000, previewUrl: "http://fixture/preview" });
+  });
+  try {
+    const button = (text: string) => [...host.querySelectorAll("button")].find((element) => element.textContent === text)!;
+    const input = () => host.querySelector<HTMLInputElement>('[aria-label="Section 1 end handle"]')!;
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true })));
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input(), "1500");
+    await act(async () => input().dispatchEvent(new Event("input", { bubbles: true })));
+    await act(async () => host.querySelector(".clip-screen audio")!.dispatchEvent(new Event("error")));
+    vi.mocked(invoke).mockClear();
+    await act(async () => button("Prepare compatible preview").click());
+    expect(host.querySelector("#clip-preparing-title")?.textContent).toBe("Preparing compatible preview");
+    await act(async () => button("Cancel and close").click());
+    expect(host.querySelector("#clip-editor-title")).not.toBeNull();
+    expect(input().value).toBe("1500");
+    expect(host.textContent).toContain("Preparation cancelled. Your sections are kept");
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "cancel_clip_preparation")).toBe(true);
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "cancel_local_clip")).toBe(false);
+    await act(async () => resolveCompatible({ clipId: "compatible", direct: false, suggestedTitle: "Compatible Song", sizeBytes: 10, durationMillis: 3000, previewUrl: "http://fixture/compatible" }));
+    expect(host.querySelector("#clip-editor-title")).not.toBeNull();
+    expect(input().value).toBe("1500");
+    expect(host.textContent).toContain("Compatible Song");
+  } finally {
+    vi.mocked(invoke).mockImplementation(original);
+  }
+});

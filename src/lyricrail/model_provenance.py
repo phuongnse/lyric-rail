@@ -330,11 +330,17 @@ def verify_model_provenance(
                 file_path = resolve_snapshot_file(filename)
                 actual = _sha256(file_path) if verify_hashes and file_path is not None else ""
                 matches = bool(actual and actual == expected) if verify_hashes else None
-                if verify_hashes and file_path is not None and not matches:
-                    errors.append(
-                        f"Snapshot hash mismatch for {key!r}/{filename}: "
-                        f"expected {expected}, got {actual}"
-                    )
+                if verify_hashes:
+                    if file_path is None:
+                        errors.append(
+                            f"Snapshot hash target is missing or outside the cache for "
+                            f"{key!r}/{filename}"
+                        )
+                    elif not matches:
+                        errors.append(
+                            f"Snapshot hash mismatch for {key!r}/{filename}: "
+                            f"expected {expected}, got {actual}"
+                        )
                 file_hashes[str(filename)] = {
                     "expectedSha256": expected,
                     "actualSha256": actual or None,
@@ -412,12 +418,12 @@ def verify_model_provenance(
                         f"Manifest model {key!r} has an invalid SHA-256 for {filename}"
                     )
                     configured = False
-                if require_files and not associated_present:
+                if not associated_present and (require_files or verify_hashes):
                     errors.append(
                         f"Pinned model configuration is missing for {key!r}: "
                         f"{associated_path}"
                     )
-                if verify_hashes and associated_present and not associated_matches:
+                elif verify_hashes and not associated_matches:
                     errors.append(
                         f"Model configuration hash mismatch for {key!r}/{filename}: "
                         f"expected {associated_expected}, got {associated_actual}"
@@ -428,9 +434,9 @@ def verify_model_provenance(
                     "actualSha256": associated_actual or None,
                     "matches": associated_matches,
                 }
-            if require_files and not present:
+            if not present and (require_files or verify_hashes):
                 errors.append(f"Pinned checkpoint is missing for {key!r}: {path}")
-            if verify_hashes and present and not hash_matches:
+            elif verify_hashes and not hash_matches:
                 errors.append(
                     f"Checkpoint hash mismatch for {key!r}: expected {expected}, got {actual}"
                 )
@@ -460,7 +466,7 @@ def verify_model_provenance(
     return {
         "kind": "lyricrail.model-provenance",
         "policy": str(manifest.get("policy", "")),
-        "valid": not errors,
+        "valid": not errors and all(check["verified"] is True for check in checks),
         "errors": errors,
         "checks": checks,
     }

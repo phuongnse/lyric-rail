@@ -167,6 +167,8 @@ def test_local_clip_trim_reuses_the_existing_catalog_and_worker_contract() -> No
     assert "composer: Option<String>" in LOCAL_CLIP_RUNTIME
     assert "lyrics: Option<String>" in LOCAL_CLIP_RUNTIME
     assert 'provide_lyrics_text"' in APP
+    assert "let admitted_items = items.clone()" in LOCAL_CLIP_RUNTIME
+    assert "enqueue_ready(&app, admitted_items)" in LIB
     assert "start_seconds: Option<f64>" in PROCESSING
     assert "end_seconds: Option<f64>" in PROCESSING
     assert "trim_start_millis.map(|value| value as f64 / 1000.0)" in PROCESSING

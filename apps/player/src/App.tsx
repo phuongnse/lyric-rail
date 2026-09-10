@@ -599,7 +599,7 @@ function App() {
   const [clipBusy, setClipBusy] = useState(false);
   const [clipPreparing, setClipPreparing] = useState(false);
   const [clipPreparationError, setClipPreparationError] = useState("");
-  const clipRequest = useRef<{ id: string; cancelled: boolean } | undefined>(undefined);
+  const clipRequest = useRef<{ id: string; cancelled: boolean; compatible: boolean } | undefined>(undefined);
   const clipSource = useRef<string | undefined>(undefined);
   const clipPreparingRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -958,19 +958,31 @@ function App() {
 
   const cancelClipPreparation = () => {
     const request = clipRequest.current;
-    if (request) { request.cancelled = true; void invoke("cancel_clip_preparation", { requestId: request.id }).catch((reason) => reportError("tasks", "Could not cancel clip preparation", reason, undefined, undefined, "clip-preparation")); }
-    if (clipPreview) void invoke("cancel_local_clip", { clipId: clipPreview.clipId }).catch(() => {});
-    setClipDialogOpen(false);
+    const preservePreview = Boolean(request?.compatible && clipPreview);
+    if (request) {
+      request.cancelled = true;
+      void invoke("cancel_clip_preparation", { requestId: request.id }).catch((reason) => reportError("tasks", "Could not cancel clip preparation", reason, undefined, undefined, "clip-preparation"));
+    }
+    if (clipPreview && !preservePreview) void invoke("cancel_local_clip", { clipId: clipPreview.clipId }).catch(() => {});
+    if (preservePreview) {
+      setClipPreparationError("Preparation cancelled. Your sections are kept; you can retry.");
+      setClipPreparing(false);
+    } else {
+      setClipDialogOpen(false);
+    }
   };
   const prepareClip = async (path: string, compatible = false) => {
-    const request = { id: crypto.randomUUID(), cancelled: false };
+    const request = { id: crypto.randomUUID(), cancelled: false, compatible };
     clipRequest.current = request; clipSource.current = path;
     setClipPreparationError("");
     setClipPreparing(true); setClipBusy(true); setClipDialogOpen(true);
     try {
       const preview = await invoke<LocalClipPreview | null>("prepare_local_clip", { path, requestId: request.id, compatible, replaceClipId: compatible ? clipPreview?.clipId : undefined });
       if (request.cancelled || clipRequest.current !== request) {
-        if (preview) await invoke("cancel_local_clip", { clipId: preview.clipId });
+        if (preview && request.compatible && clipRequest.current === request) {
+          setClipPreview(preview);
+          setClipPreparationError("");
+        } else if (preview) await invoke("cancel_local_clip", { clipId: preview.clipId });
       } else if (preview) setClipPreview(preview);
       else if (!compatible) setClipDialogOpen(false);
       else setClipPreparationError("Preparation cancelled. Your sections are kept; you can retry.");

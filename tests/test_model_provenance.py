@@ -144,6 +144,56 @@ class ModelProvenanceTests(unittest.TestCase):
             self.assertFalse(report["valid"])
             self.assertFalse(report["checks"][0]["present"])
 
+    def test_declared_snapshot_hash_must_resolve_when_hashes_are_verified(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = "a" * 40
+            cache = root / "models" / "huggingface"
+            snapshot = cache / "models--owner--model" / "snapshots" / revision
+            snapshot.mkdir(parents=True)
+            config_file = snapshot / "config.json"
+            config_file.write_text("{}", encoding="utf-8")
+            digest = hashlib.sha256(config_file.read_bytes()).hexdigest()
+            manifest = {
+                "schemaVersion": 1,
+                "models": {
+                    "aligner": {
+                        "type": "huggingface-snapshot",
+                        "repository": "owner/model",
+                        "revision": revision,
+                        "requiredFiles": [],
+                        "fileSha256": {"config.json": digest},
+                        "repositoryConfigPath": "aligner.model",
+                        "revisionConfigPath": "aligner.revision",
+                    }
+                },
+            }
+            config = root / "config"
+            config.mkdir()
+            (config / "model-manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            pipeline = {
+                "aligner": {
+                    "model": "owner/model",
+                    "revision": revision,
+                }
+            }
+            report = verify_model_provenance(
+                root, pipeline, require_files=False, verify_hashes=True
+            )
+            self.assertTrue(report["valid"])
+
+            config_file.unlink()
+            report = verify_model_provenance(
+                root, pipeline, require_files=False, verify_hashes=True
+            )
+            self.assertFalse(report["valid"])
+            self.assertFalse(report["checks"][0]["verified"])
+            self.assertTrue(
+                any("Snapshot hash target is missing" in error for error in report["errors"])
+            )
+
     def test_model_cache_grammar_uses_the_shared_policy_fixtures(self) -> None:
         policy = json.loads(
             (Path(__file__).resolve().parents[1] / "src/lyricrail/model_cache_policy.json")

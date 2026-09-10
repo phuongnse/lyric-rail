@@ -113,7 +113,42 @@ struct WorkerRequest {
 struct DispatchFailure {
     request_id: String,
     transient_lyrics: Option<PathBuf>,
+    kind: DispatchFailureKind,
     message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DispatchFailureKind {
+    Runtime,
+    ModelsMissing,
+}
+
+#[derive(Debug)]
+enum WorkerPreflightError {
+    Runtime(String),
+    ModelsMissing(String),
+}
+
+impl From<String> for WorkerPreflightError {
+    fn from(message: String) -> Self {
+        Self::Runtime(message)
+    }
+}
+
+impl WorkerPreflightError {
+    fn kind(&self) -> DispatchFailureKind {
+        match self {
+            Self::Runtime(_) => DispatchFailureKind::Runtime,
+            Self::ModelsMissing(_) => DispatchFailureKind::ModelsMissing,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::Runtime(message) => message.clone(),
+            Self::ModelsMissing(message) => format!("{MODEL_PROVENANCE_FAILURE_PREFIX}{message}"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -131,7 +166,7 @@ fn dispatch_failure_projection(
     failure: &DispatchFailure,
     index: usize,
 ) -> DispatchFailureProjection<'_> {
-    let models_missing = failure.message.starts_with(MODEL_PROVENANCE_FAILURE_PREFIX);
+    let models_missing = failure.kind == DispatchFailureKind::ModelsMissing;
     DispatchFailureProjection {
         request_id: &failure.request_id,
         message: &failure.message,
@@ -924,6 +959,7 @@ fn take_worker_disconnect_failure(inner: &mut ProcessingInner) -> Option<Dispatc
         .map(|pending| DispatchFailure {
             request_id,
             transient_lyrics: pending.transient_lyrics,
+            kind: DispatchFailureKind::Runtime,
             message: WORKER_EXIT_MESSAGE.into(),
         })
 }
@@ -994,17 +1030,18 @@ fn read_bounded_lines(
     }
 }
 
-fn ensure_worker(app: &AppHandle, inner: &mut ProcessingInner) -> Result<(), String> {
+fn ensure_worker(app: &AppHandle, inner: &mut ProcessingInner) -> Result<(), WorkerPreflightError> {
     if let Some(process) = inner.process.as_mut() {
         match process.child.try_wait() {
             Ok(None) => return Ok(()),
             Ok(Some(_)) => inner.process = None,
-            Err(error) => return Err(format!("Unable to inspect processing worker: {error}")),
+            Err(error) => {
+                return Err(format!("Unable to inspect processing worker: {error}").into());
+            }
         }
     }
     let runtime = resolve_runtime()?;
-    model_files_present_at(&runtime.root)
-        .map_err(|error| format!("{MODEL_PROVENANCE_FAILURE_PREFIX}{error}"))?;
+    model_files_present_at(&runtime.root).map_err(WorkerPreflightError::ModelsMissing)?;
     let data_root = app
         .path()
         .app_data_dir()
@@ -1043,7 +1080,7 @@ fn ensure_worker(app: &AppHandle, inner: &mut ProcessingInner) -> Result<(), Str
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("Unable to contain processing worker: {error}"));
+            return Err(format!("Unable to contain processing worker: {error}").into());
         }
     };
     #[cfg(unix)]
@@ -1189,15 +1226,38 @@ impl ProcessingInner {
         Ok(())
     }
 
-    fn commit_item_removal(&mut self, reservation: RemovalReservation) -> Result<bool, String> {
-        if !self.removal_reservations.remove(&reservation.item_id) {
+    fn commit_item_removal(&mut self, reservation: &RemovalReservation) -> Result<bool, String> {
+        if !self.removal_reservations.contains(&reservation.item_id) {
             return Err("Item removal reservation is no longer active".into());
         }
+        let transient_lyrics = reservation
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.transient_lyrics.clone());
+        cleanup_transient_lyrics(transient_lyrics.as_deref())?;
+        self.removal_reservations.remove(&reservation.item_id);
         Ok(reservation.pending.is_some())
     }
 }
 
-fn drain_dispatch_failures(inner: &mut ProcessingInner, message: &str) -> Vec<DispatchFailure> {
+fn cleanup_transient_lyrics(path: Option<&Path>) -> Result<(), String> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Unable to remove task-owned lyric snapshot: {error}"
+        )),
+    }
+}
+
+fn drain_dispatch_failures(
+    inner: &mut ProcessingInner,
+    kind: DispatchFailureKind,
+    message: &str,
+) -> Vec<DispatchFailure> {
     inner
         .waiting
         .drain(..)
@@ -1209,6 +1269,7 @@ fn drain_dispatch_failures(inner: &mut ProcessingInner, message: &str) -> Vec<Di
             DispatchFailure {
                 request_id: request.request_id,
                 transient_lyrics,
+                kind,
                 message: message.to_owned(),
             }
         })
@@ -1220,7 +1281,9 @@ fn dispatch_next(app: &AppHandle, inner: &mut ProcessingInner) -> Result<(), Vec
         return Ok(());
     }
     if let Err(error) = ensure_worker(app, inner) {
-        return Err(drain_dispatch_failures(inner, &error));
+        let kind = error.kind();
+        let message = error.message();
+        return Err(drain_dispatch_failures(inner, kind, &message));
     }
     let first = {
         let ProcessingInner {
@@ -1238,7 +1301,9 @@ fn dispatch_next(app: &AppHandle, inner: &mut ProcessingInner) -> Result<(), Vec
         Err(_) => {
             inner.process = None;
             if let Err(error) = ensure_worker(app, inner) {
-                return Err(drain_dispatch_failures(inner, &error));
+                let kind = error.kind();
+                let message = error.message();
+                return Err(drain_dispatch_failures(inner, kind, &message));
             }
             let retry = {
                 let ProcessingInner {
@@ -1255,7 +1320,11 @@ fn dispatch_next(app: &AppHandle, inner: &mut ProcessingInner) -> Result<(), Vec
                 Ok(dispatched) => dispatched,
                 Err(error) => {
                     inner.process = None;
-                    return Err(drain_dispatch_failures(inner, &error));
+                    return Err(drain_dispatch_failures(
+                        inner,
+                        DispatchFailureKind::Runtime,
+                        &error,
+                    ));
                 }
             }
         }
@@ -1934,7 +2003,10 @@ pub fn rollback_item_removal(
     inner.rollback_item_removal(reservation)
 }
 
-pub fn commit_item_removal(app: &AppHandle, reservation: RemovalReservation) -> Result<(), String> {
+pub fn commit_item_removal(
+    app: &AppHandle,
+    reservation: &RemovalReservation,
+) -> Result<(), String> {
     let item_id = reservation.item_id.clone();
     let cancelled_waiting = {
         let state = app.state::<ProcessingState>();
@@ -2089,11 +2161,12 @@ mod tests {
     #[cfg(windows)]
     use super::encode_worker_request;
     use super::{
-        DispatchFailure, MODEL_PROVENANCE_FAILURE_PREFIX, PendingJob, ProcessingInner,
-        RemovalPreparation, WorkerRequest, apply_current_generation, commit_waiting_request,
-        dispatch_failure_projection, drain_dispatch_failures, durable_task_record, error_code,
-        load_durable_manifest, read_bounded_lines, read_durable_output, read_worker_stdout,
-        recover_worker_disconnect, take_worker_disconnect_failure, worker_command, worker_request,
+        DispatchFailure, DispatchFailureKind, MODEL_PROVENANCE_FAILURE_PREFIX, PendingJob,
+        ProcessingInner, RemovalPreparation, WorkerRequest, apply_current_generation,
+        commit_waiting_request, dispatch_failure_projection, drain_dispatch_failures,
+        durable_task_record, error_code, load_durable_manifest, read_bounded_lines,
+        read_durable_output, read_worker_stdout, recover_worker_disconnect,
+        take_worker_disconnect_failure, worker_command, worker_request,
     };
     use crate::catalog::{
         CatalogItem, ItemLocation, ItemStatus, MediaOrigin, ProcessingEvidenceStatus,
@@ -2182,15 +2255,19 @@ mod tests {
 
     #[test]
     fn queued_removal_commit_detaches_only_the_selected_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let transient = directory.path().join("transient-lyrics.txt");
+        fs::write(&transient, "Exact pasted lyrics").unwrap();
         let selected = test_request("selected-item");
         let sibling = test_request("sibling-item");
         let mut inner = ProcessingInner {
             waiting: VecDeque::from([selected.clone(), sibling.clone()]),
             ..Default::default()
         };
-        inner
-            .pending
-            .insert(selected.request_id.clone(), test_pending(None));
+        inner.pending.insert(
+            selected.request_id.clone(),
+            test_pending(Some(transient.clone())),
+        );
         inner
             .pending
             .insert(sibling.request_id.clone(), test_pending(None));
@@ -2200,10 +2277,41 @@ mod tests {
         else {
             panic!("queued request must be reserved, not treated as active");
         };
-        assert!(inner.commit_item_removal(*reservation).unwrap());
+        assert!(inner.commit_item_removal(reservation.as_ref()).unwrap());
         assert!(!inner.pending.contains_key("selected-item"));
         assert!(inner.pending.contains_key("sibling-item"));
         assert_eq!(inner.waiting.front().unwrap().request_id, "sibling-item");
+        assert!(!transient.exists());
+    }
+
+    #[test]
+    fn failed_removal_cleanup_keeps_reservation_for_rollback() {
+        let directory = tempfile::tempdir().unwrap();
+        let request = test_request("queued-item");
+        let mut inner = ProcessingInner {
+            waiting: VecDeque::from([request.clone()]),
+            ..Default::default()
+        };
+        inner.pending.insert(
+            request.request_id.clone(),
+            test_pending(Some(directory.path().to_owned())),
+        );
+
+        let RemovalPreparation::Ready(reservation) =
+            inner.prepare_item_removal("queued-item").unwrap()
+        else {
+            panic!("queued request must be reserved, not treated as active");
+        };
+        let error = inner.commit_item_removal(reservation.as_ref()).unwrap_err();
+        assert!(error.contains("Unable to remove task-owned lyric snapshot"));
+        assert!(inner.removal_reservations.contains("queued-item"));
+
+        inner.rollback_item_removal(*reservation).unwrap();
+        assert_eq!(inner.waiting.front().unwrap().request_id, "queued-item");
+        assert_eq!(
+            inner.pending["queued-item"].transient_lyrics.as_deref(),
+            Some(directory.path())
+        );
     }
 
     #[test]
@@ -2338,6 +2446,7 @@ mod tests {
         let failure = DispatchFailure {
             request_id: "song".into(),
             transient_lyrics: None,
+            kind: DispatchFailureKind::ModelsMissing,
             message: format!(
                 "{MODEL_PROVENANCE_FAILURE_PREFIX}2 pinned processing model files are missing or invalid"
             ),
@@ -2349,6 +2458,19 @@ mod tests {
             super::model_provenance_failure_detail(&failure.message),
             "2 pinned processing model files are missing or invalid"
         );
+    }
+
+    #[test]
+    fn runtime_failure_text_cannot_project_to_setup_required() {
+        let failure = DispatchFailure {
+            request_id: "song".into(),
+            transient_lyrics: None,
+            kind: DispatchFailureKind::Runtime,
+            message: format!("{MODEL_PROVENANCE_FAILURE_PREFIX}this is a runtime failure"),
+        };
+        let projection = dispatch_failure_projection(&failure, 0);
+        assert!(!projection.models_missing);
+        assert_eq!(projection.item_status, ItemStatus::Failed);
     }
 
     #[test]
@@ -2407,6 +2529,7 @@ mod tests {
                     vec![super::DispatchFailure {
                         request_id: "request-c".into(),
                         transient_lyrics: None,
+                        kind: super::DispatchFailureKind::Runtime,
                         message,
                     }]
                 })
@@ -2716,7 +2839,11 @@ mod tests {
                 cancel_requested: false,
             },
         );
-        let terminal = drain_dispatch_failures(&mut failed_inner, "controlled closed pipe");
+        let terminal = drain_dispatch_failures(
+            &mut failed_inner,
+            DispatchFailureKind::Runtime,
+            "controlled closed pipe",
+        );
         assert_eq!(terminal.len(), 1);
         assert_eq!(terminal[0].request_id, "next-item");
         assert_eq!(
