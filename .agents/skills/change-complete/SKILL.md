@@ -17,6 +17,33 @@ Run:
 
 The existing `change finish` CLI operation writes one bounded completion receipt and
 marks the run completed.
+
+For an opted-in project, `change finish` first runs the existing read-only publication
+validators against the current branch, HEAD commit subject, and the recorded
+`comparisonBaseCommit` through the exact current HEAD. It records the validated
+branch, subject, and pinned range in a version 2 receipt only after the repository
+and branch remain unchanged. Version 1 receipts remain supported. A failed preflight leaves
+the approved run incomplete.
+
+This source preflight does not validate a provider pull-request body or make a pull
+request ready. The consumer's required CI must run the same branch, head-commit,
+range, and rendered-body checks against the exact pull-request head before readiness;
+merge, publication, deployment, and release authority remain consumer-owned.
+
+Before marking a PR ready, render its body from the selected standard and actual
+completion evidence. Run the consumer's publication preflight, including the current
+branch, exact head subject, pinned base-to-head range, and ready-state body. For a
+consumer using the packaged compatibility checks, all four commands must pass:
+
+    processctl publication validate-branch --branch BRANCH
+    processctl publication validate-commit --subject HEAD_SUBJECT
+    processctl publication validate-range --branch BRANCH --range BASE_SHA..HEAD_SHA
+    processctl publication validate-pr --title TITLE --branch BRANCH --state ready --body-file BODY_PATH
+
+Use actual current PR metadata and the selected consumer root. Keep the PR draft
+when a check fails, and repeat the same checks in required CI/branch protection.
+Custom publication policy uses consumer-owned commands at the same boundary.
+
 Completion does not itself grant merge, deployment, or release authority; those
 remain project-owned operations. Never report completion from prose alone.
 
@@ -39,6 +66,11 @@ Only a contract-identified final consumer adoption that has verified the release
 behavior may use `Closes ISSUE, closes ISSUE.` after the completed public checklist.
 Repeat the full keyword and local or `OWNER/REPOSITORY#NUMBER` reference for every
 issue; never close source issues merely because the producer release merged.
+
+When the consumer selects an issue artifact standard, render and validate its closed
+record from actual resolution, implementation, verification, and applicable
+release/adoption/consumer-confirmation evidence before the external tracker is closed.
+The artifact result does not itself change provider state or prove arbitrary prose.
 
 Report the readiness capabilities protected or advanced and the remaining planned
 gaps after completion. Carry the owner and stable record URL for every accepted-risk

@@ -10,7 +10,7 @@ behavior. Write a change contract containing the source request, comparison base
 risk, affected projects, observable acceptance criteria, and required verification
 profiles. Do not decide unresolved product behavior silently.
 
-When the work produces a PR description, release notes or an automation name, inspect the consumer's
+When the work produces an issue record, PR description, release notes or an automation name, inspect the consumer's
 selected artifact standard and existing publication checks. The consumer may override
 the packaged defaults. Keep document-format choices separate from lifecycle approval.
 
@@ -44,3 +44,9 @@ contract:
     processctl change start --actor ACTOR --context CONTEXT --contract change.json
 
 Do not edit implementation before the lifecycle reports specified.
+
+If `.process/project.json` opts in with `lifecycle.publication.required: true`, start
+also runs the existing read-only publication branch validator against the current
+checkout branch before creating `.process/runs/ID`. A rejected branch leaves no new
+run state. The branch convention remains consumer-owned; the opt-in only makes the
+consumer's existing publication compatibility rule a lifecycle preflight.

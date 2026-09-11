@@ -9,11 +9,19 @@ The reviewer must not share either actor identity or execution context with an
 implementer in the current cycle. An implementer must hand off this phase to an
 actual reviewer, not perform it under another identity.
 
-For a new agent review, spawn a fresh agent/session without the implementation
-conversation. Supply the accepted contract and plan, recorded `comparisonBaseCommit`, candidate
+For every new change, spawn a new reviewer agent/session without the implementation
+conversation or another change's review conversation. Do not resume an earlier
+change's reviewer merely to preserve model settings; a fresh session must keep the
+same active user-selected model and effort. Reuse a reviewer handle only for the
+same accepted change and its correction cycles.
+
+Supply the accepted contract and plan, recorded `comparisonBaseCommit`, candidate
 path/checkpoint, and verification evidence. Request an independent assessment of
-the complete diff and relevant code/tests without suggesting a verdict. The same
-model, provider, or account may be used. If the environment cannot run or reach an
+the complete diff and relevant code/tests without suggesting a verdict. Follow
+**deliver-change**'s agent execution settings rule for the spawn and verify the
+native runtime's effective settings before accepting the review. The provider or
+account may be shared; actor and execution context must remain independent.
+If the environment cannot run or reach an
 independent reviewer, leave the change awaiting review and report that missing
 handoff.
 
@@ -28,6 +36,12 @@ actor/context in the existing assignment and retain the native task/session
 interaction and returned result for inspection. Distinct identity strings alone do
 not demonstrate that a review ran.
 
+Before assignment, retain native evidence that this session was created for this
+change and dispatched without inherited implementation history: the creation record,
+parent dispatch and successful result binding, plus effective model/effort observations
+for contributing turns. A new actor name, `fresh=true`, or an agent-supplied timestamp
+is not that evidence. If the host cannot establish it, report the missing handoff.
+
 Read `processctl change status --change-id ID`.
 When the phase is `verified`, start the assignment:
 
@@ -40,6 +54,28 @@ When the phase is `review-pending`, resume the existing assignment; do not run
 existing report path, `.process/runs/ID/review-CYCLE.json`. If that reviewer is
 unavailable, report the pending assignment as a blocker; never impersonate its
 identity or create a replacement assignment from another context.
+
+The core rejects an agent context recorded in another accepted change in this Git
+repository or its registered worktrees. It reads canonical run history with bounded
+I/O and schema validation; unsafe, inaccessible or oversized history fails explicitly.
+An absent conflict only covers that inspected history. It cannot certify native
+freshness, deleted history, other clones, other repositories or inherited conversations.
+
+One narrow recovery exists for an initial pending assignment that the core proves
+reused another change's context, before any submitted review or normal report file:
+
+    processctl change review replace-reused --change-id ID --actor NEW_REVIEWER --context NEW_CONTEXT
+
+First stop the wrongly assigned agent and spawn a fresh reviewer for this change.
+The command validates the new identity and current evidence, preserves the entire
+previous assignment and its recorded conflict in existing history, and leaves the
+cycle and verification unchanged. It cannot replace a valid assignment, a stale
+snapshot, or a reviewer from a submitted/correction round. Late reports from the old
+identity are rejected. This exception does not permit ordinary reviewer substitution.
+
+Apply the same **deliver-change** settings rule when resuming this reviewer. An
+existing session handle does not establish that its current model and effort still
+match the active user-selected task.
 
 Review the accepted contract, plan, complete diff, focused tests, and verification
 evidence. The first pass is comprehensive within that frozen contract. Every finding
