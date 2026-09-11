@@ -1,5 +1,8 @@
 {
   "lifecycle": {
+    "publication": {
+      "required": true
+    },
     "requiredProfiles": [
       "frontend",
       "python",

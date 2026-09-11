@@ -795,6 +795,15 @@ def _installed_process_version(python: Path, *, cwd: Path) -> str:
     return version
 
 
+def _pip_refresh_arguments(python: Path, *, cwd: Path) -> list[str]:
+    help_text = _run(
+        [str(python), "-I", "-m", "pip", "install", "--help"], cwd=cwd
+    )
+    if re.search(r"(?m)^\s+--refresh-package\s", help_text):
+        return ["--refresh-package", "engineering-process"]
+    return ["--no-cache-dir"]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Materialize one hash-locked engineering-process adoption"
@@ -851,6 +860,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--isolated",
                 "--disable-pip-version-check",
                 "--no-input",
+                *_pip_refresh_arguments(python, cwd=environment_root),
                 "--require-hashes",
                 "--only-binary",
                 ":all:",

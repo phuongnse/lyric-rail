@@ -16,6 +16,16 @@ or stream failure, failed descendant cleanup, or tracked repository mutation is 
 failure and leaves the change in implementing. Successfully cleaned post-exit
 descendants remain recorded without replacing the foreground command result.
 
+In a fresh session, use the consumer's declared bootstrap and the supported runtime
+that has the process and required project dependencies installed. Invoke the
+installed process entry point through that runtime; do not assume a source
+`processctl.py` or a particular virtual-environment directory exists in every consumer.
+The bounded runner prepends the invoking interpreter's directory to child `PATH`
+while preserving the declared command arrays, explicit executable paths, and the
+remaining caller path. Missing executables remain bounded execution failures.
+Select or install dependencies only through consumer-owned setup commands; this
+route does not provide an implicit installer.
+
 A failed report may include a safe selective-reproduction argument array. It can
 confirm the isolated failure through the same bounded runner, but it remains a
 diagnostic action: never submit it in place of the required full profile, and do not
