@@ -6,7 +6,7 @@ export type TaskKind =
   | "drive-scan"
   | "drive-download";
 
-export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type TaskStatus = "queued" | "running" | "paused" | "succeeded" | "failed" | "cancelled";
 export type ProgressMode = "indeterminate" | "determinate";
 export type OutputStream = "progress" | "stdout" | "stderr" | "system";
 
@@ -25,6 +25,8 @@ export type TaskRecord = {
   unitLabel?: string | null;
   etaSeconds?: number | null;
   cancellable: boolean;
+  pausable?: boolean;
+  resumable?: boolean;
   relatedItemId?: string | null;
   startedAtMillis: number;
   updatedAtMillis: number;
@@ -89,6 +91,8 @@ export function normalizeTaskRecord(task: TaskRecord): TaskRecord {
     || task.totalUnits != null;
   return {
     ...task,
+    pausable: task.pausable ?? task.kind === "processing",
+    resumable: task.resumable ?? ["processing", "model-install", "clip-preparation"].includes(task.kind),
     progressMode: task.progressMode === "determinate" && !hasMeasurement
       ? "indeterminate"
       : task.progressMode,

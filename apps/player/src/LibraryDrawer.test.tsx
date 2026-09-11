@@ -233,10 +233,56 @@ describe("Library source groups", () => {
       />,
     ));
 
-    const deletes = [...host.querySelectorAll<HTMLButtonElement>("button")]
+    const action = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Unfinished song"]')!;
+    act(() => action.click());
+    const deletes = [...host.querySelectorAll<HTMLButtonElement>("[role=menuitem]")]
       .filter((button) => button.textContent === "Remove from library");
     expect(deletes).toHaveLength(1);
     act(() => deletes[0].click());
     expect(onRemoveItem).toHaveBeenCalledWith(unfinishedLocalItem);
+  });
+
+  it("keeps row actions in one menu and swaps only the focused thumbnail to exact lyrics", () => {
+    const onAiProcess = vi.fn();
+    act(() => root.render(
+      <LibraryDrawer
+        open
+        items={[{ ...unfinishedLocalItem, status: "waiting-for-lyrics", canDelete: false }]}
+        catalog={{ ...catalog, items: [{ ...unfinishedLocalItem, status: "waiting-for-lyrics", canDelete: false }] }}
+        tasksByItem={new Map()}
+        selectedId="unfinished"
+        selectedLyrics="Exact lyric line\nSecond line"
+        currentId={undefined}
+        query=""
+        busy={false}
+        blocked={false}
+        onClose={() => undefined}
+        onRescan={() => undefined}
+        onQuery={() => undefined}
+        onSelect={() => undefined}
+        onPlay={() => undefined}
+        onAddFiles={() => undefined}
+        onAddFolder={() => undefined}
+        onDrive={() => undefined}
+        onLyricsFile={() => undefined}
+        onLyricsPaste={() => undefined}
+        onEditLyrics={() => undefined}
+        onRetry={() => undefined}
+        onShowContext={() => undefined}
+        onAiProcess={onAiProcess}
+        onOpenActivity={() => undefined}
+        onRemoveItem={() => undefined}
+        onRemoveSource={() => undefined}
+        onRecoveryExport={() => undefined}
+        onRecoveryRestore={() => undefined}
+      />,
+    ));
+    expect(host.querySelector(".lyric-thumbnail")?.textContent).toContain("Exact lyric line");
+    expect(host.querySelector(".thumbnail-fallback")).toBeNull();
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Unfinished song"]')!;
+    act(() => trigger.click());
+    expect(host.querySelector("[role=menu]")?.textContent).toContain("AI process track");
+    act(() => [...host.querySelectorAll<HTMLButtonElement>("[role=menuitem]")].find((button) => button.textContent?.includes("AI process track"))!.click());
+    expect(onAiProcess).toHaveBeenCalledWith(expect.objectContaining({ id: "unfinished" }));
   });
 });

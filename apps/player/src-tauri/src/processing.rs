@@ -61,6 +61,7 @@ struct PendingJob {
     transient_lyrics: Option<PathBuf>,
     job_id: Option<String>,
     cancel_requested: bool,
+    pause_requested: bool,
 }
 
 #[derive(Default)]
@@ -548,11 +549,10 @@ fn handle_event(app: &AppHandle, mut event: WorkerEvent, generation: u64) {
                 let pending = inner.pending.get_mut(&event.request_id)?;
                 let changed = event.job_id.is_some() && pending.job_id != event.job_id;
                 pending.job_id.clone_from(&event.job_id);
-                let job_id = pending
-                    .cancel_requested
+                let job_id = (pending.cancel_requested || pending.pause_requested)
                     .then(|| pending.job_id.clone())
                     .flatten();
-                if job_id.is_some() {
+                if job_id.is_some() && pending.cancel_requested {
                     pending.cancel_requested = false;
                 }
                 Some((job_id, changed.then(|| pending.job_id.clone()).flatten()))
@@ -734,16 +734,20 @@ fn handle_event(app: &AppHandle, mut event: WorkerEvent, generation: u64) {
         "lyricrail.worker.completed" | "lyricrail.worker.failed" => {
             let failure_message = display_error(event.error.clone());
             let cancelled = event.status.as_deref() == Some("cancelled");
-            let Some((transient, dispatch_failures)) =
+            let Some((transient, pause_requested, dispatch_failures)) =
                 with_current_worker(app, generation, |inner| {
                     if inner.active_request.as_deref() != Some(&event.request_id) {
                         return None;
                     }
                     let pending = inner.pending.remove(&event.request_id);
+                    let pause_requested = pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.pause_requested);
                     inner.active_request = None;
                     let failures = dispatch_next(app, inner).err().unwrap_or_default();
                     Some((
                         pending.and_then(|pending| pending.transient_lyrics),
+                        pause_requested,
                         failures,
                     ))
                 })
@@ -754,6 +758,7 @@ fn handle_event(app: &AppHandle, mut event: WorkerEvent, generation: u64) {
             if let Some(path) = transient {
                 let _ = fs::remove_file(path);
             }
+            let paused = pause_requested && cancelled;
             if let Ok(mut catalog) = app.state::<CatalogState>().0.lock() {
                 if let Some(job_id) = event.job_id.clone() {
                     catalog.set_processing_job_id(&event.request_id, Some(job_id));
@@ -766,7 +771,9 @@ fn handle_event(app: &AppHandle, mut event: WorkerEvent, generation: u64) {
                     processing_evidence(
                         existing,
                         event.job_id.clone(),
-                        if cancelled {
+                        if paused {
+                            ProcessingEvidenceStatus::Paused
+                        } else if cancelled {
                             ProcessingEvidenceStatus::Cancelled
                         } else {
                             ProcessingEvidenceStatus::Failed
@@ -778,23 +785,37 @@ fn handle_event(app: &AppHandle, mut event: WorkerEvent, generation: u64) {
                 );
                 catalog.set_progress(
                     &event.request_id,
-                    ItemStatus::Failed,
+                    if paused {
+                        ItemStatus::Queued
+                    } else {
+                        ItemStatus::Failed
+                    },
                     0.0,
-                    Some(failure_message.clone()),
+                    Some(if paused {
+                        "Paused in Activity; resume when ready".into()
+                    } else {
+                        failure_message.clone()
+                    }),
                 );
             }
             save_and_emit(app);
             tasks::finish(
                 app,
                 &event.request_id,
-                if cancelled {
+                if paused {
+                    TaskStatus::Paused
+                } else if cancelled {
                     TaskStatus::Cancelled
                 } else {
                     TaskStatus::Failed
                 },
-                Some(failure_message.clone()),
+                Some(if paused {
+                    "Processing paused; resume from Activity".into()
+                } else {
+                    failure_message.clone()
+                }),
             );
-            if !cancelled {
+            if !cancelled && !paused {
                 issues::report(
                     app,
                     issues::processing_failure_issue(
@@ -1727,6 +1748,7 @@ fn durable_task_record(item: &CatalogItem, now: u64) -> Result<TaskRecord, Strin
         ProcessingEvidenceStatus::Queued | ProcessingEvidenceStatus::Running
     );
     let status = match evidence.status {
+        ProcessingEvidenceStatus::Paused => TaskStatus::Paused,
         ProcessingEvidenceStatus::Cancelled => TaskStatus::Cancelled,
         ProcessingEvidenceStatus::Succeeded if item.status == ItemStatus::Ready => {
             TaskStatus::Succeeded
@@ -1756,6 +1778,8 @@ fn durable_task_record(item: &CatalogItem, now: u64) -> Result<TaskRecord, Strin
         unit_label: None,
         eta_seconds: None,
         cancellable: false,
+        pausable: true,
+        resumable: true,
         related_item_id: Some(item.id.clone()),
         started_at_millis: evidence.started_at_millis,
         updated_at_millis: if active {
@@ -1886,6 +1910,7 @@ pub fn enqueue_item(
             transient_lyrics,
             job_id: request.resume_job_id.clone(),
             cancel_requested: false,
+            pause_requested: false,
         },
     );
     inner.waiting.push_back(request);
@@ -2029,6 +2054,53 @@ pub fn commit_item_removal(
 
 pub fn cancel_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
     cancel_item_inner(app, item_id).map(|_| ())
+}
+
+pub fn pause_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
+    let job_id = {
+        let state = app.state::<ProcessingState>();
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "Processing state lock is poisoned".to_string())?;
+        if inner.active_request.as_deref() != Some(item_id) {
+            return Err(
+                "Only active processing can be paused safely; stop queued work instead".into(),
+            );
+        }
+        let pending = inner
+            .pending
+            .get_mut(item_id)
+            .ok_or_else(|| "This item is not processing".to_string())?;
+        pending.pause_requested = true;
+        pending.job_id.clone()
+    };
+    if let Some(job_id) = job_id {
+        request_cancel(app.clone(), job_id);
+    }
+    tasks::progress(
+        app,
+        item_id,
+        TaskProgress {
+            stage_key: Some("pausing".into()),
+            stage_title: Some("Pausing processing".into()),
+            message: Some("Stopping at the current safe processing boundary".into()),
+            ..Default::default()
+        },
+    );
+    if let Ok(mut catalog) = app.state::<CatalogState>().0.lock() {
+        let progress = catalog
+            .item(item_id)
+            .map_or(0.0, |item| item.progress_percent);
+        catalog.set_progress(
+            item_id,
+            ItemStatus::Processing,
+            progress,
+            Some("Pausing at a safe processing boundary".into()),
+        );
+    }
+    save_and_emit(app);
+    Ok(())
 }
 
 fn cancel_item_inner(app: &AppHandle, item_id: &str) -> Result<bool, String> {
@@ -2200,6 +2272,7 @@ mod tests {
             transient_lyrics,
             job_id: Some("job".into()),
             cancel_requested: false,
+            pause_requested: false,
         }
     }
 
@@ -2423,6 +2496,7 @@ mod tests {
                     transient_lyrics: Some(PathBuf::from(format!("{request_id}.txt"))),
                     job_id: None,
                     cancel_requested: false,
+                    pause_requested: false,
                 },
             );
         }
@@ -2498,6 +2572,7 @@ mod tests {
                     transient_lyrics: None,
                     job_id: None,
                     cancel_requested: false,
+                    pause_requested: false,
                 },
             );
         }
@@ -2582,6 +2657,7 @@ mod tests {
                     transient_lyrics: None,
                     job_id: None,
                     cancel_requested: false,
+                    pause_requested: false,
                 },
             );
         }
@@ -2837,6 +2913,7 @@ mod tests {
                 transient_lyrics: Some(PathBuf::from("transient.txt")),
                 job_id: None,
                 cancel_requested: false,
+                pause_requested: false,
             },
         );
         let terminal = drain_dispatch_failures(

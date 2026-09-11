@@ -34,11 +34,28 @@ pub enum TaskKind {
     DriveDownload,
 }
 
+fn kind_is_pausable(kind: &TaskKind) -> bool {
+    matches!(kind, TaskKind::Processing)
+}
+
+fn kind_is_resumable(kind: &TaskKind) -> bool {
+    matches!(
+        kind,
+        TaskKind::Processing
+            | TaskKind::ModelInstall
+            | TaskKind::ClipPreparation
+            | TaskKind::LocalScan
+            | TaskKind::DriveScan
+            | TaskKind::DriveDownload
+    )
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TaskStatus {
     Queued,
     Running,
+    Paused,
     Succeeded,
     Failed,
     Cancelled,
@@ -85,6 +102,8 @@ pub struct TaskRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eta_seconds: Option<u64>,
     pub cancellable: bool,
+    pub pausable: bool,
+    pub resumable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub related_item_id: Option<String>,
     pub started_at_millis: u64,
@@ -295,14 +314,16 @@ pub(crate) fn redact_diagnostic_text(value: &str) -> String {
 fn terminal(status: &TaskStatus) -> bool {
     matches!(
         status,
-        TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::Cancelled
+        TaskStatus::Paused | TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::Cancelled
     )
 }
 
 fn task_priority(status: &TaskStatus) -> u8 {
     match status {
         TaskStatus::Running => 3,
-        TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::Cancelled => 2,
+        TaskStatus::Paused | TaskStatus::Succeeded | TaskStatus::Failed | TaskStatus::Cancelled => {
+            2
+        }
         TaskStatus::Queued => 1,
     }
 }
@@ -554,6 +575,8 @@ pub fn start(app: &AppHandle, spec: TaskSpec) -> Result<(), String> {
         return Err("Task ID is invalid".into());
     }
     let id = spec.id.clone();
+    let pausable = kind_is_pausable(&spec.kind);
+    let resumable = kind_is_resumable(&spec.kind);
     {
         let state = app.state::<TaskStateStore>();
         let mut inner = state
@@ -604,6 +627,8 @@ pub fn start(app: &AppHandle, spec: TaskSpec) -> Result<(), String> {
                 finished_at_millis: None,
                 output_line_count,
                 output_truncated,
+                pausable,
+                resumable,
                 status_message: None,
             },
         );
@@ -630,6 +655,8 @@ pub fn restore(app: &AppHandle, mut record: TaskRecord) -> Result<(), String> {
         .map(|value| value.clamp(0.0, 100.0));
     record.eta_seconds = None;
     record.cancellable = record.cancellable && !terminal(&record.status);
+    record.pausable = record.pausable && !terminal(&record.status);
+    record.resumable = record.resumable || kind_is_resumable(&record.kind);
     record.updated_at_millis = record.updated_at_millis.max(record.started_at_millis);
     record.finished_at_millis = record
         .finished_at_millis
@@ -771,6 +798,7 @@ pub fn finish(app: &AppHandle, id: &str, status: TaskStatus, message: Option<Str
         });
         task.eta_seconds = None;
         task.cancellable = false;
+        task.pausable = false;
         task.status_message = message.map(|value| bounded(redact_diagnostic_text(&value), 240));
         task.updated_at_millis = now;
         task.finished_at_millis = Some(now);
@@ -1044,6 +1072,8 @@ mod tests {
             unit_label: None,
             eta_seconds: None,
             cancellable: false,
+            pausable: true,
+            resumable: true,
             related_item_id: None,
             started_at_millis: now_millis(),
             updated_at_millis: now_millis(),

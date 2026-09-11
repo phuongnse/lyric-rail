@@ -51,7 +51,7 @@ export function activeProcessingTasksByItem(tasks: TaskRecord[]): Map<string, Ta
   return new Map(tasks
     .filter((task) => task.kind === "processing"
       && task.relatedItemId
-      && (task.status === "queued" || task.status === "running"))
+      && (task.status === "queued" || task.status === "running" || task.status === "paused"))
     .map((task) => [task.relatedItemId!, task]));
 }
 

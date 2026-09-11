@@ -11,6 +11,11 @@ items and active processing never expose this action.
 
 ## One timeline for sections
 
+The editor keeps the manual timeline available as the explicit fallback. Its header also
+offers **AI process track**. That action starts the normal native/model processing path in
+the background and leaves the editor open; the inline status links to Activity for the
+full task view. It does not invent lyric text or silently change the current section.
+
 **Trim your song** opens with the whole file selected, so an uncut video can be
 edited and added to the queue immediately. To cut it, click the source timeline
 once for Start and again for End; the whole-file default is replaced by that pair.

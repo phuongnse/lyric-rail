@@ -41,6 +41,7 @@ pub enum ItemStatus {
 pub enum ProcessingEvidenceStatus {
     Queued,
     Running,
+    Paused,
     Succeeded,
     Failed,
     Cancelled,

@@ -143,13 +143,14 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   expect(menu.querySelector("[aria-labelledby=player-menu-application]")).not.toBeNull();
   expect(menu.textContent).toContain("Library");
   expect(menu.textContent).toContain("Activity");
-  expect(menu.textContent).toContain("About LyricRail");
+  expect(menu.textContent).toContain("Settings");
+  expect(menu.textContent).toContain("About");
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   expect(document.activeElement).toBe(menu.querySelector("button"));
   const menuItems = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-  expect(menuItems).toHaveLength(3);
-  menuItems[2]!.focus();
-  act(() => menuItems[2]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+  expect(menuItems).toHaveLength(4);
+  menuItems[menuItems.length - 1]!.focus();
+  act(() => menuItems[menuItems.length - 1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
   expect(document.activeElement).toBe(menuItems[0]);
   act(() => menuItems[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })));
   expect(document.activeElement).toBe(menuItems[1]);
@@ -167,9 +168,15 @@ it("replaces the main topbar with an in-player grouped application menu", async 
 
   await act(async () => trigger.click());
   const about = [...frame.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
-    .find((button) => button.textContent?.includes("About LyricRail"))!;
+    .find((button) => button.textContent?.includes("About"))!;
   await act(async () => about.click());
-  expect(host.querySelector("#about-title")).not.toBeNull();
+  const aboutDialog = host.querySelector<HTMLElement>(".about-dialog")!;
+  expect(aboutDialog.closest(".modal-layer")).not.toBeNull();
+  expect(aboutDialog.closest(".about-layer")).toBeNull();
+  expect(aboutDialog.querySelector("#about-title")?.textContent).toBe("LyricRail");
+  expect(aboutDialog.textContent).toContain("A karaoke player for local and cloud libraries.");
+  expect(aboutDialog.textContent).not.toContain("Private karaoke");
+  expect(aboutDialog.textContent).not.toContain("One focused local karaoke core");
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(host.querySelector("#about-title")).toBeNull();
   expect(document.activeElement).toBe(trigger);
@@ -191,11 +198,22 @@ it("removes the menu tooltip when the outside scrim is clicked", async () => {
   expect(trigger.getAttribute("aria-describedby")).toBeNull();
 });
 
+it("opens Settings from the application menu without losing the Player context", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("Settings"))!.click());
+  expect(host.querySelector("#settings-title")?.textContent).toBe("Settings");
+  expect(host.querySelector(".library-drawer.open")).not.toBeNull();
+  await act(async () => host.querySelector<HTMLButtonElement>(".settings-dialog .dialog-close")!.click());
+  expect(host.querySelector(".settings-dialog")).toBeNull();
+});
+
 it("does not recreate the tooltip when About or Activity restores focus", async () => {
   const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
   await act(async () => trigger.click());
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
-    .find((button) => button.textContent?.includes("About LyricRail"))?.click());
+    .find((button) => button.textContent?.includes("About"))?.click());
   await act(async () => host.querySelector<HTMLButtonElement>(".about-dialog .dialog-close")!.click());
   expect(host.querySelector(".about-dialog")).toBeNull();
   expect(document.activeElement).toBe(trigger);
@@ -239,7 +257,7 @@ it("clears tooltips when Escape closes menu, Activity or About", async () => {
 
   await act(async () => trigger.click());
   await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
-    .find((button) => button.textContent?.includes("About LyricRail"))?.click());
+    .find((button) => button.textContent?.includes("About"))?.click());
   expect(host.querySelector(".about-dialog")).not.toBeNull();
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(host.querySelector(".about-dialog")).toBeNull();
@@ -254,6 +272,8 @@ it("keeps a compact Open library shortcut in the idle Player", async () => {
 
   await act(async () => trigger.click());
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close application menu"]')!.click());
+  expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
+  await act(async () => host.querySelector<HTMLButtonElement>(".library-drawer .drawer-tool[aria-label='Close library']")!.click());
   expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(false);
   await act(async () => empty.querySelector<HTMLButtonElement>("button")!.click());
   expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
@@ -297,7 +317,7 @@ it("keeps Library and Activity badges synchronized with live state", async () =>
   expect(host.querySelector(".issues-toggle")?.className).toContain("has-issues");
 });
 
-it("keeps the menu, Library and Activity surfaces mutually exclusive", async () => {
+it("keeps Library context while the menu and Activity are inspected", async () => {
   const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
   const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
   const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
@@ -305,11 +325,11 @@ it("keeps the menu, Library and Activity surfaces mutually exclusive", async () 
 
   await act(async () => trigger.click());
   expect(host.querySelector("#player-application-menu")).not.toBeNull();
-  expect(library().classList.contains("open")).toBe(false);
+  expect(library().classList.contains("open")).toBe(true);
 
   await act(async () => host.querySelector<HTMLButtonElement>(".library-toggle")!.click());
   expect(host.querySelector("#player-application-menu")).toBeNull();
-  expect(library().classList.contains("open")).toBe(true);
+  expect(library().classList.contains("open")).toBe(false);
   expect(activity().classList.contains("open")).toBe(false);
 
   await act(async () => trigger.click());
@@ -320,7 +340,7 @@ it("keeps the menu, Library and Activity surfaces mutually exclusive", async () 
 
   await act(async () => trigger.click());
   expect(host.querySelector("#player-application-menu")).not.toBeNull();
-  expect(activity().classList.contains("open")).toBe(false);
+  expect(activity().classList.contains("open")).toBe(true);
 });
 
 it("reconnects Drive into Library without leaving Activity open", async () => {
@@ -366,7 +386,7 @@ it("opens Activity exclusively from an issue toast over Library", async () => {
   const toast = host.querySelector<HTMLButtonElement>(".issue-toast")!;
   expect(toast).not.toBeNull();
   await act(async () => toast.click());
-  expect(library().classList.contains("open")).toBe(false);
+  expect(library().classList.contains("open")).toBe(true);
   expect(activity().classList.contains("open")).toBe(true);
   expect(host.querySelector("#player-application-menu")).toBeNull();
 });
@@ -382,8 +402,9 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
   await act(async () => root.render(<App />));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
 
-  const libraryPlay = host.querySelector<HTMLButtonElement>('[aria-label="Play Song"]')!;
-  await act(async () => { libraryPlay.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
   const overlay = frame.querySelector<HTMLElement>('.media-control-overlay.player-controls')!;
   const control = (label: string) => overlay.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
@@ -462,7 +483,9 @@ it("keeps queue navigation disabled when no ready songs are available", async ()
   root = createRoot(host);
   await act(async () => root.render(<App />));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
-  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Play Song"]')!.click(); await Promise.resolve(); });
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Play")!.click());
+  await act(async () => { await Promise.resolve(); });
   const overlay = host.querySelector<HTMLElement>('.media-control-overlay.player-controls')!;
   expect(overlay.querySelector<HTMLButtonElement>('[aria-label="Previous ready song"]')!.disabled).toBe(true);
   expect(overlay.querySelector<HTMLButtonElement>('[aria-label="Next ready song"]')!.disabled).toBe(true);
@@ -477,10 +500,12 @@ it("contains the clip editor and restores its persistent Local launcher", async 
 });
 
 it("contains the lyric editor and restores the selected song's edit button", async () => {
-  const edit = host.querySelector<HTMLButtonElement>('[aria-label="Edit lyrics for Song"]')!;
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!.click());
+  const edit = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Edit lyrics")!;
+  const editTrigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
   await act(async () => { edit.focus(); edit.click(); });
   expect(document.activeElement?.tagName).toBe("TEXTAREA");
-  await checkDialog(edit);
+  await checkDialog(editTrigger);
 });
 
 it("requires confirmation before removing an unfinished Library item", async () => {
@@ -491,10 +516,14 @@ it("requires confirmation before removing an unfinished Library item", async () 
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
 
   const rowRemove = () => [...host.querySelectorAll<HTMLButtonElement>("button")]
-    .find((button) => button.textContent === "Remove from library" && !button.closest('[role="dialog"]'))!;
+    .find((button) => button.getAttribute("aria-label") === "Open actions for Unfinished")!;
   expect(rowRemove()).toBeTruthy();
-  vi.mocked(invoke).mockClear();
   await act(async () => rowRemove().click());
+  const removeAction = () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    .find((button) => button.textContent === "Remove from library")!;
+  expect(removeAction()).toBeTruthy();
+  vi.mocked(invoke).mockClear();
+  await act(async () => removeAction().click());
   const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
   expect(dialog.textContent).toContain("Remove “Unfinished”?");
   expect(dialog.textContent).toContain("original media file and its lyric sidecar stay unchanged");
@@ -503,6 +532,7 @@ it("requires confirmation before removing an unfinished Library item", async () 
   expect(host.querySelector('[role="dialog"]')).toBeNull();
 
   await act(async () => rowRemove().click());
+  await act(async () => removeAction().click());
   const confirm = [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
     .find((button) => button.textContent === "Remove from library")!;
   await act(async () => confirm.click());

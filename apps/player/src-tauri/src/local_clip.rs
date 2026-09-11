@@ -1189,9 +1189,7 @@ pub async fn prepare(
         validate_clip_id(id)?;
     }
     let cancelled = Arc::new(AtomicBool::new(false));
-    let preview_root = app
-        .path()
-        .app_cache_dir()
+    let preview_root = crate::preferences::cache_directory(&app)
         .map_err(|_| "Unable to resolve the local clip preview directory")?
         .join("clip-preview");
     let previous = {

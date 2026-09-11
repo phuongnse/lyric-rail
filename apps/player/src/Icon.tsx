@@ -30,6 +30,8 @@ export const ICON_NAMES = [
   "alert",
   "activity",
   "info",
+  "settings",
+  "sparkles",
   "menu",
   "more",
 ] as const;
@@ -74,6 +76,10 @@ function glyph(name: IconName): ReactNode {
       return <><circle cx="12" cy="12" r="8.5"/><path d="M6.5 12h3l1.6-3.4 2.2 7 1.5-3.6h2.7"/></>;
     case "info":
       return <><circle cx="12" cy="12" r="8.5"/><path d="M12 10.8v5.4"/><path d="M12 7.8h.01"/></>;
+    case "settings":
+      return <><path d="M12 8.3a3.7 3.7 0 1 0 0 7.4 3.7 3.7 0 0 0 0-7.4Z"/><path d="m19.4 13.5 1.2.9-1.5 2.6-1.4-.6a8 8 0 0 1-1.8 1l-.2 1.5h-3l-.2-1.5a8 8 0 0 1-1.8-1l-1.4.6-1.5-2.6 1.2-.9a7.6 7.6 0 0 1 0-2.1l-1.2-.9 1.5-2.6 1.4.6a8 8 0 0 1 1.8-1l.2-1.5h3l.2 1.5a8 8 0 0 1 1.8 1l1.4-.6 1.5 2.6-1.2.9a7.6 7.6 0 0 1 0 2.1Z"/></>;
+    case "sparkles":
+      return <><path d="m12 3 1.2 4.2L17 9l-3.8 1.8L12 15l-1.2-4.2L7 9l3.8-1.8L12 3Z"/><path d="m19 14 .7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7L19 14Z"/><path d="m5 14 .6 1.9L7.5 16l-1.9.6L5 18.5l-.6-1.9-1.9-.6 1.9-.6L5 14Z"/></>;
     case "menu":
       return <><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></>;
     case "more":

@@ -72,6 +72,18 @@ Large queues keep a bounded Activity snapshot/count, while every queued row can 
 its stable task directly by ID for View task and Cancel; no active task is rejected or hidden
 from its action path merely because it falls outside the snapshot window.
 
+Long-running actions keep their source context. Starting AI processing, model setup,
+preview preparation or a scan does not navigate away from the Library or editor: the
+source row/workbench shows compact progress and links to the same task in Activity.
+Activity can be opened, inspected and closed without losing that context. Processing
+can pause at a safe durable boundary and resume; other jobs expose only the controls
+their native owner can perform safely.
+
+The application menu includes Settings. Settings shows effective Library/import and
+cache locations, runtime integrity and the manifest-backed model catalog. Model downloads
+continue through the verified native installer and remain visible in Activity. Choosing a
+location never moves or deletes existing media or model files.
+
 The Clip Editor opens with the whole file selected, so an uncut song can be edited and
 queued immediately. Click the source timeline for Start, click again for End, then
 continue clicking pairs to create ordered sections. Select, trim exact Start/End
@@ -119,9 +131,11 @@ search source are authenticated and encrypted at rest.
 
 ## Thumbnails and lyric revisions
 
-The core creates a compact encrypted WebP thumbnail from a representative frame and
-overlays the exact first non-empty lyric line. Audio-only sources use a deterministic
-local background. Older packages without artwork receive a neutral fallback.
+The core creates a compact encrypted WebP thumbnail from a representative frame.
+Library rows show artwork (or a neutral visual fallback) by default; the one focused row
+temporarily replaces that preview with its exact lyrics for quick reading. Audio-only
+sources use a deterministic local background. Older packages without artwork receive a
+neutral fallback. The artwork asset itself is never changed.
 
 The source lyric file is never edited. A package stores the exact user-confirmed UTF-8
 text separately from derived timing. For a local typo correction with the same safe

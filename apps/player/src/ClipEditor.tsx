@@ -221,9 +221,9 @@ function SectionTimeline({ preview, sections, duration, selected, pendingStart, 
   </section>;
 }
 
-export default function ClipEditor({ preview, busy, containerRef, onClose, onCommit, onPlay, onCompatible, preparationError }: {
+export default function ClipEditor({ preview, busy, containerRef, onClose, onCommit, onPlay, onCompatible, onAiProcess, onOpenActivity, aiMessage, preparationError }: {
   preview: LocalClipPreview; busy: boolean; containerRef: RefObject<HTMLDivElement | null>;
-  onClose: () => void; onCommit: (sections: ClipSection[]) => Promise<void>; onPlay: () => void; onCompatible?: () => void; preparationError?: string;
+  onClose: () => void; onCommit: (sections: ClipSection[]) => Promise<void>; onPlay: () => void; onCompatible?: () => void; onAiProcess?: () => void; onOpenActivity?: () => void; aiMessage?: string; preparationError?: string;
 }) {
   const [sections, setSections] = useState<Section[]>([{ id: 1, startMillis: 0, endMillis: preview.durationMillis, title: preview.suggestedTitle }]);
   const [selected, setSelected] = useState<number | null>(1);
@@ -272,14 +272,14 @@ export default function ClipEditor({ preview, busy, containerRef, onClose, onCom
     setMode("select"); setValidDraft(true); setPosition(active?.startMillis ?? 0); setCommitError("");
   };
   return <><div inert={mode === "edit"} aria-hidden={mode === "edit" ? true : undefined} ref={containerRef} className="clip-dialog clip-workbench panel" tabIndex={-1}>
-    <header><div><h2 id="clip-editor-title">Trim your song</h2><p>{preview.suggestedTitle}</p></div><IconButton label="Close clip editor" icon="close" onClick={onClose} disabled={busy} /></header>
+    <header><div><h2 id="clip-editor-title">Trim your song</h2><p>{preview.suggestedTitle}</p></div><div className="clip-header-actions">{onAiProcess && <button className="ai-action" onClick={onAiProcess} disabled={busy}><span aria-hidden="true">✦</span> AI process track</button>}<IconButton label="Close clip editor" icon="close" onClick={onClose} disabled={busy} /></div></header>
       <SectionTimeline preview={preview} sections={sections} duration={duration} selected={selected} pendingStart={pendingStart} initialWholeSection={initialWholeSection} position={position} busy={busy || mode === "edit"}
         onSelect={selectSection} onOpenEditor={openEditor} onBoundary={updateBoundary} onPosition={setPosition} onPlay={onPlay} onDraftValidity={setValidDraft} onCompatible={onCompatible} onTimelinePoint={timelinePoint} onRemove={removeSection} />
       {timelineError && <p className="clip-error" role="alert">{timelineError}</p>}
       {preparationError && <p className="clip-error" role="alert">{preparationError}</p>}
       {commitError && <p className="clip-error" role="alert">{commitError}</p>}
       {!valid && !timelineError && <p className="clip-error" role="alert">Choose a Start and End on the timeline before adding songs.</p>}
-      <footer><span>Original file stays unchanged</span><button className="primary" disabled={busy || !valid || !validDraft || preview.requiresCompatibility} onClick={() => { setCommitError(""); void onCommit(sections.map(cleanSection)).catch(() => setCommitError("Songs could not be added. Your sections are kept here; try again or open Activity.")); }}>{busy ? "Adding songs…" : `Add ${sections.length} ${sections.length === 1 ? "song" : "songs"} to queue`}</button></footer>
+      <footer><span>Original file stays unchanged</span>{aiMessage && <span className="ai-status" role="status">{aiMessage}{onOpenActivity && <button onClick={onOpenActivity}>View Activity</button>}</span>}<button className="primary" disabled={busy || !valid || !validDraft || preview.requiresCompatibility} onClick={() => { setCommitError(""); void onCommit(sections.map(cleanSection)).catch(() => setCommitError("Songs could not be added. Your sections are kept here; try again or open Activity.")); }}>{busy ? "Adding songs…" : `Add ${sections.length} ${sections.length === 1 ? "song" : "songs"} to queue`}</button></footer>
   </div>{mode === "edit" && active && <VideoEditor key={selected} preview={preview} range={active} value={active} busy={busy} onClose={() => setMode("select")} onSave={saveSection} onPlay={onPlay} onCompatible={onCompatible} preparationError={preparationError} />}
   </>;
 }

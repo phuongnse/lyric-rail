@@ -8,6 +8,7 @@ mod local_clip;
 mod local_source;
 mod lyric_revision;
 mod model_installer;
+mod preferences;
 mod processing;
 mod range_cache;
 mod recovery_ui;
@@ -786,12 +787,7 @@ fn drive_cache(
 }
 
 fn drive_cache_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let root = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| error.to_string())?
-        .join("drive-ciphertext");
-    Ok(root)
+    Ok(preferences::cache_directory(app)?.join("drive-ciphertext"))
 }
 
 struct OfflineRangeTransport;
@@ -976,6 +972,20 @@ fn catalog_snapshot(state: tauri::State<'_, CatalogState>) -> Result<CatalogSnap
 }
 }
 
+#[tauri::command]
+fn preferences_snapshot(app: tauri::AppHandle) -> Result<preferences::PreferencesSnapshot, String> {
+    preferences::snapshot(&app)
+}
+
+#[tauri::command]
+fn save_preferences(
+    app: tauri::AppHandle,
+    library_path: Option<String>,
+    cache_path: Option<String>,
+) -> Result<preferences::PreferencesSnapshot, String> {
+    preferences::save(&app, library_path, cache_path)
+}
+
 ipc_command! {
 fn search_library(
     state: tauri::State<'_, CatalogState>,
@@ -1045,6 +1055,37 @@ fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<bool, String> {
         _ => Err("This task cannot be cancelled".into()),
     }
 }
+}
+
+#[tauri::command]
+fn pause_task(app: tauri::AppHandle, task_id: String) -> Result<bool, String> {
+    let task = tasks::task(&app, &task_id).ok_or_else(|| "Task no longer exists".to_string())?;
+    if !task.pausable || task.status != tasks::TaskStatus::Running {
+        return Err("This task cannot be paused at a safe boundary".into());
+    }
+    match task.kind {
+        tasks::TaskKind::Processing => {
+            let item_id = task.related_item_id.as_deref().unwrap_or(&task.id);
+            processing::pause_item(&app, item_id)?;
+            Ok(true)
+        }
+        _ => Err("This task cannot be paused at a safe boundary".into()),
+    }
+}
+
+#[tauri::command]
+fn resume_task(app: tauri::AppHandle, task_id: String) -> Result<CatalogSnapshot, String> {
+    let task = tasks::task(&app, &task_id).ok_or_else(|| "Task no longer exists".to_string())?;
+    if !task.resumable || task.status != tasks::TaskStatus::Paused {
+        return Err("This task cannot be resumed from its current state".into());
+    }
+    match task.kind {
+        tasks::TaskKind::Processing => {
+            let item_id = task.related_item_id.as_deref().unwrap_or(&task.id);
+            retry_processing_item(app, item_id.to_owned())
+        }
+        _ => Err("Resume this job from its source context".into()),
+    }
 }
 
 fn start_runtime_task(
@@ -2427,6 +2468,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             player_status,
             catalog_snapshot,
+            preferences_snapshot,
+            save_preferences,
             search_library,
             item_lyrics,
             system_issues,
@@ -2434,6 +2477,8 @@ pub fn run() {
             task_output_snapshot,
             task_record,
             cancel_task,
+            pause_task,
+            resume_task,
             dismiss_system_issue,
             install_processing_models,
             cancel_model_install,

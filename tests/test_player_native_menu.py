@@ -32,14 +32,14 @@ def test_each_visible_action_has_one_contextual_home() -> None:
     assert APP.count(">Cloud</button>") == 1
     assert APP.count(">Drive</button>") == 0
     assert APP.count("<span>Activity</span>") == 1
-    assert APP.count("<span>About LyricRail</span>") == 1
+    assert APP.count("<span>About</span>") == 1
     assert 'label="Open application menu"' in APP
     assert 'id="player-application-menu"' in APP
     assert 'role="menu"' in APP
     assert APP.count('role="menuitem"') >= 6
     assert "onKeyDown={moveApplicationMenuFocus}" in APP
     assert "useFocusContainment(menuOpen, menuRef" in APP
-    assert 'restoreRef={menuTriggerRef}' in APP
+    assert 'restoreRef={activityRestoreRef}' in APP
     assert 'className="player-menu-group"' in APP
     assert 'className="topbar"' not in APP
     assert 'className="source-actions"' in APP
