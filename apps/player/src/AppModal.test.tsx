@@ -175,6 +175,22 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   expect(document.activeElement).toBe(trigger);
 });
 
+it("removes the menu tooltip when the outside scrim is clicked", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  await act(async () => {
+    trigger.focus();
+    await Promise.resolve();
+  });
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+  expect(trigger.getAttribute("aria-describedby")).not.toBeNull();
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close application menu"]')!.click());
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+  expect(trigger.getAttribute("aria-describedby")).toBeNull();
+});
+
 it("keeps a compact Open library shortcut in the idle Player", async () => {
   const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
   const empty = host.querySelector<HTMLElement>(".empty-stage")!;

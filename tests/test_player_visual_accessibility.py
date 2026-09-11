@@ -63,6 +63,9 @@ def test_every_icon_only_button_gets_matching_aria_and_tooltip_help() -> None:
     assert "tooltipSide" not in ICONS
     assert "createPortal" in ICONS
     assert 'role="tooltip"' in ICONS
+    assert 'document.addEventListener("mousedown", dismissTooltip, true)' in ICONS
+    assert 'document.addEventListener("click", dismissTooltip, true)' in ICONS
+    assert "suppressTooltipOnFocus" in ICONS
     assert "onMouseEnter" in ICONS and "onFocus" in ICONS
     assert "useLayoutEffect" in ICONS
     assert "tooltipElement.getBoundingClientRect().width" in ICONS

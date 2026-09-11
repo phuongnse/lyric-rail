@@ -57,8 +57,13 @@ describe("LyricRail icon system", () => {
       await Promise.resolve();
     });
     expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
-    await act(async () => outside.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+    await act(async () => outside.click());
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    await act(async () => {
+      button.blur();
+      button.focus();
+      await Promise.resolve();
+    });
     await act(async () => {
       button.blur();
       button.focus();

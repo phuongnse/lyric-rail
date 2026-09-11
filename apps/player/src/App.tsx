@@ -586,6 +586,7 @@ function App() {
   const [taskOutputTruncated, setTaskOutputTruncated] = useState<Record<string, boolean>>({});
   const [nowMillis, setNowMillis] = useState(() => Date.now());
   const [menuOpen, setMenuOpen] = useState(false);
+  const [suppressMenuTooltip, setSuppressMenuTooltip] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [confirmIssue, setConfirmIssue] = useState<SystemIssue>();
   const [licenseConfirmed, setLicenseConfirmed] = useState(false);
@@ -647,6 +648,11 @@ function App() {
   );
   const systemModalOpen = Boolean(confirmIssue) || aboutOpen || Boolean(lyricDialog) || Boolean(deleteCandidate) || clipDialogOpen;
   const anyModalOpen = systemModalOpen || menuOpen;
+  const closeMenu = useCallback(() => {
+    if (!menuOpen) return;
+    setSuppressMenuTooltip(true);
+    setMenuOpen(false);
+  }, [menuOpen]);
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
   useFocusContainment(menuOpen, menuRef, undefined, menuTriggerRef);
   useFocusContainment(aboutOpen, aboutDialogRef, undefined, menuTriggerRef);
@@ -654,6 +660,11 @@ function App() {
   useFocusContainment(Boolean(deleteCandidate), deleteDialogRef, undefined, deleteRestoreRef);
   useFocusContainment(clipDialogOpen && !clipPreparing, clipDialogRef, undefined, clipRestoreRef);
   useFocusContainment(clipDialogOpen && clipPreparing, clipPreparingRef, undefined, clipRestoreRef);
+  useEffect(() => {
+    if (!suppressMenuTooltip) return;
+    const timeout = window.setTimeout(() => setSuppressMenuTooltip(false), 180);
+    return () => window.clearTimeout(timeout);
+  }, [suppressMenuTooltip]);
   const reportError = useCallback((
     scope: string,
     title: string,
@@ -844,14 +855,14 @@ function App() {
           setClipBusy(false);
           if (native && clipId) invoke("cancel_local_clip", { clipId }).catch(() => undefined);
         }
-        else if (menuOpen) setMenuOpen(false);
+        else if (menuOpen) closeMenu();
         else if (issuesOpen) setIssuesOpen(false);
         else setDrawerOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, confirmIssue, deleteCandidate, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native]);
+  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native]);
 
   useEffect(() => {
     if (issuesOpen) {
@@ -1012,7 +1023,7 @@ function App() {
   }, "library", "Folder could not be added");
 
   const showLibrary = () => {
-    setMenuOpen(false);
+    closeMenu();
     setIssuesOpen(false);
     setDrawerOpen(true);
   };
@@ -1027,23 +1038,24 @@ function App() {
   ]), "library", "Library sources could not be rescanned");
 
   const toggleMenu = () => {
+    if (menuOpen) { closeMenu(); return; }
     setDrawerOpen(false);
     setIssuesOpen(false);
-    setMenuOpen((value) => !value);
+    setMenuOpen(true);
   };
   const toggleLibrary = () => {
-    setMenuOpen(false);
+    closeMenu();
     setIssuesOpen(false);
     setDrawerOpen((value) => !value);
   };
   const toggleActivity = () => {
     setDrawerOpen(false);
-    setMenuOpen(false);
+    closeMenu();
     setIssuesOpen((value) => !value);
   };
   const showActivity = () => {
     setDrawerOpen(false);
-    setMenuOpen(false);
+    closeMenu();
     setIssuesOpen(true);
   };
   const moveApplicationMenuFocus = (event: React.KeyboardEvent<HTMLElement>) => {
@@ -1446,12 +1458,14 @@ function App() {
                   aria-haspopup="menu"
                   aria-expanded={menuOpen}
                   aria-controls="player-application-menu"
+                  suppressTooltipOnFocus={suppressMenuTooltip}
+                  onFocus={() => setSuppressMenuTooltip(false)}
                   onClick={toggleMenu}
                 />
               </div>
               {menuOpen && (
                 <>
-                  <button className="player-menu-scrim" aria-label="Close application menu" onClick={() => setMenuOpen(false)} />
+                  <button className="player-menu-scrim" aria-label="Close application menu" onClick={closeMenu} />
                   <div ref={menuRef} id="player-application-menu" className="player-menu panel" role="menu" aria-label="Application actions" onKeyDown={moveApplicationMenuFocus}>
                     <div className="player-menu-group" role="group" aria-labelledby="player-menu-workspace">
                       <span id="player-menu-workspace" className="player-menu-label">Workspace</span>
@@ -1464,7 +1478,7 @@ function App() {
                     </div>
                     <div className="player-menu-group" role="group" aria-labelledby="player-menu-application">
                       <span id="player-menu-application" className="player-menu-label">Application</span>
-                      <button role="menuitem" className="player-menu-action" onClick={() => { setMenuOpen(false); setAboutOpen(true); }}>
+                      <button role="menuitem" className="player-menu-action" onClick={() => { closeMenu(); setAboutOpen(true); }}>
                         <Icon name="info" size={18} /><span>About LyricRail</span>
                       </button>
                     </div>

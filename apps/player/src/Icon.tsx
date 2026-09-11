@@ -115,6 +115,7 @@ type IconButtonProps = Omit<
   label: string;
   icon: IconName;
   iconSize?: number;
+  suppressTooltipOnFocus?: boolean;
 };
 
 export function placeTooltip(
@@ -149,6 +150,7 @@ export function IconButton({
   label,
   icon,
   iconSize = 20,
+  suppressTooltipOnFocus = false,
   className = "",
   type = "button",
   onClick,
@@ -202,10 +204,14 @@ export function IconButton({
     window.addEventListener("resize", prepareTooltip);
     window.addEventListener("scroll", updateTooltip, true);
     document.addEventListener("pointerdown", dismissTooltip, true);
+    document.addEventListener("mousedown", dismissTooltip, true);
+    document.addEventListener("click", dismissTooltip, true);
     return () => {
       window.removeEventListener("resize", prepareTooltip);
       window.removeEventListener("scroll", updateTooltip, true);
       document.removeEventListener("pointerdown", dismissTooltip, true);
+      document.removeEventListener("mousedown", dismissTooltip, true);
+      document.removeEventListener("click", dismissTooltip, true);
     };
   }, [prepareTooltip, tooltip, updateTooltip]);
 
@@ -221,7 +227,10 @@ export function IconButton({
         onClick={(event) => { setTooltip(undefined); onClick?.(event); }}
         onMouseEnter={(event) => { prepareTooltip(); onMouseEnter?.(event); }}
         onMouseLeave={(event) => { setTooltip(undefined); onMouseLeave?.(event); }}
-        onFocus={(event) => { prepareTooltip(); onFocus?.(event); }}
+        onFocus={(event) => {
+          if (!suppressTooltipOnFocus) prepareTooltip();
+          onFocus?.(event);
+        }}
         onBlur={(event) => { setTooltip(undefined); onBlur?.(event); }}
       >
         <Icon name={icon} size={iconSize} />
