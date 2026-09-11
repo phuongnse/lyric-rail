@@ -1,0 +1,14 @@
+name: Publication metadata
+
+on:
+  pull_request:
+    types: [edited, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  policy-verification:
+    name: Policy verification
+    uses: phuongnse/renovate-ops/.github/workflows/policy-verification.yml@38d952b8c94604df10fadc48b6c830a144ea1137
