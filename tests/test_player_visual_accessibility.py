@@ -12,6 +12,7 @@ MEDIA_CONTROLS = (ROOT / "apps" / "player" / "src" / "mediaControls.css").read_t
     encoding="utf-8"
 )
 ICONS = (ROOT / "apps" / "player" / "src" / "Icon.tsx").read_text(encoding="utf-8")
+FOCUS = (ROOT / "apps" / "player" / "src" / "focus.ts").read_text(encoding="utf-8")
 LYRICS = (ROOT / "apps" / "player" / "src" / "LyricOverlay.tsx").read_text(
     encoding="utf-8"
 )
@@ -65,7 +66,11 @@ def test_every_icon_only_button_gets_matching_aria_and_tooltip_help() -> None:
     assert 'role="tooltip"' in ICONS
     assert 'document.addEventListener("mousedown", dismissTooltip, true)' in ICONS
     assert 'document.addEventListener("click", dismissTooltip, true)' in ICONS
-    assert "suppressTooltipOnFocus" in ICONS
+    assert 'document.addEventListener("keydown", dismissTooltip, true)' in ICONS
+    assert "consumeFocusRestoration" in ICONS
+    assert "const focusRestorationTargets = new WeakSet<HTMLElement>()" in FOCUS
+    assert "markFocusRestoration(restore)" in FOCUS
+    assert "focusRestorationTargets.delete(target)" in FOCUS
     assert "onMouseEnter" in ICONS and "onFocus" in ICONS
     assert "useLayoutEffect" in ICONS
     assert "tooltipElement.getBoundingClientRect().width" in ICONS

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ICON_NAMES, Icon, IconButton, placeTooltip } from "./Icon";
+import { markFocusRestoration } from "./focus";
 
 describe("LyricRail icon system", () => {
   let host: HTMLDivElement;
@@ -73,6 +74,48 @@ describe("LyricRail icon system", () => {
     await act(async () => button.click());
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
     expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("keeps sibling tooltips and one-shot restoration markers independent", async () => {
+    await act(async () => root.render(
+      <>
+        <IconButton icon="menu" label="First menu" />
+        <IconButton icon="info" label="Second info" />
+      </>,
+    ));
+    const [first, second] = [...host.querySelectorAll<HTMLButtonElement>(".icon-control")];
+
+    markFocusRestoration(first!);
+    await act(async () => {
+      first!.focus();
+      await Promise.resolve();
+    });
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+
+    await act(async () => {
+      first!.blur();
+      second!.focus();
+      await Promise.resolve();
+    });
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("Second info");
+    await act(async () => second!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("Second info");
+
+    await act(async () => {
+      second!.blur();
+      first!.focus();
+      await Promise.resolve();
+    });
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("First menu");
+
+    first!.blur();
+    markFocusRestoration(first!);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    await act(async () => {
+      first!.focus();
+      await Promise.resolve();
+    });
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("First menu");
   });
 
   it("applies the shared top and viewport-edge placement matrix", () => {

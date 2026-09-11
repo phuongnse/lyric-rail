@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { consumeFocusRestoration } from "./focus";
 
 export const ICON_NAMES = [
   "refresh",
@@ -115,7 +116,6 @@ type IconButtonProps = Omit<
   label: string;
   icon: IconName;
   iconSize?: number;
-  suppressTooltipOnFocus?: boolean;
 };
 
 export function placeTooltip(
@@ -150,7 +150,6 @@ export function IconButton({
   label,
   icon,
   iconSize = 20,
-  suppressTooltipOnFocus = false,
   className = "",
   type = "button",
   onClick,
@@ -206,12 +205,14 @@ export function IconButton({
     document.addEventListener("pointerdown", dismissTooltip, true);
     document.addEventListener("mousedown", dismissTooltip, true);
     document.addEventListener("click", dismissTooltip, true);
+    document.addEventListener("keydown", dismissTooltip, true);
     return () => {
       window.removeEventListener("resize", prepareTooltip);
       window.removeEventListener("scroll", updateTooltip, true);
       document.removeEventListener("pointerdown", dismissTooltip, true);
       document.removeEventListener("mousedown", dismissTooltip, true);
       document.removeEventListener("click", dismissTooltip, true);
+      document.removeEventListener("keydown", dismissTooltip, true);
     };
   }, [prepareTooltip, tooltip, updateTooltip]);
 
@@ -228,7 +229,7 @@ export function IconButton({
         onMouseEnter={(event) => { prepareTooltip(); onMouseEnter?.(event); }}
         onMouseLeave={(event) => { setTooltip(undefined); onMouseLeave?.(event); }}
         onFocus={(event) => {
-          if (!suppressTooltipOnFocus) prepareTooltip();
+          if (!consumeFocusRestoration(buttonRef.current!)) prepareTooltip();
           onFocus?.(event);
         }}
         onBlur={(event) => { setTooltip(undefined); onBlur?.(event); }}

@@ -191,6 +191,62 @@ it("removes the menu tooltip when the outside scrim is clicked", async () => {
   expect(trigger.getAttribute("aria-describedby")).toBeNull();
 });
 
+it("does not recreate the tooltip when About or Activity restores focus", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("About LyricRail"))?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".about-dialog .dialog-close")!.click());
+  expect(host.querySelector(".about-dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-header .icon-control")!.click());
+  expect(host.querySelector(".issues-drawer.open")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+});
+
+it("clears tooltips when Escape closes menu, Activity or About", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  const expectCleared = () => {
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    expect(trigger.getAttribute("aria-describedby")).toBeNull();
+  };
+
+  await act(async () => trigger.click());
+  await act(async () => {
+    trigger.focus();
+    await Promise.resolve();
+  });
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+  expectCleared();
+
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  await act(async () => {
+    trigger.focus();
+    await Promise.resolve();
+  });
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector(".issues-drawer.open")).toBeNull();
+  expectCleared();
+
+  await act(async () => trigger.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("About LyricRail"))?.click());
+  expect(host.querySelector(".about-dialog")).not.toBeNull();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector(".about-dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expectCleared();
+});
+
 it("keeps a compact Open library shortcut in the idle Player", async () => {
   const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
   const empty = host.querySelector<HTMLElement>(".empty-stage")!;

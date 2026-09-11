@@ -586,7 +586,6 @@ function App() {
   const [taskOutputTruncated, setTaskOutputTruncated] = useState<Record<string, boolean>>({});
   const [nowMillis, setNowMillis] = useState(() => Date.now());
   const [menuOpen, setMenuOpen] = useState(false);
-  const [suppressMenuTooltip, setSuppressMenuTooltip] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [confirmIssue, setConfirmIssue] = useState<SystemIssue>();
   const [licenseConfirmed, setLicenseConfirmed] = useState(false);
@@ -648,11 +647,7 @@ function App() {
   );
   const systemModalOpen = Boolean(confirmIssue) || aboutOpen || Boolean(lyricDialog) || Boolean(deleteCandidate) || clipDialogOpen;
   const anyModalOpen = systemModalOpen || menuOpen;
-  const closeMenu = useCallback(() => {
-    if (!menuOpen) return;
-    setSuppressMenuTooltip(true);
-    setMenuOpen(false);
-  }, [menuOpen]);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
   useFocusContainment(menuOpen, menuRef, undefined, menuTriggerRef);
   useFocusContainment(aboutOpen, aboutDialogRef, undefined, menuTriggerRef);
@@ -660,11 +655,6 @@ function App() {
   useFocusContainment(Boolean(deleteCandidate), deleteDialogRef, undefined, deleteRestoreRef);
   useFocusContainment(clipDialogOpen && !clipPreparing, clipDialogRef, undefined, clipRestoreRef);
   useFocusContainment(clipDialogOpen && clipPreparing, clipPreparingRef, undefined, clipRestoreRef);
-  useEffect(() => {
-    if (!suppressMenuTooltip) return;
-    const timeout = window.setTimeout(() => setSuppressMenuTooltip(false), 180);
-    return () => window.clearTimeout(timeout);
-  }, [suppressMenuTooltip]);
   const reportError = useCallback((
     scope: string,
     title: string,
@@ -1458,8 +1448,6 @@ function App() {
                   aria-haspopup="menu"
                   aria-expanded={menuOpen}
                   aria-controls="player-application-menu"
-                  suppressTooltipOnFocus={suppressMenuTooltip}
-                  onFocus={() => setSuppressMenuTooltip(false)}
                   onClick={toggleMenu}
                 />
               </div>
