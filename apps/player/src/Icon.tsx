@@ -23,6 +23,7 @@ export const ICON_NAMES = [
   "volume-muted",
   "fullscreen",
   "fullscreen-exit",
+  "music",
   "edit",
   "plus",
   "alert",
@@ -58,6 +59,8 @@ function glyph(name: IconName): ReactNode {
       return <><path d="M9 4H4v5"/><path d="M15 4h5v5"/><path d="M20 15v5h-5"/><path d="M4 15v5h5"/></>;
     case "fullscreen-exit":
       return <><path d="M9 4v5H4"/><path d="M15 4v5h5"/><path d="M20 15h-5v5"/><path d="M4 15h5v5"/></>;
+    case "music":
+      return <><path d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18.5" r="2.5" fill="currentColor" stroke="none"/><circle cx="16.5" cy="16.5" r="2.5" fill="currentColor" stroke="none"/></>;
     case "edit":
       return <><path d="m14.5 5.5 4 4"/><path d="M5 19l1-4L16.5 4.5a1.4 1.4 0 0 1 2 0l1 1a1.4 1.4 0 0 1 0 2L9 18l-4 1Z"/><path d="M13.5 7.5l4 4"/></>;
     case "plus":

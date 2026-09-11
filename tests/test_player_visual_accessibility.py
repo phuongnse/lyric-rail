@@ -8,6 +8,9 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "apps" / "player" / "src" / "App.tsx").read_text(encoding="utf-8")
 CSS = (ROOT / "apps" / "player" / "src" / "App.css").read_text(encoding="utf-8")
+MEDIA_CONTROLS = (ROOT / "apps" / "player" / "src" / "mediaControls.css").read_text(
+    encoding="utf-8"
+)
 ICONS = (ROOT / "apps" / "player" / "src" / "Icon.tsx").read_text(encoding="utf-8")
 LYRICS = (ROOT / "apps" / "player" / "src" / "LyricOverlay.tsx").read_text(
     encoding="utf-8"
@@ -24,11 +27,13 @@ def test_player_uses_repository_owned_svg_icons_without_placeholder_glyphs() -> 
         token in APP for token in ("⌕", "↻", "▶", "Ⅱ", "‹", "›", "⤨", "⛶", "✎", "＋")
     )
     assert not any("icon" in dependency.lower() for dependency in package["dependencies"])
-    right_controls = APP.split('<div className="right-controls">', 1)[1].split(
-        "</div>", 1
+    assert 'className="media-control-overlay player-controls"' in APP
+    assert 'icon={volume <= 0.001 ? "volume-muted" : "volume-high"}' in APP
+    assert 'icon="music"' in APP
+    player_controls = APP.split('className="media-control-overlay player-controls"', 1)[1].split(
+        "</section>", 1
     )[0]
-    assert 'icon={volume <= 0.001 ? "volume-muted" : "volume-high"}' in right_controls
-    assert 'icon="search"' not in right_controls
+    assert 'icon="search"' not in player_controls
 
 
 def test_every_icon_only_button_gets_matching_aria_and_tooltip_help() -> None:
@@ -84,9 +89,13 @@ def test_type_and_transport_scale_stays_above_the_compact_floor() -> None:
         int(value) for value in re.findall(r"font-size:\s*(\d+)px", CSS)
     ]
     assert explicit_sizes and min(explicit_sizes) >= 14
-    assert ".main-controls .transport-play { width: 56px; height: 56px" in CSS
-    assert ".main-controls .transport-skip { width: 44px; height: 44px" in CSS
-    assert 'iconSize={24}' in APP
+    assert ".media-control-overlay .media-control-primary {" in MEDIA_CONTROLS
+    assert "opacity: 0" in MEDIA_CONTROLS
+    assert "pointer-events: none" in MEDIA_CONTROLS
+    assert ".media-player-frame:focus-within .media-control-overlay" in MEDIA_CONTROLS
+    assert ".player-controls .media-control-row > .media-control-group:first-child { grid-column: 1 / -1; }" in MEDIA_CONTROLS
+    assert ".player-controls .media-control-row > .media-control-group.end { grid-column: 2; justify-content: flex-end; }" in MEDIA_CONTROLS
+    assert 'iconSize={22}' in APP
     assert 'iconSize={21}' in APP
     assert 'aria-label="Volume"' in APP
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 
 import { adjacentFrame, clipView, frameAt, formatTimecodeMillis, parseTimecodeMillis } from "./clipSelection";
 export { frameAt } from "./clipSelection";
 import "./clipEditor.css";
+import "./mediaControls.css";
 import { useClipPlayback, type LocalClipPreview } from "./useClipPlayback";
 export type { LocalClipPreview } from "./useClipPlayback";
 import { VideoEditor } from "./VideoEditor";
@@ -37,7 +38,8 @@ function SectionTimeline({ preview, sections, duration, selected, pendingStart, 
   const active = sections.find((section) => section.id === selected);
   const playbackRange = review && active ? { startMillis: active.startMillis, endMillis: active.endMillis } : null;
   const { audio, video, position: previewPosition, playing, error, mediaError, fail, frameData, boundaries,
-    seek, stop, play, ended } = useClipPlayback(preview, playbackRange, false, busy, onPlay);
+    seek, stop, play, ended, volume, setVolume } = useClipPlayback(preview, playbackRange, false, busy, onPlay);
+  const lastAudibleVolume = useRef(.8);
   const span = view.end - view.start;
   const percent = (time: number) => `${Math.max(0, Math.min(100, (time - view.start) / span * 100))}%`;
   const seekPreview = (time: number, pause = true) => {
@@ -119,6 +121,10 @@ function SectionTimeline({ preview, sections, duration, selected, pendingStart, 
     const frame = boundaries.indexOf(next);
     seekPreview(frame >= 0 ? frameData.frames[frame] + .01 : next);
   };
+  const togglePreviewMute = () => {
+    if (volume > .001) { lastAudibleVolume.current = volume; setVolume(0); }
+    else setVolume(lastAudibleVolume.current);
+  };
   const timelinePoint = (time: number) => {
     const value = snapToFrame(time);
     const created = onTimelinePoint(value);
@@ -135,20 +141,23 @@ function SectionTimeline({ preview, sections, duration, selected, pendingStart, 
     if (event.key.toLowerCase() === "i" || event.key.toLowerCase() === "o") { event.preventDefault(); if (active) changeBoundary(event.key.toLowerCase() === "i" ? "startMillis" : "endMillis", previewPosition, true, true); }
     if (event.code === "Space") { event.preventDefault(); if (playing) stop(); else void play(); }
   }}>
-    <div className="clip-screen clip-picker-screen" tabIndex={0} aria-label="Source preview. Click the timeline to set Start then End. Arrow keys step frames. Space plays or pauses.">
+    <div className="clip-screen media-player-frame clip-picker-screen" tabIndex={0} aria-label="Source preview. Click the timeline to set Start then End. Arrow keys step frames. Space plays or pauses.">
       {preview.videoUrl && !preview.requiresCompatibility
         ? <video ref={video} aria-label="Section video preview" src={preview.videoUrl} muted playsInline preload="metadata"
             style={{ visibility: previewPosition < Math.floor(preview.videoOffsetMillis ?? 0) ? "hidden" : "visible" }} onError={() => fail("Video preview is unavailable.")} />
         : <div className="clip-audio-art"><span aria-hidden="true">♫</span><strong>{preview.requiresCompatibility ? "Compatible preview needed" : preview.suggestedTitle}</strong></div>}
       <audio ref={audio} aria-label="Section preview audio clock" src={preview.requiresCompatibility ? undefined : preview.previewUrl}
         preload="metadata" onEnded={ended} onError={() => fail("Audio preview is unavailable.")} />
-    </div>
-    <div className="clip-picker-transport">
-      <button className="clip-picker-play" onClick={() => { setPendingNudge(undefined); if (playing) stop(); else void play(); }} disabled={busy || preview.requiresCompatibility}>{playing ? "Pause" : "Play"}</button>
-      <IconButton className="icon-control" label="Previous frame" icon="previous" onClick={() => step(-1)} disabled={busy || (Boolean(preview.videoUrl) && (!frameData.ready || !boundaries.length))} />
-      <IconButton className="icon-control" label="Next frame" icon="next" onClick={() => step(1)} disabled={busy || (Boolean(preview.videoUrl) && (!frameData.ready || !boundaries.length))} />
-      <output>{formatTimecodeMillis(previewPosition)} <span>/ {formatTimecodeMillis(duration)}</span></output>
-      {active && <span className="clip-selected-note">Section {index} selected</span>}
+      <div className="media-control-overlay clip-picker-controls" aria-label="Preview controls">
+        <div className="media-control-group clip-picker-control-row">
+          <IconButton className="media-control-primary" label={playing ? "Pause" : "Play"} icon={playing ? "pause" : "play"} iconSize={20} onClick={() => { setPendingNudge(undefined); if (playing) stop(); else void play(); }} disabled={busy || preview.requiresCompatibility} />
+          <IconButton label="Previous frame" icon="previous" onClick={() => step(-1)} disabled={busy || (Boolean(preview.videoUrl) && (!frameData.ready || !boundaries.length))} />
+          <IconButton label="Next frame" icon="next" onClick={() => step(1)} disabled={busy || (Boolean(preview.videoUrl) && (!frameData.ready || !boundaries.length))} />
+          <IconButton icon={volume <= .001 ? "volume-muted" : "volume-high"} label={volume <= .001 ? "Unmute preview" : "Mute preview"} onClick={togglePreviewMute} disabled={busy || preview.requiresCompatibility} />
+          <output className="media-control-time" aria-label="Preview time">{formatTimecodeMillis(previewPosition)} <span>/ {formatTimecodeMillis(duration)}</span></output>
+          {active && <span className="clip-selected-note">Section {index} selected</span>}
+        </div>
+      </div>
     </div>
     <div className="clip-section-ruler" aria-hidden="true"><span>{formatTimecodeMillis(view.start)}</span><span>{formatTimecodeMillis((view.start + view.end) / 2)}</span><span>{formatTimecodeMillis(view.end)}</span></div>
     <div className="clip-timeline-scroll">

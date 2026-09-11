@@ -52,6 +52,25 @@ const clickTimeline = async (x: number) => {
 
 const createSection = async (start: number, end: number) => { await clickTimeline(start); await clickTimeline(end); };
 
+it("keeps preview controls inside the 16:9 frame as icon-only actions", async () => {
+  const screen = host.querySelector<HTMLElement>(".clip-picker-screen")!;
+  const overlay = screen.querySelector<HTMLElement>(".clip-picker-controls")!;
+  expect(screen.classList.contains("media-player-frame")).toBe(true);
+  expect(host.querySelector(".clip-picker-transport")).toBeNull();
+  expect([...overlay.querySelectorAll("button")].every((control) => !control.textContent?.trim())).toBe(true);
+  expect(button("Play")).toBeDefined();
+  expect(button("Previous frame")).toBeDefined();
+  expect(button("Next frame")).toBeDefined();
+  expect(button("Mute preview")).toBeDefined();
+  expect(overlay.querySelector('[aria-label="Preview time"]')?.textContent).toContain("00:00:00.000");
+
+  await act(async () => button("Mute preview")!.click());
+  expect(host.querySelector("audio")!.volume).toBe(0);
+  expect(button("Unmute preview")).toBeDefined();
+  await act(async () => button("Unmute preview")!.click());
+  expect(host.querySelector("audio")!.volume).toBeCloseTo(.8, 5);
+});
+
 it("keeps the whole video ready and creates ordered sections from timeline click pairs", async () => {
   expect(host.querySelectorAll(".clip-section-block")).toHaveLength(1);
   expect(button("Add 1 song to queue")?.hasAttribute("disabled")).toBe(false);

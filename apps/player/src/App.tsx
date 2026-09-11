@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import lyricRailMark from "../../../assets/brand/lyricrail-mark.svg";
 import "./App.css";
+import "./mediaControls.css";
 import { Icon, IconButton } from "./Icon";
 import {
   LyricOverlay,
@@ -1438,7 +1439,7 @@ function App() {
       </header>
 
       <section className="player-area" inert={systemModalOpen}>
-        <div className="video-stage panel" ref={stageRef}>
+        <div className="video-stage media-player-frame panel" ref={stageRef}>
           {opened ? (
             <>
               <video ref={videoRef} src={opened.media.videoUrl} muted playsInline onError={() => reportError("playback", "Video playback failed", "Video range could not be authenticated or downloaded.")} onCanPlay={() => { if (pendingPlay) { setPendingPlay(false); playElements().catch((reason) => reportError("playback", "Playback could not start", reason)); } }} />
@@ -1454,7 +1455,6 @@ function App() {
               />
               <div className="stage-shade" />
               <LyricOverlay events={events} time={time} presentation={opened.presentation} mediaRef={audioRef} playing={playing} />
-              <IconButton className="center-play" icon={playing ? "pause" : "play"} iconSize={28} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} />
             </>
           ) : (
             <div className="empty-stage">
@@ -1467,45 +1467,53 @@ function App() {
               <button onClick={() => setDrawerOpen(true)}>Open library</button>
             </div>
           )}
-        </div>
-
-        <div className="transport panel">
-          <div className="timeline">
-            <span>{formatTime(time)}</span>
-            <input
-              type="range"
-              min="0"
-              max={Math.max(0, duration)}
-              step="0.01"
-              value={Math.min(time, duration || 0)}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (audioRef.current) audioRef.current.currentTime = next;
-                if (videoRef.current) videoRef.current.currentTime = next;
-                setTime(next);
-              }}
-              style={{ "--progress": `${duration ? (time / duration) * 100 : 0}%` } as React.CSSProperties}
-            />
-            <span>{formatTime(duration)}</span>
-          </div>
-          <div className="control-row">
-            <div className="track-toggle">
-              {(opened?.media.audioTracks ?? []).map((track) => (
-                <button className={track.id === trackId ? "active" : ""} onClick={() => switchTrack(track)} key={track.id}>{track.name}</button>
-              ))}
+          {opened && <div className="media-control-overlay player-controls" aria-label="Player controls">
+            <div className="media-control-progress">
+              <output>{formatTime(time)}</output>
+              <input
+                type="range"
+                min="0"
+                max={Math.max(0, duration)}
+                step="0.01"
+                value={Math.min(time, duration || 0)}
+                aria-label="Seek song"
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  if (audioRef.current) audioRef.current.currentTime = next;
+                  if (videoRef.current) videoRef.current.currentTime = next;
+                  setTime(next);
+                }}
+                style={{ "--progress": `${duration ? (time / duration) * 100 : 0}%` } as React.CSSProperties}
+              />
+              <output>{formatTime(duration)}</output>
             </div>
-            <div className="main-controls">
-              <IconButton className="transport-skip" icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
-              <IconButton className="transport-play" icon={playing ? "pause" : "play"} iconSize={24} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
-              <IconButton className="transport-skip" icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
+            <div className="media-control-row">
+              <div className="media-control-group">
+                {(opened?.media.audioTracks ?? []).map((track) => (
+                  <IconButton
+                    className={`track-control ${track.id === trackId ? "active" : ""}`}
+                    icon="music"
+                    iconSize={18}
+                    label={`Use ${track.name} audio`}
+                    aria-pressed={track.id === trackId}
+                    onClick={() => switchTrack(track)}
+                    key={track.id}
+                  />
+                ))}
+              </div>
+              <div className="media-control-group player-transport">
+                <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
+                <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
+                <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
+              </div>
+              <div className="media-control-group end">
+                <IconButton className={shuffle ? "active" : ""} icon="shuffle" label={shuffle ? "Disable shuffle" : "Enable shuffle"} aria-pressed={shuffle} onClick={toggleShuffle} />
+                <IconButton icon={volume <= 0.001 ? "volume-muted" : "volume-high"} label={volume <= 0.001 ? "Unmute volume" : "Mute volume"} onClick={toggleMute} />
+                <input className="volume-range" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => applyVolume(Number(event.target.value))} style={{ "--progress": `${volume * 100}%` } as React.CSSProperties} />
+                <IconButton icon={fullscreen ? "fullscreen-exit" : "fullscreen"} label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => { void toggleFullscreen(); }} />
+              </div>
             </div>
-            <div className="right-controls">
-              <IconButton className={shuffle ? "active" : ""} icon="shuffle" label={shuffle ? "Disable shuffle" : "Enable shuffle"} aria-pressed={shuffle} onClick={toggleShuffle} />
-              <IconButton icon={volume <= 0.001 ? "volume-muted" : "volume-high"} label={volume <= 0.001 ? "Unmute volume" : "Mute volume"} onClick={toggleMute} />
-              <input aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => applyVolume(Number(event.target.value))} style={{ "--progress": `${volume * 100}%` } as React.CSSProperties} />
-              <IconButton icon={fullscreen ? "fullscreen-exit" : "fullscreen"} label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => { void toggleFullscreen(); }} />
-            </div>
-          </div>
+          </div>}
         </div>
       </section>
 
