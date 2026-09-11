@@ -1494,6 +1494,7 @@ function App() {
               <LyricOverlay events={events} time={time} presentation={opened.presentation} mediaRef={audioRef} playing={playing} />
             </>
           ) : null}
+          {!opened && <div className="empty-stage"><button onClick={showLibrary}>Open library</button></div>}
           {opened && <div className="media-control-overlay player-controls" aria-label="Player controls">
             <div className="media-control-progress">
               <output>{formatTime(time)}</output>

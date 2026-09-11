@@ -32,8 +32,11 @@ def test_player_uses_repository_owned_svg_icons_without_placeholder_glyphs() -> 
     assert 'className="player-context"' in APP
     assert 'icon="menu"' in APP
     assert 'id="player-application-menu"' in APP
-    assert 'className="empty-stage"' not in APP
-    assert ".empty-stage" not in CSS
+    assert 'className="empty-stage"' in APP
+    assert ".empty-stage" in CSS
+    assert "Your karaoke, one click away." not in APP
+    assert "Ready to sing" not in APP
+    assert ".empty-stage button" in CSS
     assert ".player-context { position: absolute; z-index: 24; inset: 14px 14px auto; display: flex; width: calc(100% - 28px); align-items: flex-start;" in CSS
     assert ".now-playing { min-width: 0; flex: 1;" in CSS
     assert ".video-stage { position: relative; min-height: 0; overflow: hidden; border: 0; border-radius: 0;" in CSS

@@ -79,7 +79,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .now-playing strong { color: white; font-size: 15px; }
 .now-playing span { margin-top: 3px; color: var(--muted); font-size: var(--font-small); }
 
-.source-actions button, .drawer-footer details button {
+.source-actions button, .empty-stage button, .drawer-footer details button {
   min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -118,6 +118,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .video-stage video { width: 100%; height: 100%; object-fit: contain; background: #030407; }
 .video-stage audio { display: none; }
 .stage-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.22), transparent 30%, transparent 62%, rgba(0,0,0,.66)); }
+.empty-stage { display: grid; height: 100%; place-items: center; }
+.empty-stage button { padding: 0 18px; border-color: rgba(255,204,77,.4); color: #151108; background: var(--accent); }
 
 .lyric-overlay { position: absolute; z-index: 2; inset: 0; display: block; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
 .lyric-canvas { position: relative; width: 100%; height: 100%; overflow: hidden; font-family: "Be Vietnam Pro", sans-serif; font-weight: 500; }

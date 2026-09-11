@@ -198,11 +198,14 @@ export function IconButton({
 
   useEffect(() => {
     if (!tooltip || typeof window === "undefined") return;
+    const dismissTooltip = () => setTooltip(undefined);
     window.addEventListener("resize", prepareTooltip);
     window.addEventListener("scroll", updateTooltip, true);
+    document.addEventListener("pointerdown", dismissTooltip, true);
     return () => {
       window.removeEventListener("resize", prepareTooltip);
       window.removeEventListener("scroll", updateTooltip, true);
+      document.removeEventListener("pointerdown", dismissTooltip, true);
     };
   }, [prepareTooltip, tooltip, updateTooltip]);
 

@@ -133,7 +133,7 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
   const context = frame.querySelector<HTMLElement>(".player-context")!;
   expect(context.querySelector(".now-playing")).toBeNull();
-  expect(frame.querySelector(".empty-stage")).toBeNull();
+  expect(frame.querySelector(".empty-stage")?.textContent).toBe("Open library");
   const trigger = context.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
 
   await act(async () => trigger.click());
@@ -173,6 +173,18 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(host.querySelector("#about-title")).toBeNull();
   expect(document.activeElement).toBe(trigger);
+});
+
+it("keeps a compact Open library shortcut in the idle Player", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  const empty = host.querySelector<HTMLElement>(".empty-stage")!;
+  expect(empty.querySelector("h1, p, .empty-brand-lockup")).toBeNull();
+
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close application menu"]')!.click());
+  expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(false);
+  await act(async () => empty.querySelector<HTMLButtonElement>("button")!.click());
+  expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
 });
 
 it("keeps Library and Activity badges synchronized with live state", async () => {
