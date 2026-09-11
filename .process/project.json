@@ -4,7 +4,10 @@
       "frontend",
       "python",
       "rust"
-    ]
+    ],
+    "publication": {
+      "required": true
+    }
   },
   "profiles": {
     "frontend": [
