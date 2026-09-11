@@ -102,6 +102,29 @@ it("keeps audio-only and unavailable-video fallbacks explicit", async () => {
   expect(host.querySelector(".clip-error")?.textContent).toContain("Video preview is unavailable.");
 });
 
+it("disables unavailable frame actions and recovers after retry", async () => {
+  let attempts = 0;
+  vi.mocked(invoke).mockImplementation((command) => command === "local_clip_frames"
+    ? (++attempts === 1
+      ? Promise.reject(new Error("Synthetic frame lookup failure"))
+      : Promise.resolve({ frameTimesMillis: [0, 100, 500, 1000], fromMillis: 0, toMillis: 1000 }))
+    : Promise.resolve(true));
+  const direct = { ...source(), clipId: "frame-recovery", direct: true, frameTimesMillis: undefined };
+  await act(async () => root.render(<ClipEditor key="frame-recovery" preview={direct} busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 220)); });
+  expect(host.textContent).toContain("Frame details could not load");
+  expect(button("Previous frame")?.hasAttribute("disabled")).toBe(true);
+  expect(button("Next frame")?.hasAttribute("disabled")).toBe(true);
+
+  await act(async () => button("Retry frame details")!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 220)); });
+  const screen = host.querySelector<HTMLElement>(".clip-picker-screen")!;
+  expect(screen.classList.contains("media-player-frame")).toBe(true);
+  expect(host.textContent).not.toContain("Frame details could not load");
+  expect(button("Previous frame")?.hasAttribute("disabled")).toBe(false);
+  expect(button("Next frame")?.hasAttribute("disabled")).toBe(false);
+});
+
 it("keeps the whole video ready and creates ordered sections from timeline click pairs", async () => {
   expect(host.querySelectorAll(".clip-section-block")).toHaveLength(1);
   expect(button("Add 1 song to queue")?.hasAttribute("disabled")).toBe(false);
