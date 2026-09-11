@@ -73,7 +73,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-lyricrail = ["diagnostic_contract.json"]
+lyricrail = ["diagnostic_contract.json", "model_cache_policy.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

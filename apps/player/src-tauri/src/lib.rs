@@ -1364,8 +1364,9 @@ fn commit_local_clip(
 
 ipc_command! {
 fn commit_local_sections(app: tauri::AppHandle, clip_id: String, sections: Vec<local_clip::ClipSection>) -> Result<CatalogSnapshot, String> {
-    let snapshot = local_clip::commit_sections(&app, &clip_id, &sections)?;
+    let (snapshot, admitted_items) = local_clip::commit_sections(&app, &clip_id, &sections)?;
     let _ = app.emit("library-changed", snapshot.clone());
+    enqueue_ready(&app, admitted_items);
     Ok(snapshot)
 }
 }
@@ -1415,6 +1416,74 @@ fn remove_library_source(
         catalog.remove_source(&source_id);
     }
     save_and_emit(&app)
+}
+}
+
+ipc_command! {
+fn remove_unprocessed_local_item(
+    app: tauri::AppHandle,
+    item_id: String,
+) -> Result<CatalogSnapshot, String> {
+    let reservation = match processing::prepare_item_removal(&app, &item_id)? {
+        processing::RemovalPreparation::Active => {
+            return Err(
+                "This item is already processing; stop processing before removing it from the Library".into(),
+            );
+        }
+        processing::RemovalPreparation::Ready(reservation) => *reservation,
+    };
+    let state = app.state::<CatalogState>();
+    let mut catalog = match state.0.lock() {
+        Ok(catalog) => catalog,
+        Err(_) => {
+            let error = "Catalog lock is poisoned".to_string();
+            if let Err(rollback) = processing::rollback_item_removal(&app, reservation) {
+                return Err(format!("{error}; unable to restore queued processing: {rollback}"));
+            }
+            return Err(error);
+        }
+    };
+    let previous_catalog = catalog.clone();
+    let candidate = catalog.remove_unprocessed_item_candidate(&item_id, |candidate| candidate.save());
+    let candidate = match candidate {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            drop(catalog);
+            if let Err(rollback) = processing::rollback_item_removal(&app, reservation) {
+                return Err(format!("{error}; unable to restore queued processing: {rollback}"));
+            }
+            return Err(error);
+        }
+    };
+    *catalog = candidate;
+    let snapshot = catalog.snapshot();
+    drop(catalog);
+    if let Err(error) = processing::commit_item_removal(&app, &reservation) {
+        let restore = (|| {
+            let state = app.state::<CatalogState>();
+            let mut catalog = state
+                .0
+                .lock()
+                .map_err(|_| "Catalog lock is poisoned".to_string())?;
+            *catalog = previous_catalog;
+            catalog.save()?;
+            Ok::<CatalogSnapshot, String>(catalog.snapshot())
+        })();
+        if let Ok(snapshot) = &restore {
+            let _ = app.emit("library-changed", snapshot.clone());
+        }
+        let rollback = processing::rollback_item_removal(&app, reservation);
+        return Err(match (restore, rollback) {
+            (Ok(_), Ok(())) => format!("{error}; the unfinished item was restored"),
+            (Err(restore), Ok(())) => format!("{error}; unable to restore the Library catalog: {restore}"),
+            (Ok(_), Err(rollback)) => format!("{error}; unable to restore processing state: {rollback}"),
+            (Err(restore), Err(rollback)) => format!(
+                "{error}; unable to restore the Library catalog: {restore}; unable to restore processing state: {rollback}"
+            ),
+        });
+    }
+    let _ = app.emit("library-changed", snapshot.clone());
+    Ok(snapshot)
 }
 }
 
@@ -2380,6 +2449,7 @@ pub fn run() {
             rename_waiting_section,
             rescan_local_sources,
             remove_library_source,
+            remove_unprocessed_local_item,
             provide_lyrics_file,
             provide_lyrics_text,
             retry_processing_item,

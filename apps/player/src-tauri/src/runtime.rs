@@ -1,14 +1,79 @@
 use std::{
-    env, fs,
-    path::{Path, PathBuf},
+    env,
+    ffi::OsStr,
+    fs,
+    path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
 
 use lrail_format::runtime::{
     RUNTIME_MANIFEST_NAME, RUNTIME_SIGNATURE_NAME, runtime_platform, verify_runtime_pack,
 };
+use serde::Deserialize;
 
 const RUNTIME_PUBLIC_KEY: &str = include_str!("../../../../config/runtime-signing-public.key");
+const MODEL_CACHE_POLICY_JSON: &str =
+    include_str!("../../../../src/lyricrail/model_cache_policy.json");
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelCachePathGrammar {
+    separator: String,
+    reject_empty_segments: bool,
+    reject_dot_segments: bool,
+    reject_parent_segments: bool,
+    reject_backslash: bool,
+    reject_colon: bool,
+    reject_nul: bool,
+    reject_absolute: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelCacheCanonicalContainment {
+    snapshot_directory_under_cache: bool,
+    target_regular_file_under_cache: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelCachePolicy {
+    schema_version: u32,
+    cache_root: String,
+    path_grammar: ModelCachePathGrammar,
+    canonical_containment: ModelCacheCanonicalContainment,
+}
+
+fn model_cache_policy() -> Result<&'static ModelCachePolicy, String> {
+    static POLICY: OnceLock<Result<ModelCachePolicy, String>> = OnceLock::new();
+    POLICY
+        .get_or_init(|| {
+            let policy = serde_json::from_str::<ModelCachePolicy>(MODEL_CACHE_POLICY_JSON)
+                .map_err(|error| format!("Model cache policy is invalid: {error}"))?;
+            let grammar = &policy.path_grammar;
+            let containment = &policy.canonical_containment;
+            if policy.schema_version != 1
+                || policy.cache_root != "models/huggingface"
+                || grammar.separator != "/"
+                || !grammar.reject_empty_segments
+                || !grammar.reject_dot_segments
+                || !grammar.reject_parent_segments
+                || !grammar.reject_backslash
+                || !grammar.reject_colon
+                || !grammar.reject_nul
+                || !grammar.reject_absolute
+                || !containment.snapshot_directory_under_cache
+                || !containment.target_regular_file_under_cache
+            {
+                return Err(
+                    "Model cache policy does not match the supported containment grammar".into(),
+                );
+            }
+            Ok(policy)
+        })
+        .as_ref()
+        .map_err(|error| error.clone())
+}
 
 #[derive(Debug, Clone)]
 pub struct ResolvedRuntime {
@@ -138,7 +203,101 @@ fn contained_regular_file(root: &Path, path: &Path) -> bool {
         .is_ok_and(|path| path.starts_with(&root) && path.is_file())
 }
 
-fn model_files_present_at(root: &Path) -> Result<(), String> {
+fn contained_snapshot_file(
+    policy: &ModelCachePolicy,
+    cache_root: &Path,
+    snapshot: &Path,
+    path: &Path,
+) -> bool {
+    if !policy.canonical_containment.snapshot_directory_under_cache
+        || !policy.canonical_containment.target_regular_file_under_cache
+    {
+        return false;
+    }
+    if !path.starts_with(snapshot) {
+        return false;
+    }
+    let Ok(cache_root) = cache_root.canonicalize() else {
+        return false;
+    };
+    let Ok(snapshot) = snapshot.canonicalize() else {
+        return false;
+    };
+    if !snapshot.starts_with(&cache_root) || !snapshot.is_dir() {
+        return false;
+    }
+    path.canonicalize()
+        .is_ok_and(|path| path.starts_with(&cache_root) && path.is_file())
+}
+
+fn snapshot_entry(policy: &ModelCachePolicy, snapshot: &Path, filename: &str) -> Option<PathBuf> {
+    let grammar = &policy.path_grammar;
+    if (grammar.reject_empty_segments && filename.is_empty())
+        || (grammar.reject_backslash && filename.contains('\\'))
+        || (grammar.reject_colon && filename.contains(':'))
+        || (grammar.reject_nul && filename.contains('\0'))
+        || (grammar.reject_empty_segments && filename.split('/').any(str::is_empty))
+        || (grammar.reject_dot_segments && filename.split('/').any(|part| part == "."))
+        || (grammar.reject_parent_segments && filename.split('/').any(|part| part == ".."))
+    {
+        return None;
+    }
+    let relative = Path::new(filename);
+    if (grammar.reject_absolute && relative.is_absolute())
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
+                    | Component::CurDir
+            )
+        })
+    {
+        return None;
+    }
+    Some(snapshot.join(relative))
+}
+
+fn tool_filename(name: &str) -> PathBuf {
+    PathBuf::from(if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    })
+}
+
+fn resolve_tool_path(
+    environment_value: Option<&OsStr>,
+    path_value: Option<&OsStr>,
+    name: &str,
+) -> Option<PathBuf> {
+    environment_value
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            path_value.and_then(|value| {
+                env::split_paths(value).find_map(|directory| {
+                    let candidate = directory.join(tool_filename(name));
+                    candidate.is_file().then_some(candidate)
+                })
+            })
+        })
+}
+
+pub(crate) fn development_tool_path(name: &str, environment_variable: &str) -> Option<PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    resolve_tool_path(
+        env::var_os(environment_variable).as_deref(),
+        env::var_os("PATH").as_deref(),
+        name,
+    )
+}
+
+pub(crate) fn model_files_present_at(root: &Path) -> Result<(), String> {
+    let policy = model_cache_policy()?;
     let manifest_path = root.join("config/model-manifest.json");
     let encoded =
         fs::read(&manifest_path).map_err(|_| "Pinned model manifest is unavailable".to_string())?;
@@ -174,6 +333,7 @@ fn model_files_present_at(root: &Path) -> Result<(), String> {
                 }
             }
             Some("huggingface-snapshot") => {
+                let huggingface_root = root.join(&policy.cache_root);
                 let Some(repository) = model.get("repository").and_then(serde_json::Value::as_str)
                 else {
                     missing += 1;
@@ -184,8 +344,7 @@ fn model_files_present_at(root: &Path) -> Result<(), String> {
                     missing += 1;
                     continue;
                 };
-                let snapshot = root
-                    .join("models/huggingface")
+                let snapshot = huggingface_root
                     .join(format!("models--{}", repository.replace('/', "--")))
                     .join("snapshots")
                     .join(revision);
@@ -197,7 +356,9 @@ fn model_files_present_at(root: &Path) -> Result<(), String> {
                         .iter()
                         .filter_map(serde_json::Value::as_str)
                         .filter(|filename| {
-                            !contained_regular_file(&snapshot, &snapshot.join(filename))
+                            !snapshot_entry(policy, &snapshot, filename).is_some_and(|path| {
+                                contained_snapshot_file(policy, &huggingface_root, &snapshot, &path)
+                            })
                         })
                         .count();
                 }
@@ -220,8 +381,24 @@ pub fn model_files_present_hint() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::model_files_present_at;
-    use std::fs;
+    use super::{model_cache_policy, model_files_present_at, resolve_tool_path, snapshot_entry};
+    use std::{env, fs, path::Path};
+
+    fn link_file(target: &Path, link: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link).is_ok()
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (target, link);
+            false
+        }
+    }
 
     #[test]
     fn model_presence_hint_finds_audio_and_snapshot_files_without_hashing() {
@@ -250,5 +427,110 @@ mod tests {
         fs::create_dir_all(&snapshot).unwrap();
         fs::write(snapshot.join("config.json"), b"{}").unwrap();
         assert!(model_files_present_at(root.path()).is_ok());
+    }
+
+    #[test]
+    fn model_cache_grammar_uses_the_shared_policy_fixtures() {
+        let policy_json: serde_json::Value =
+            serde_json::from_str(super::MODEL_CACHE_POLICY_JSON).unwrap();
+        let policy = model_cache_policy().unwrap();
+        let snapshot = Path::new("snapshot");
+        for case in policy_json["lexicalCases"].as_array().unwrap() {
+            let filename = case["filename"].as_str().unwrap();
+            assert_eq!(
+                snapshot_entry(policy, snapshot, filename).is_some(),
+                case["accepted"].as_bool().unwrap(),
+                "{}",
+                case["name"].as_str().unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn model_presence_hint_accepts_huggingface_snapshot_links_into_cache() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("config")).unwrap();
+        fs::write(
+            root.path().join("config/model-manifest.json"),
+            r#"{"models":{"aligner":{"type":"huggingface-snapshot","repository":"owner/model","revision":"abc","requiredFiles":["config.json","pytorch_model.bin"]}}}"#,
+        )
+        .unwrap();
+        let cache_root = root.path().join("models/huggingface");
+        let blobs = cache_root.join("models--owner--model/blobs");
+        let snapshot = cache_root.join("models--owner--model/snapshots/abc");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::create_dir_all(&snapshot).unwrap();
+        let config_blob = blobs.join("config-blob");
+        let weights_blob = blobs.join("weights-blob");
+        fs::write(&config_blob, b"{}").unwrap();
+        fs::write(&weights_blob, b"weights").unwrap();
+        assert!(
+            link_file(&config_blob, &snapshot.join("config.json")),
+            "the supported test platform must create a file symlink"
+        );
+        assert!(
+            link_file(&weights_blob, &snapshot.join("pytorch_model.bin")),
+            "the supported test platform must create a file symlink"
+        );
+        assert!(model_files_present_at(root.path()).is_ok());
+    }
+
+    #[test]
+    fn model_presence_hint_rejects_snapshot_links_outside_cache() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("config")).unwrap();
+        fs::write(
+            root.path().join("config/model-manifest.json"),
+            r#"{"models":{"aligner":{"type":"huggingface-snapshot","repository":"owner/model","revision":"abc","requiredFiles":["config.json"]}}}"#,
+        )
+        .unwrap();
+        let cache_root = root.path().join("models/huggingface");
+        let snapshot = cache_root.join("models--owner--model/snapshots/abc");
+        let outside = root.path().join("outside.json");
+        fs::create_dir_all(&snapshot).unwrap();
+        fs::write(&outside, b"{}").unwrap();
+        assert!(
+            link_file(&outside, &snapshot.join("config.json")),
+            "the supported test platform must create a file symlink"
+        );
+        assert!(model_files_present_at(root.path()).is_err());
+        fs::remove_file(snapshot.join("config.json")).unwrap();
+        let missing_target = cache_root.join("models--owner--model/blobs/missing-blob");
+        assert!(
+            link_file(&missing_target, &snapshot.join("config.json")),
+            "the supported test platform must create a dangling file symlink"
+        );
+        assert!(model_files_present_at(root.path()).is_err());
+    }
+
+    #[test]
+    fn development_tool_lookup_prefers_environment_then_path() {
+        let root = tempfile::tempdir().unwrap();
+        let explicit = root
+            .path()
+            .join("explicit")
+            .join(super::tool_filename("ffmpeg"));
+        let path_candidate = root
+            .path()
+            .join("path")
+            .join(super::tool_filename("ffmpeg"));
+        fs::create_dir_all(explicit.parent().unwrap()).unwrap();
+        fs::create_dir_all(path_candidate.parent().unwrap()).unwrap();
+        fs::write(&explicit, b"explicit").unwrap();
+        fs::write(&path_candidate, b"path").unwrap();
+        let joined = env::join_paths([path_candidate.parent().unwrap()]).unwrap();
+        assert_eq!(
+            resolve_tool_path(
+                Some(explicit.as_os_str()),
+                Some(joined.as_os_str()),
+                "ffmpeg",
+            ),
+            Some(explicit.clone()),
+        );
+        assert_eq!(
+            resolve_tool_path(None, Some(joined.as_os_str()), "ffmpeg"),
+            Some(path_candidate),
+        );
+        assert_eq!(resolve_tool_path(None, None, "ffmpeg"), None);
     }
 }

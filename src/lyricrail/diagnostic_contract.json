@@ -33,8 +33,58 @@
     "Download and verify pinned models",
     "Cancelling model installation",
     "Start local processing job",
-    "Cancelling processing"
+    "Cancelling processing",
+    "Select a supported regular local media file, not a link",
+    "Selected file is not supported regular local media",
+    "Selected media must be between 1 byte and 8 GiB",
+    "Selected media is already locked for modification",
+    "Unable to inspect selected media identity",
+    "Unable to inspect selected media change metadata",
+    "Selected media changed after its preview was prepared",
+    "Selected media path changed after its preview was prepared",
+    "Selected media was replaced or modified after preview",
+    "Clip preview requires the verified ffprobe tool",
+    "Clip preview requires the verified ffmpeg tool",
+    "Clip preview ffprobe tool is unavailable",
+    "Clip preview ffmpeg tool is unavailable",
+    "Clip preview media tools are unavailable",
+    "Clip preparation cancelled",
+    "Portable clip preview exceeded its output bound",
+    "Native media probe failed",
+    "Selected file is not valid bounded audio/video media",
+    "Selected media duration is outside the 24-hour bound",
+    "Selected media contains no audio stream for karaoke preview",
+    "Video exceeds the 8K preview bound",
+    "Video start timestamp is outside the timeline",
+    "Unable to create a portable local audio preview"
   ],
+  "safeMetadata": {
+    "issueTitles": [
+      "Processing setup required",
+      "Processing runtime repair required",
+      "Drive unavailable",
+      "Runtime invalid",
+      "Remote invalid",
+      "Files could not be added",
+      "Task output could not be replayed",
+      "Diagnostics could not be copied",
+      "Task output could not be copied"
+    ],
+    "issueSummaries": [
+      "Pinned karaoke models are not installed. Install and verify them, then LyricRail will retry affected songs automatically.",
+      "The verified runtime is incomplete. Reinstall a signed LyricRail runtime pack before retrying this song.",
+      "Playback still works, but the local processing runtime failed integrity or startup validation. Repair or reinstall the verified runtime before retrying affected songs.",
+      "Open the linked task output to see the failing stage, correct the cause, then retry this song.",
+      "The selected media could not be prepared.",
+      "The action could not be completed. Review the details, then try again."
+    ],
+    "taskTitles": [
+      "Prepare local clip",
+      "Install processing models",
+      "Scan selected local files",
+      "Scan local folder"
+    ]
+  },
   "progressKind": "lyricrail.model-install.progress",
   "phases": {
     "checking": "Checking pinned models",

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { LocalClipPreview } from "./ClipEditor";
+import type { LocalClipPreview } from "./useClipPlayback";
 
 export type FrameWindow = { frameTimesMillis: number[]; fromMillis: number; toMillis: number };
 

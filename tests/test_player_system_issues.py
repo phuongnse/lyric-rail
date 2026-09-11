@@ -27,6 +27,10 @@ RUNTIME = (ROOT / "apps/player/src-tauri/src/runtime.rs").read_text(encoding="ut
 PYTHON = (ROOT / "src/lyricrail/__main__.py").read_text(encoding="utf-8")
 MODEL_SCRIPT = (ROOT / "scripts/install_models.py").read_text(encoding="utf-8")
 APP = (ROOT / "apps/player/src/App.tsx").read_text(encoding="utf-8")
+DIAGNOSTICS = (ROOT / "apps/player/src/diagnostics.ts").read_text(encoding="utf-8")
+DIAGNOSTIC_CONTRACT = (ROOT / "src/lyricrail/diagnostic_contract.json").read_text(encoding="utf-8")
+MODEL_PROVENANCE = (ROOT / "src/lyricrail/model_provenance.py").read_text(encoding="utf-8")
+MODEL_CACHE_POLICY = (ROOT / "src/lyricrail/model_cache_policy.json").read_text(encoding="utf-8")
 CSS = (ROOT / "apps/player/src/App.css").read_text(encoding="utf-8")
 FOCUS = (ROOT / "apps/player/src/focus.ts").read_text(encoding="utf-8")
 FOCUS_TEST = (ROOT / "apps/player/src/focus.test.tsx").read_text(encoding="utf-8")
@@ -397,3 +401,29 @@ def test_activity_center_has_one_styled_accessible_resolution_flow() -> None:
     assert "shouldShowIssueNotice(anyModalOpen, issuesOpen" in APP
     assert ".issue-toast { position: fixed; z-index: 35" in CSS
     assert ".modal-layer { position: fixed; z-index: 40" in CSS
+
+
+def test_copy_diagnostics_exports_bounded_context_from_the_shared_policy() -> None:
+    for text in (
+        "formatIssueDiagnostics",
+        "selectDiagnosticTasks",
+        "MAX_ISSUE_DIAGNOSTIC_TASKS",
+        "MAX_ISSUE_DIAGNOSTIC_OUTPUT_LINES",
+        "MAX_ISSUE_DIAGNOSTIC_BYTES",
+        "task_output_snapshot",
+        "projectDiagnostic",
+    ):
+        assert text in DIAGNOSTICS or text in APP
+    assert "Clip preview requires the verified ffprobe tool" in DIAGNOSTIC_CONTRACT
+    assert "Detail: ${safeDiagnostic(issue.detail)}" in DIAGNOSTICS
+    assert "relatedTaskId?: string" in (ROOT / "apps/player/src/issues.ts").read_text(encoding="utf-8")
+    assert "relatedTaskId);" in APP
+
+
+def test_model_cache_containment_consumers_use_one_policy_and_fixture_set() -> None:
+    assert "MODEL_CACHE_POLICY_JSON" in RUNTIME
+    assert "_MODEL_CACHE_POLICY = _load_model_cache_policy()" in MODEL_PROVENANCE
+    assert '"lexicalCases"' in MODEL_CACHE_POLICY
+    assert "model_cache_policy.json" in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "model_cache_grammar_uses_the_shared_policy_fixtures" in RUNTIME
+    assert "test_model_cache_grammar_uses_the_shared_policy_fixtures" in (ROOT / "tests/test_model_provenance.py").read_text(encoding="utf-8")

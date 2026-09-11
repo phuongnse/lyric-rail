@@ -17,6 +17,17 @@ const item: LibraryItem = {
   sources: ["Disk", "Drive"],
 };
 
+const unfinishedLocalItem: LibraryItem = {
+  ...item,
+  id: "unfinished",
+  title: "Unfinished song",
+  status: "queued",
+  progressPercent: 0,
+  canProcess: true,
+  sources: ["Disk"],
+  canDelete: true,
+};
+
 const catalog: CatalogSnapshot = {
   items: [item],
   localSources: [{ id: "local", path: "C:\\Music" }],
@@ -105,6 +116,7 @@ describe("Library source groups", () => {
         onEditLyrics={() => undefined}
         onRetry={() => undefined}
         onShowContext={() => undefined}
+        onRemoveItem={() => undefined}
         onRemoveSource={() => undefined}
         onRecoveryExport={() => undefined}
         onRecoveryRestore={() => undefined}
@@ -168,6 +180,7 @@ describe("Library source groups", () => {
         onEditLyrics={() => undefined}
         onRetry={() => undefined}
         onShowContext={() => undefined}
+        onRemoveItem={() => undefined}
         onRemoveSource={() => undefined}
         onRecoveryExport={() => undefined}
         onRecoveryRestore={() => undefined}
@@ -187,5 +200,43 @@ describe("Library source groups", () => {
     expect(document.activeElement).toBe(cloud);
     expect(escapedToWindow).not.toHaveBeenCalled();
     window.removeEventListener("keydown", escapedToWindow);
+  });
+
+  it("shows Remove from library only for a native-eligible unfinished local item", () => {
+    const onRemoveItem = vi.fn();
+    act(() => root.render(
+      <LibraryDrawer
+        open
+        items={[unfinishedLocalItem, item]}
+        catalog={{ ...catalog, items: [unfinishedLocalItem, item] }}
+        tasksByItem={new Map()}
+        query=""
+        busy={false}
+        blocked={false}
+        onClose={() => undefined}
+        onRescan={() => undefined}
+        onQuery={() => undefined}
+        onSelect={() => undefined}
+        onPlay={() => undefined}
+        onAddFiles={() => undefined}
+        onAddFolder={() => undefined}
+        onDrive={() => undefined}
+        onLyricsFile={() => undefined}
+        onLyricsPaste={() => undefined}
+        onEditLyrics={() => undefined}
+        onRetry={() => undefined}
+        onShowContext={() => undefined}
+        onRemoveItem={onRemoveItem}
+        onRemoveSource={() => undefined}
+        onRecoveryExport={() => undefined}
+        onRecoveryRestore={() => undefined}
+      />,
+    ));
+
+    const deletes = [...host.querySelectorAll<HTMLButtonElement>("button")]
+      .filter((button) => button.textContent === "Remove from library");
+    expect(deletes).toHaveLength(1);
+    act(() => deletes[0].click());
+    expect(onRemoveItem).toHaveBeenCalledWith(unfinishedLocalItem);
   });
 });

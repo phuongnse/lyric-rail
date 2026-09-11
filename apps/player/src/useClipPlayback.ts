@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { frameAt } from "./clipSelection";
 import { useClipFrames } from "./useClipFrames";
-import type { LocalClipPreview } from "./ClipEditor";
+export type LocalClipPreview = {
+  direct?: boolean; requiresCompatibility?: boolean; clipId: string; suggestedTitle: string; sizeBytes: number; durationMillis: number;
+  frameDurationMillis?: number; frameTimesMillis?: number[]; previewUrl: string; videoUrl?: string; videoOffsetMillis?: number;
+};
 
 export type ClipPlaybackRange = { startMillis: number; endMillis: number };
 
-export function useClipPlayback(preview: LocalClipPreview, range: ClipPlaybackRange | null, loop: boolean, busy: boolean, onPlay: () => void) {
+export function useClipPlayback(preview: LocalClipPreview, range: ClipPlaybackRange | null, loop: boolean, busy: boolean, onPlay: () => void, restrictToRange = false) {
   const audio = useRef<HTMLAudioElement>(null), video = useRef<HTMLVideoElement>(null);
   const [position, setPosition] = useState(0);
   const [status, setStatus] = useState<"paused" | "starting" | "playing">("paused");
@@ -21,12 +24,15 @@ export function useClipPlayback(preview: LocalClipPreview, range: ClipPlaybackRa
   const duration = preview.durationMillis, offset = preview.videoOffsetMillis ?? 0;
   const currentRange = useRef(range); currentRange.current = range;
   const videoTime = (time: number) => {
+    const bounds = currentRange.current;
+    if (restrictToRange && bounds) time = Math.max(bounds.startMillis, Math.min(bounds.endMillis - 1, time));
     const index = frameAt(boundaries, time);
     // Stored millisecond boundaries refer to the measured frame, including VFR.
     return Math.max(0, (boundaries[index] === time ? frames[index] + .01 : time) - offset) / 1000;
   };
   const seek = (time: number) => {
-    const bounded = Math.max(0, Math.min(duration, time));
+    const bounds = restrictToRange ? currentRange.current : null;
+    const bounded = Math.max(bounds?.startMillis ?? 0, Math.min(bounds?.endMillis ?? duration, time));
     if (audio.current) audio.current.currentTime = bounded / 1000;
     if (video.current) video.current.currentTime = videoTime(bounded);
     setPosition(bounded);

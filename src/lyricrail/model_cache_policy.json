@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "cacheRoot": "models/huggingface",
+  "pathGrammar": {
+    "separator": "/",
+    "rejectEmptySegments": true,
+    "rejectDotSegments": true,
+    "rejectParentSegments": true,
+    "rejectBackslash": true,
+    "rejectColon": true,
+    "rejectNul": true,
+    "rejectAbsolute": true
+  },
+  "canonicalContainment": {
+    "snapshotDirectoryUnderCache": true,
+    "targetRegularFileUnderCache": true
+  },
+  "lexicalCases": [
+    { "name": "safe-file", "filename": "config.json", "accepted": true },
+    { "name": "safe-nested-file", "filename": "sub/config.json", "accepted": true },
+    { "name": "empty", "filename": "", "accepted": false },
+    { "name": "empty-segment", "filename": "sub//config.json", "accepted": false },
+    { "name": "dot-segment", "filename": "./config.json", "accepted": false },
+    { "name": "parent-posix", "filename": "../outside", "accepted": false },
+    { "name": "parent-windows", "filename": "..\\outside", "accepted": false },
+    { "name": "absolute-posix", "filename": "/outside", "accepted": false },
+    { "name": "root-windows", "filename": "\\outside", "accepted": false },
+    { "name": "drive-windows", "filename": "C:\\outside", "accepted": false },
+    { "name": "unc-windows", "filename": "\\\\server\\share", "accepted": false },
+    { "name": "nul", "filename": "bad\u0000name", "accepted": false }
+  ]
+}

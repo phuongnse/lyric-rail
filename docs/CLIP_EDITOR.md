@@ -1,76 +1,82 @@
-# Cut a song from a local file
+# Cut songs from a local file
 
-Open **Library → Local → Files** and choose one audio or video file. The editor starts
-with the whole file selected. Your original file stays unchanged.
+Open **Library → Local → Files** and choose one audio or video file. Your original
+file stays unchanged.
 
-1. Drag the green **Start** and gold **End** handles on the source timeline to choose
-   the song. Click or scrub the timeline to find a moment in the source.
-2. Fine-tune the times beside the video. You can enter seconds (`79.960`), minutes and
-   seconds (`01:19.960`), or hours, minutes and seconds. The two arrows beside each
-   field move that edge by one actual video frame, or 10 ms for audio. **Set at
-   playhead** uses the current preview position.
-3. Use **Listen to start** or **Listen to end** to audition up to five seconds inside
-   the song. Adjust the edge and listen again. **Add 1 song to queue** saves the
-   selected range; add that song's exact lyrics in Library to start processing.
+In **Library**, an unfinished local media item can also be removed with **Remove from
+library**. LyricRail asks for confirmation and removes only that one unfinished row;
+the source media, lyric sidecar and sibling sections stay untouched. A queued item is
+cancelled only if processing has not started. Authenticated `.lrail` packages, cloud
+items and active processing never expose this action.
 
-## Listen and adjust
+## One timeline for sections
 
-The slider under **Play** seeks only within the selected song. It also returns to
-the full selected interval after a short edge audition. **Pause** holds your place;
-**Play** resumes there. At the end of an audition, Play repeats that audition.
-**Loop** repeats the current song or the current short audition.
-The end boundary still applies while the video is starting. If playback cannot
-finish starting within ten seconds, the editor stops it and offers a retry or
-compatible preview. Pause also cancels a pending start.
+**Trim your song** opens with the whole file selected, so an uncut video can be
+edited and added to the queue immediately. To cut it, click the source timeline
+once for Start and again for End; the whole-file default is replaced by that pair.
+Each later pair creates another section in order. Click a section to select it,
+drag its Start/End brackets, enter an exact timestamp or step an edge by a measured
+frame. The selected section's exact frame timestamp is shown beside each edge.
 
-For a 20–80 second section, Listen to end plays 75–80 seconds. On a 25 fps file,
-moving End back one frame gives 79.960, and the next tail audition starts at 74.960.
-For a section shorter than five seconds, both auditions stay inside that section.
+**Remove** removes the selected block. The transport has only Play/Pause and source
+frame stepping; section frame buttons sit beside Start and End. Moving an edge by a
+frame immediately auditions the new beginning or ending of that section.
 
-The source timeline is for locating and trimming material. Seeking outside the
-selected song enters **Browsing full file**; seeking inside it returns to song
-review. Use the slider under Play or an edge audition to return to the selected song.
-Changing the timeline view does not move the playhead or alter the cut.
+Invalid time drafts stay visible and block publishing until corrected. Escape in a
+time field discards that edit. Up to 128 sections may overlap; **Add N songs to queue**
+publishes the valid sections in the chosen order.
 
-**Whole file** restores the complete source view. **Fit song** enlarges the selected
-range. **More controls** contains zoom, pan, Go to Start/End, frame stepping, volume
-and keyboard help. Going to or nudging an edge shows that frame; Play then auditions
-the corresponding edge when its position is at the end of the audition range.
+## Edit video information
 
-Exact frame actions use measured source timestamps, including variable frame rates.
-If nearby frames are still loading, an endpoint nudge waits for them. Seeking,
-typing a time or selecting another song cancels that pending adjustment. Playback,
-seeking and exact time entry remain available when frame inspection fails; use
-**Retry frame details** for another attempt. No nominal-FPS estimate replaces missing
-frame evidence.
+Double-click a block or press **Edit video** to open a separate dialog. The timeline
+stays in place behind it, with its preview paused and controls inactive.
 
-## More than one song
+The dialog previews only the selected interval. A source interval from 20 to 80
+seconds appears as a 60-second video, with a clock and seek control starting at
+00:00. Playback and seeking cannot leave that interval; the end frame remains inside
+the cut. The dialog contains Video name, Artist, Composer and Lyrics. Section bounds,
+selection and management stay on the source timeline.
 
-**Add another song** creates a section at the playhead. Expand **N songs selected**
-to switch between songs, change their order or remove a section. Edit the active
-song's name beside the video. The editor supports up to 128 sections.
+**Save** applies information and lyrics without changing the cut. **Cancel**, the
+close button or Escape discards the information draft and returns to the timeline.
+The final queue action is the only action that publishes the sections.
 
-Each section becomes a separate Library item, placed at the top of Library and the
-queue in editor order. Each waits for its own exact lyrics; full-file sidecar lyrics
-are not silently assigned to extracted sections.
+`VideoEditor` is a shared component: callers provide media, playback bounds and
+metadata, and receive metadata only when saving. It is independent of the section
+picker and can also be used by a future Library edit action.
 
-Unfinished or invalid times stay with their song when you switch. Saving remains
-disabled until they are corrected. The error names the affected song and, when
-needed, provides **Go to song N**. Closing the editor cancels this selection without
-modifying the source file.
+Lyrics remain exactly as entered. LyricRail never infers, corrects or replaces them.
+Empty lyrics leave the Library item waiting for Paste or TXT. A full-source sidecar
+is never silently assigned to an extracted section.
+
+## Preview and precision
+
+On the source timeline, seeking outside the selected block browses the source;
+selecting a block makes Play/Pause review that section. An edge nudge starts at the
+new Start or auditions the final five seconds ending at the new End. Pause holds the
+position; Play resumes the selected section.
+
+Exact frame actions use measured timestamps, including variable frame rates. A
+pending frame adjustment waits for nearby timestamps; seeking, typing or opening
+the information dialog cancels it. If frame inspection fails, playback, seeking and
+exact time entry remain available, with **Retry frame details** for another attempt.
+No nominal-FPS estimate replaces missing frame evidence.
+
+Playback remains bounded while video startup is pending. A startup that exceeds ten
+seconds stops with a retryable error. Pause also cancels a pending start. Unsupported
+media can use **Prepare compatible preview**, with cancellation in the preparation UI.
 
 ## Keyboard
 
 | Focus | Key | Action |
 | --- | --- | --- |
-| Video preview | Left / Right | Previous / next measured frame; 10 ms for audio |
-| Video preview | I / O | Set Start / End at the playhead |
-| Video preview | Space | Play / pause |
-| Start or End timeline handle | Arrow keys | Move that edge by one frame or 10 ms |
-| Start or End timeline handle | Home / End | Try the file start / end while preserving a valid range |
-| Section seek slider | Arrows, Home / End | Seek within the song |
-| More controls / song list heading | Enter / Space | Expand / collapse |
-| Any editor control | Tab / Shift+Tab | Move within the editor |
+| Source preview | Left / Right | Previous / next measured frame; 10 ms for audio |
+| Source preview | I / O | Set Start / End at the playhead |
+| Source preview | Space | Play / pause |
+| Timeline bracket | Arrow keys | Move that edge by one measured frame or 10 ms and audition it |
+| Timeline bracket | Home / End | Try the file start / end while preserving a valid cut |
+| Video dialog seek | Arrows, Home / End | Seek only within the selected video |
+| Video dialog | Escape | Discard information edits and close only this dialog |
+| Either dialog | Tab / Shift+Tab | Move within the active dialog |
 
-Typing in a name or time field does not trigger playback shortcuts. Buttons retain
-their normal keyboard activation.
+Typing in a time, name, metadata or lyrics field does not trigger preview shortcuts.

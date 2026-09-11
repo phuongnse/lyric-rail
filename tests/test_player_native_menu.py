@@ -35,9 +35,9 @@ def test_each_visible_action_has_one_contextual_home() -> None:
     assert APP.count(">About LyricRail</button>") == 1
     assert 'status?.platform === "windows" || status?.platform === "linux"' in APP
     assert 'className="source-actions"' in APP
-    assert 'className="track-toggle"' in APP
-    assert 'className="main-controls"' in APP
-    assert 'className="right-controls"' in APP
+    assert 'className="media-control-overlay player-controls"' in APP
+    assert 'className="media-control-row"' in APP
+    assert 'className="media-control-group end"' in APP
     assert "PLAYER_MENU_ACTIONS" not in APP
 
 
