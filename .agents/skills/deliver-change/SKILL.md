@@ -41,6 +41,35 @@ exact argument-array commands. Skills guide the work; only processctl advances
 lifecycle state. Never replace missing, stale, failed, or self-authored evidence with
 a prose claim.
 
+## Preserve agent execution settings
+
+Keep the user-selected model and reasoning effort unchanged throughout the current
+task, including every delegated agent and independent reviewer. The active parent
+task owns this selection. Only an explicit user change establishes a new selection;
+do not infer one from an older run, child session, role, skill, global default, or a
+model's perceived cost or capability. This rule compares settings for equality and
+does not assign named models to roles.
+
+Before spawning or resuming an agent, read the active task's effective settings.
+Each new change's independent review starts in a new session without inherited
+implementation or other-change review history. Resume a reviewer only within that
+same accepted change; preserving settings never requires preserving an old context.
+Use inheritance when it preserves both settings; otherwise pass that exact pair
+through the native runtime's supported controls. Resuming a child may retain its
+old settings, so check it again even when its reviewer identity is unchanged.
+Never autonomously upgrade, downgrade, or fall back to another model or effort.
+
+Verify the child's effective settings from native runtime metadata for every
+contributing turn before accepting its result. Retain the native handle and settings
+evidence with the existing run handoff. A requested configuration or the agent's own
+claim is not runtime confirmation. On mismatch, stop the affected agent and correct
+its settings before continuing; if the settings are unavailable or unsupported, stop
+the handoff and report the limitation instead of accepting an unverified result.
+
+This is a portable agent instruction. The host runtime owns enforcement and settings
+observations; processctl does not select provider models or certify their quality.
+Preserving settings does not waive independent actor/context or snapshot checks.
+
 Report the change id, phase, cycle, current evidence, blocker, and next command.
 Also report readiness capabilities affected or intentionally advanced by this change;
 do not describe `building` as production or infer promotion from prose.
