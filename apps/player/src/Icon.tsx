@@ -28,6 +28,8 @@ export const ICON_NAMES = [
   "plus",
   "alert",
   "activity",
+  "info",
+  "menu",
   "more",
 ] as const;
 
@@ -69,6 +71,10 @@ function glyph(name: IconName): ReactNode {
       return <><path d="M12 3 2.8 19a1.2 1.2 0 0 0 1 1.8h16.4a1.2 1.2 0 0 0 1-1.8L12 3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></>;
     case "activity":
       return <><circle cx="12" cy="12" r="8.5"/><path d="M6.5 12h3l1.6-3.4 2.2 7 1.5-3.6h2.7"/></>;
+    case "info":
+      return <><circle cx="12" cy="12" r="8.5"/><path d="M12 10.8v5.4"/><path d="M12 7.8h.01"/></>;
+    case "menu":
+      return <><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></>;
     case "more":
       return <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></>;
   }

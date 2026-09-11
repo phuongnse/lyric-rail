@@ -31,14 +31,23 @@ def test_each_visible_action_has_one_contextual_home() -> None:
     assert APP.count(">Local</button>") == 1
     assert APP.count(">Cloud</button>") == 1
     assert APP.count(">Drive</button>") == 0
-    assert APP.count("Activity {") == 1
-    assert APP.count(">About LyricRail</button>") == 1
-    assert 'status?.platform === "windows" || status?.platform === "linux"' in APP
+    assert APP.count("<span>Activity</span>") == 1
+    assert APP.count("<span>About LyricRail</span>") == 1
+    assert 'label="Open application menu"' in APP
+    assert 'id="player-application-menu"' in APP
+    assert 'role="menu"' in APP
+    assert APP.count('role="menuitem"') >= 6
+    assert "onKeyDown={moveApplicationMenuFocus}" in APP
+    assert "useFocusContainment(menuOpen, menuRef" in APP
+    assert 'restoreRef={menuTriggerRef}' in APP
+    assert 'className="player-menu-group"' in APP
+    assert 'className="topbar"' not in APP
     assert 'className="source-actions"' in APP
     assert 'className="media-control-overlay player-controls"' in APP
     assert 'className="media-control-row"' in APP
     assert 'className="media-control-group end"' in APP
     assert "PLAYER_MENU_ACTIONS" not in APP
+    assert "showUtilityMenu" not in APP
 
 
 def test_shortcuts_use_a_non_rendering_shared_command_registry() -> None:

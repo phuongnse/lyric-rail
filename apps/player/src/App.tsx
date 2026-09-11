@@ -31,7 +31,7 @@ import {
   toggleMutedVolume,
 } from "./playback";
 import { dispatchCommand, type CommandHandlers } from "./commands";
-import { FOCUSABLE, useFocusContainment } from "./focus";
+import { useFocusContainment } from "./focus";
 import {
   compactFriendlyOutput,
   friendlyOutputText,
@@ -585,7 +585,7 @@ function App() {
   const [pendingIssueFocusId, setPendingIssueFocusId] = useState<string>();
   const [taskOutputTruncated, setTaskOutputTruncated] = useState<Record<string, boolean>>({});
   const [nowMillis, setNowMillis] = useState(() => Date.now());
-  const [utilityOpen, setUtilityOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [confirmIssue, setConfirmIssue] = useState<SystemIssue>();
   const [licenseConfirmed, setLicenseConfirmed] = useState(false);
@@ -607,8 +607,8 @@ function App() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const issuesHeadingRef = useRef<HTMLHeadingElement>(null);
-  const issuesToggleRef = useRef<HTMLButtonElement>(null);
-  const utilityToggleRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const setupDialogRef = useRef<HTMLDivElement>(null);
   const aboutDialogRef = useRef<HTMLDivElement>(null);
   const lyricDialogRef = useRef<HTMLDivElement>(null);
@@ -645,11 +645,11 @@ function App() {
     () => activeProcessingTasksByItem(taskState.tasks),
     [taskState.tasks],
   );
-  const showUtilityMenu = !native || status?.platform === "windows" || status?.platform === "linux";
   const systemModalOpen = Boolean(confirmIssue) || aboutOpen || Boolean(lyricDialog) || Boolean(deleteCandidate) || clipDialogOpen;
-  const anyModalOpen = systemModalOpen;
+  const anyModalOpen = systemModalOpen || menuOpen;
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
-  useFocusContainment(aboutOpen, aboutDialogRef, undefined, utilityToggleRef);
+  useFocusContainment(menuOpen, menuRef, undefined, menuTriggerRef);
+  useFocusContainment(aboutOpen, aboutDialogRef, undefined, menuTriggerRef);
   useFocusContainment(Boolean(lyricDialog), lyricDialogRef, lyricInputRef, lyricRestoreRef);
   useFocusContainment(Boolean(deleteCandidate), deleteDialogRef, undefined, deleteRestoreRef);
   useFocusContainment(clipDialogOpen && !clipPreparing, clipDialogRef, undefined, clipRestoreRef);
@@ -844,14 +844,14 @@ function App() {
           setClipBusy(false);
           if (native && clipId) invoke("cancel_local_clip", { clipId }).catch(() => undefined);
         }
-        else if (utilityOpen) setUtilityOpen(false);
+        else if (menuOpen) setMenuOpen(false);
         else if (issuesOpen) setIssuesOpen(false);
         else setDrawerOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, confirmIssue, deleteCandidate, issuesOpen, licenseConfirmed, lyricDialog, native, utilityOpen]);
+  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, confirmIssue, deleteCandidate, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native]);
 
   useEffect(() => {
     if (issuesOpen) {
@@ -860,13 +860,6 @@ function App() {
       if (issue) setSeenIssueNotice(`${issue.id}:${issue.updatedAtMillis}`);
     }
   }, [activityTab, issuesOpen, systemIssues]);
-
-  useEffect(() => {
-    if (!utilityOpen) return;
-    return () => {
-      if (!aboutOpen) utilityToggleRef.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
-    };
-  }, [aboutOpen, utilityOpen]);
 
   useEffect(() => {
     if (!playing) return;
@@ -1031,6 +1024,23 @@ function App() {
   const toggleLibrary = () => {
     setIssuesOpen(false);
     setDrawerOpen((value) => !value);
+  };
+  const toggleActivity = () => {
+    setDrawerOpen(false);
+    setMenuOpen(false);
+    setIssuesOpen((value) => !value);
+  };
+  const moveApplicationMenuFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    event.preventDefault();
+    items[next]?.focus();
   };
   const toggleShuffle = () => setShuffle((value) => !value);
 
@@ -1410,36 +1420,49 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar" inert={systemModalOpen}>
-        <div className="brand" aria-label="LyricRail">
-          <img className="brand-mark" src={lyricRailMark} alt="" />
-          <strong>LyricRail</strong>
-        </div>
-        <div className="now-playing">
-          <strong>{currentItem?.title || "Ready to sing"}</strong>
-          <span>{currentItem?.artist || currentItem?.firstLyricLine || "Open local media or an encrypted package"}</span>
-        </div>
-        <div className="topbar-actions">
-          <button className={`library-toggle ${drawerOpen ? "active" : ""}`} onClick={toggleLibrary} aria-expanded={drawerOpen} aria-controls="library-drawer">
-            Library {queueBadge > 0 && <b>{queueBadge}</b>}
-          </button>
-          <button ref={issuesToggleRef} className={`issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`} onClick={() => { setDrawerOpen(false); setUtilityOpen(false); setIssuesOpen((value) => !value); }} aria-expanded={issuesOpen} aria-controls="system-issues">
-            <Icon name={systemIssues.length ? "alert" : "activity"} size={17} /> Activity {(activeTaskCount + systemIssues.length) > 0 && <b>{activeTaskCount + systemIssues.length}</b>}
-          </button>
-          {showUtilityMenu && <div ref={utilityToggleRef}><IconButton className="utility-toggle" icon="more" label="Application menu" onClick={() => { setIssuesOpen(false); setUtilityOpen((value) => !value); }} aria-expanded={utilityOpen} /></div>}
-          {showUtilityMenu && utilityOpen && (
-            <>
-              <button className="utility-scrim" aria-label="Close application menu" onClick={() => setUtilityOpen(false)} />
-              <nav className="utility-menu" aria-label="Application">
-                <button autoFocus onClick={() => { setUtilityOpen(false); setAboutOpen(true); }}>About LyricRail</button>
-              </nav>
-            </>
-          )}
-        </div>
-      </header>
-
       <section className="player-area" inert={systemModalOpen}>
         <div className="video-stage media-player-frame panel" ref={stageRef}>
+          <div className="player-context">
+            <div className="player-command-menu">
+              <div ref={menuTriggerRef}>
+                <IconButton
+                  className="player-menu-toggle"
+                  icon="menu"
+                  label="Open application menu"
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  aria-controls="player-application-menu"
+                  onClick={() => { setIssuesOpen(false); setMenuOpen((value) => !value); }}
+                />
+              </div>
+              {menuOpen && (
+                <>
+                  <button className="player-menu-scrim" aria-label="Close application menu" onClick={() => setMenuOpen(false)} />
+                  <div ref={menuRef} id="player-application-menu" className="player-menu panel" role="menu" aria-label="Application actions" onKeyDown={moveApplicationMenuFocus}>
+                    <div className="player-menu-group" role="group" aria-labelledby="player-menu-workspace">
+                      <span id="player-menu-workspace" className="player-menu-label">Workspace</span>
+                      <button role="menuitem" className={`player-menu-action library-toggle ${drawerOpen ? "active" : ""}`} onClick={() => { setMenuOpen(false); toggleLibrary(); }} aria-expanded={drawerOpen} aria-controls="library-drawer">
+                        <Icon name="music" size={18} /><span>Library</span>{queueBadge > 0 && <b>{queueBadge}</b>}
+                      </button>
+                      <button role="menuitem" className={`player-menu-action issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`} onClick={toggleActivity} aria-expanded={issuesOpen} aria-controls="system-issues">
+                        <Icon name={systemIssues.length ? "alert" : "activity"} size={18} /><span>Activity</span>{(activeTaskCount + systemIssues.length) > 0 && <b>{activeTaskCount + systemIssues.length}</b>}
+                      </button>
+                    </div>
+                    <div className="player-menu-group" role="group" aria-labelledby="player-menu-application">
+                      <span id="player-menu-application" className="player-menu-label">Application</span>
+                      <button role="menuitem" className="player-menu-action" onClick={() => { setMenuOpen(false); setAboutOpen(true); }}>
+                        <Icon name="info" size={18} /><span>About LyricRail</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="now-playing" aria-live="polite">
+              <strong>{currentItem?.title || "Ready to sing"}</strong>
+              <span>{currentItem?.artist || currentItem?.firstLyricLine || "Open local media or an encrypted package"}</span>
+            </div>
+          </div>
           {opened ? (
             <>
               <video ref={videoRef} src={opened.media.videoUrl} muted playsInline onError={() => reportError("playback", "Video playback failed", "Video range could not be authenticated or downloaded.")} onCanPlay={() => { if (pendingPlay) { setPendingPlay(false); playElements().catch((reason) => reportError("playback", "Playback could not start", reason)); } }} />
@@ -1573,7 +1596,7 @@ function App() {
         onResolve={resolveIssue}
         onCopyDiagnostics={copyIssueDiagnostics}
         blocked={systemModalOpen}
-        restoreRef={issuesToggleRef}
+        restoreRef={menuTriggerRef}
       />
 
       {lyricDialog && (

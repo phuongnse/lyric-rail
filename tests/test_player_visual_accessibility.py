@@ -27,6 +27,11 @@ def test_player_uses_repository_owned_svg_icons_without_placeholder_glyphs() -> 
         token in APP for token in ("⌕", "↻", "▶", "Ⅱ", "‹", "›", "⤨", "⛶", "✎", "＋")
     )
     assert not any("icon" in dependency.lower() for dependency in package["dependencies"])
+    assert 'className="topbar"' not in APP
+    assert ".topbar" not in CSS
+    assert 'className="player-context"' in APP
+    assert 'icon="menu"' in APP
+    assert 'id="player-application-menu"' in APP
     assert 'className="media-control-overlay player-controls"' in APP
     assert 'icon={volume <= 0.001 ? "volume-muted" : "volume-high"}' in APP
     assert 'icon="music"' in APP
@@ -98,6 +103,25 @@ def test_type_and_transport_scale_stays_above_the_compact_floor() -> None:
     assert 'iconSize={22}' in APP
     assert 'iconSize={21}' in APP
     assert 'aria-label="Volume"' in APP
+    assert ".player-menu { position: absolute" in CSS
+    assert ".player-menu-action:focus-visible" in CSS
+    assert "inset: 0" in CSS
+
+
+def test_player_drawers_keep_exact_viewport_geometry_across_layout_modes() -> None:
+    assert re.search(r"\.drawer-scrim \{[^}]*position: fixed;[^}]*inset: 0;", CSS)
+    assert re.search(r"\.library-drawer \{[^}]*position: fixed;[^}]*top: 0;[^}]*bottom: 0;", CSS)
+    assert re.search(r"\.issues-drawer \{[^}]*position: fixed;[^}]*top: 0;[^}]*bottom: 0;", CSS)
+    assert ".activity-drawer { width: clamp(420px, 48vw, 760px);" in CSS
+    assert ".app-shell:fullscreen .library-drawer { top: 0; }" in CSS
+    assert ".app-shell:fullscreen .drawer-scrim { inset: 0; }" in CSS
+    assert ".app-shell:fullscreen .issues-drawer { top: 0; }" in CSS
+    assert ".app-shell:fullscreen .issues-scrim { inset: 0; }" in CSS
+    narrow = CSS.split("@media (max-width: 760px) {", 1)[1]
+    assert ".library-drawer { top: auto;" in narrow
+    assert ".issues-drawer { top: auto;" in narrow
+    assert ".drawer-scrim { inset: 0; }" in narrow
+    assert ".issues-scrim { inset: 0; }" in narrow
 
 
 def test_fullscreen_icon_label_and_action_follow_live_state() -> None:

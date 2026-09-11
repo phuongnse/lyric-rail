@@ -5,11 +5,43 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
 import type { CatalogSnapshot } from "./library";
 import type { KaraokePresentation } from "./LyricOverlay";
+import type { SystemIssue } from "./issues";
+import type { TaskRecord, TaskRuntimeUpdate, TaskSnapshot } from "./tasks";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
 const readyCatalog: CatalogSnapshot = { items: [{ id: "song", title: "Song", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: false, hasThumbnail: false }], localSources: [], driveSources: [] };
 let catalogFixture: CatalogSnapshot = readyCatalog;
+let systemIssuesFixture: SystemIssue[] = [];
+let taskSnapshotFixture: TaskSnapshot = { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
+const eventListeners = new Map<string, (event: { payload: unknown }) => void>();
+const runningTask: TaskRecord = {
+  id: "task-1",
+  kind: "processing",
+  title: "Processing Song",
+  status: "running",
+  progressMode: "determinate",
+  progressPercent: 42,
+  stageProgressPercent: 42,
+  cancellable: true,
+  startedAtMillis: 1_000,
+  updatedAtMillis: 2_000,
+  outputLineCount: 0,
+  outputTruncated: false,
+};
+const liveIssue: SystemIssue = {
+  id: "issue-1",
+  code: "processing.runtime",
+  scope: "processing",
+  severity: "warning",
+  title: "Runtime warning",
+  summary: "The processing runtime needs attention.",
+  state: "open",
+  occurrences: 1,
+  createdAtMillis: 1_000,
+  updatedAtMillis: 2_000,
+  actions: [],
+};
 const presentation: KaraokePresentation = {
   referenceResolution: [1920, 1080],
   layout: { lineMode: "alternating-two-lines", alignment: "top-left-bottom-right", bottomMargin: 84, lineGap: 28, safeAreaPercent: 3.5, maximumLineWidthPercent: 93 },
@@ -23,20 +55,26 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command: string) =
   if (command === "catalog_snapshot") return catalogFixture;
   if (command === "remove_unprocessed_local_item") return { items: [], localSources: [], driveSources: [] };
   if (command === "player_status") return { version: "0.8.0", platform: "windows", vaultAvailable: true, processing: { pendingJobs: 0, runtimeAvailable: true } };
-  if (command === "system_issues") return [];
-  if (command === "task_runtime_snapshot") return { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
+  if (command === "system_issues") return systemIssuesFixture;
+  if (command === "task_runtime_snapshot") return taskSnapshotFixture;
   if (command === "open_library_item") return { packageId: "package", metadata: {}, renderPlan: { events: [] }, presentation, media: { videoUrl: "http://fixture/video", audioTracks: [{ id: "karaoke", name: "Karaoke", url: "http://fixture/karaoke", default: true }, { id: "original-reference", name: "Original", url: "http://fixture/original", default: false }] } };
   if (command === "prepare_local_clip") return { clipId: "clip", suggestedTitle: "Song", sizeBytes: 10, durationMillis: 3000, previewUrl: "http://fixture/preview" };
   if (command === "item_lyrics") return "Exact words";
   return null;
 }) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (event: string, callback: (event: { payload: unknown }) => void) => {
+  eventListeners.set(event, callback);
+  return () => { if (eventListeners.get(event) === callback) eventListeners.delete(event); };
+}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => ["song.mp4"]), save: vi.fn() }));
 
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(async () => {
   catalogFixture = readyCatalog;
+  systemIssuesFixture = [];
+  taskSnapshotFixture = { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
+  eventListeners.clear();
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   Object.assign(window, { __TAURI_INTERNALS__: {} });
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as typeof ResizeObserver;
@@ -56,7 +94,7 @@ async function checkDialog(launcher: HTMLButtonElement) {
   const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
   expect(dialog).not.toBeNull();
   expect(dialog.contains(document.activeElement)).toBe(true);
-  expect(host.querySelector(".topbar")?.hasAttribute("inert")).toBe(true);
+  expect(host.querySelector(".player-area")?.hasAttribute("inert")).toBe(true);
   expect(host.querySelector("#library-drawer")?.hasAttribute("inert")).toBe(true);
   const buttons = dialog.querySelectorAll<HTMLButtonElement>("button:not([disabled])");
   const first = buttons[0]; const last = buttons[buttons.length - 1];
@@ -81,6 +119,90 @@ async function checkDialog(launcher: HTMLButtonElement) {
   expect(host.querySelector('[role="dialog"]')).toBeNull();
   expect(document.activeElement).toBe(launcher);
 }
+
+it("replaces the main topbar with an in-player grouped application menu", async () => {
+  expect(host.querySelector(".topbar")).toBeNull();
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  const context = frame.querySelector<HTMLElement>(".player-context")!;
+  expect(context.querySelector(".now-playing")?.textContent).toContain("Ready to sing");
+  const trigger = context.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+
+  await act(async () => trigger.click());
+  const menu = frame.querySelector<HTMLElement>("#player-application-menu")!;
+  expect(menu).not.toBeNull();
+  expect(menu.querySelector("[aria-labelledby=player-menu-workspace]")).not.toBeNull();
+  expect(menu.querySelector("[aria-labelledby=player-menu-application]")).not.toBeNull();
+  expect(menu.textContent).toContain("Library");
+  expect(menu.textContent).toContain("Activity");
+  expect(menu.textContent).toContain("About LyricRail");
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(document.activeElement).toBe(menu.querySelector("button"));
+  const menuItems = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  expect(menuItems).toHaveLength(3);
+  menuItems[2]!.focus();
+  act(() => menuItems[2]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+  expect(document.activeElement).toBe(menuItems[0]);
+  act(() => menuItems[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })));
+  expect(document.activeElement).toBe(menuItems[1]);
+
+  await act(async () => {
+    frame.querySelector<HTMLButtonElement>('[aria-label="Close application menu"]')!.click();
+  });
+  expect(frame.querySelector("#player-application-menu")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+
+  await act(async () => trigger.click());
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(frame.querySelector("#player-application-menu")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+
+  await act(async () => trigger.click());
+  const about = [...frame.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("About LyricRail"))!;
+  await act(async () => about.click());
+  expect(host.querySelector("#about-title")).not.toBeNull();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector("#about-title")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+});
+
+it("keeps Library and Activity badges synchronized with live state", async () => {
+  await act(async () => root.unmount());
+  catalogFixture = {
+    ...readyCatalog,
+    items: [
+      ...readyCatalog.items,
+      { id: "queued", title: "Queued song", status: "queued", progressPercent: 12, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false },
+    ],
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  expect(host.querySelector<HTMLButtonElement>(".library-toggle")?.textContent).toContain("1");
+  expect(host.querySelector(".issues-toggle b")).toBeNull();
+
+  const update: TaskRuntimeUpdate = {
+    sequence: 1,
+    tasks: [runningTask],
+    output: [],
+    outputGaps: [],
+    outputGapAll: false,
+    removedTaskIds: [],
+    tasksReset: false,
+    activeTaskCount: 1,
+    historyCount: 0,
+  };
+  await act(async () => {
+    eventListeners.get("task-runtime-update")?.({ payload: update });
+    eventListeners.get("system-issues-changed")?.({ payload: [liveIssue] });
+  });
+  expect(host.querySelector<HTMLButtonElement>(".library-toggle b")?.textContent).toBe("1");
+  expect(host.querySelector<HTMLButtonElement>(".issues-toggle b")?.textContent).toBe("2");
+  expect(host.querySelector(".issues-toggle")?.className).toContain("has-issues");
+});
 
 it("keeps main playback actions in a focused icon-only overlay", async () => {
   const firstSong = readyCatalog.items[0]!;
@@ -239,15 +361,17 @@ it("wraps focus around visible controls while a clip commit disables the footer"
 });
 
 it("dismisses the clip editor before Activity and restores normal shortcuts", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  act(() => trigger.click());
   const activity = host.querySelector<HTMLButtonElement>(".issues-toggle")!;
   act(() => { activity.focus(); activity.click(); });
   const pressOpen = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true }));
   await act(async () => { pressOpen(); });
   expect(host.querySelector('[role="dialog"]')).not.toBeNull();
-  expect(activity.getAttribute("aria-expanded")).toBe("true");
+  expect(host.querySelector(".issues-drawer.open")).not.toBeNull();
   await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect(host.querySelector('[role="dialog"]')).toBeNull();
-  expect(activity.getAttribute("aria-expanded")).toBe("true");
+  expect(host.querySelector(".issues-drawer.open")).not.toBeNull();
   vi.mocked(open).mockClear();
   await act(async () => { pressOpen(); });
   expect(open).toHaveBeenCalledOnce();
