@@ -1011,9 +1011,14 @@ function App() {
     if (typeof selected === "string") await invoke("add_local_folder", { path: selected });
   }, "library", "Folder could not be added");
 
+  const showLibrary = () => {
+    setMenuOpen(false);
+    setIssuesOpen(false);
+    setDrawerOpen(true);
+  };
   const connectDrive = () => runBusy(async () => {
     await invoke("connect_google_drive");
-    setDrawerOpen(true);
+    showLibrary();
   }, "drive", "Google Drive could not connect");
 
   const rescanLibrary = () => runBusy(() => Promise.all([
@@ -1021,7 +1026,13 @@ function App() {
     invoke("rescan_google_drive"),
   ]), "library", "Library sources could not be rescanned");
 
+  const toggleMenu = () => {
+    setDrawerOpen(false);
+    setIssuesOpen(false);
+    setMenuOpen((value) => !value);
+  };
   const toggleLibrary = () => {
+    setMenuOpen(false);
     setIssuesOpen(false);
     setDrawerOpen((value) => !value);
   };
@@ -1029,6 +1040,11 @@ function App() {
     setDrawerOpen(false);
     setMenuOpen(false);
     setIssuesOpen((value) => !value);
+  };
+  const showActivity = () => {
+    setDrawerOpen(false);
+    setMenuOpen(false);
+    setIssuesOpen(true);
   };
   const moveApplicationMenuFocus = (event: React.KeyboardEvent<HTMLElement>) => {
     if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
@@ -1071,7 +1087,7 @@ function App() {
       }
       setCatalog(snapshot); setShownItems(snapshot.items); setQuery("");
       setQueueInsertion((value) => value + 1);
-      setClipPreview(undefined); setClipDialogOpen(false); setDrawerOpen(true);
+      setClipPreview(undefined); setClipDialogOpen(false); showLibrary();
     } catch (reason) { reportError("clip", "Songs could not be added", reason, undefined, undefined, "clip-preparation"); throw reason; }
     finally { setClipBusy(false); }
   };
@@ -1153,7 +1169,7 @@ function App() {
     setLyricDraft(mode === "edit" && native ? await invoke<string>("item_lyrics", { itemId: item.id }) : "");
     setLyricTitle(item.title);
     setLyricDialog({ item, mode });
-    setDrawerOpen(true);
+    showLibrary();
   };
 
   const submitLyrics = () => lyricDialog && runBusy(async () => {
@@ -1221,7 +1237,7 @@ function App() {
     setConfirmIssue(undefined);
     setLicenseConfirmed(false);
     setActivityTab("tasks");
-    setIssuesOpen(true);
+    showActivity();
     try {
       await invoke("install_processing_models", {
         issueId: issue.id,
@@ -1231,7 +1247,7 @@ function App() {
     } catch {
       await refresh().catch(() => undefined);
       setActivityTab("issues");
-      setIssuesOpen(true);
+      showActivity();
     }
   };
 
@@ -1304,7 +1320,7 @@ function App() {
     if (task.status !== "queued" && task.status !== "running") return;
     setSelectedIssueId(undefined);
     setActivityTab("tasks");
-    setIssuesOpen(true);
+    showActivity();
     openTaskOutput(task);
     setPendingTaskFocusId(task.id);
   };
@@ -1315,7 +1331,7 @@ function App() {
 
   const showIssue = (issue: SystemIssue) => {
     setActivityTab("issues");
-    setIssuesOpen(true);
+    showActivity();
     setPendingIssueFocusId(issue.id);
   };
 
@@ -1354,7 +1370,6 @@ function App() {
   const showItemContext = async (item: LibraryItem) => {
     const relatedIssue = issueForLibraryItem(item, systemIssues);
     if ((item.status === "failed" || item.status === "setup-required") && relatedIssue) {
-      setDrawerOpen(false);
       showIssue(relatedIssue);
       return;
     }
@@ -1367,7 +1382,6 @@ function App() {
         reportError("tasks", "Task details could not be opened", reason, undefined, undefined, item.id);
       }
     }
-    setDrawerOpen(false);
     if (task && (task.status === "queued" || task.status === "running")) showActivityTask(task);
     else if (relatedIssue) showIssue(relatedIssue);
     else reportError("activity", "Related activity is no longer available", "No active task or matching Issue is available for this item.");
@@ -1432,7 +1446,7 @@ function App() {
                   aria-haspopup="menu"
                   aria-expanded={menuOpen}
                   aria-controls="player-application-menu"
-                  onClick={() => { setIssuesOpen(false); setMenuOpen((value) => !value); }}
+                  onClick={toggleMenu}
                 />
               </div>
               {menuOpen && (
@@ -1441,7 +1455,7 @@ function App() {
                   <div ref={menuRef} id="player-application-menu" className="player-menu panel" role="menu" aria-label="Application actions" onKeyDown={moveApplicationMenuFocus}>
                     <div className="player-menu-group" role="group" aria-labelledby="player-menu-workspace">
                       <span id="player-menu-workspace" className="player-menu-label">Workspace</span>
-                      <button role="menuitem" className={`player-menu-action library-toggle ${drawerOpen ? "active" : ""}`} onClick={() => { setMenuOpen(false); toggleLibrary(); }} aria-expanded={drawerOpen} aria-controls="library-drawer">
+                      <button role="menuitem" className={`player-menu-action library-toggle ${drawerOpen ? "active" : ""}`} onClick={toggleLibrary} aria-expanded={drawerOpen} aria-controls="library-drawer">
                         <Icon name="music" size={18} /><span>Library</span>{queueBadge > 0 && <b>{queueBadge}</b>}
                       </button>
                       <button role="menuitem" className={`player-menu-action issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`} onClick={toggleActivity} aria-expanded={issuesOpen} aria-controls="system-issues">
@@ -1458,10 +1472,10 @@ function App() {
                 </>
               )}
             </div>
-            <div className="now-playing" aria-live="polite">
-              <strong>{currentItem?.title || "Ready to sing"}</strong>
-              <span>{currentItem?.artist || currentItem?.firstLyricLine || "Open local media or an encrypted package"}</span>
-            </div>
+            {opened && currentItem && <div className="now-playing" aria-live="polite">
+              <strong>{currentItem.title}</strong>
+              <span>{currentItem.artist || currentItem.firstLyricLine}</span>
+            </div>}
           </div>
           {opened ? (
             <>
@@ -1479,17 +1493,7 @@ function App() {
               <div className="stage-shade" />
               <LyricOverlay events={events} time={time} presentation={opened.presentation} mediaRef={audioRef} playing={playing} />
             </>
-          ) : (
-            <div className="empty-stage">
-              <div className="empty-brand-lockup">
-                <img className="empty-brand-mark" src={lyricRailMark} alt="" />
-                <strong>LyricRail</strong>
-              </div>
-              <h1>Your karaoke, one click away.</h1>
-              <p>Choose a ready song from the library. Local media will process quietly in the same queue.</p>
-              <button onClick={() => setDrawerOpen(true)}>Open library</button>
-            </div>
-          )}
+          ) : null}
           {opened && <div className="media-control-overlay player-controls" aria-label="Player controls">
             <div className="media-control-progress">
               <output>{formatTime(time)}</output>

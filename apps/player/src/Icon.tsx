@@ -151,6 +151,7 @@ export function IconButton({
   iconSize = 20,
   className = "",
   type = "button",
+  onClick,
   onMouseEnter,
   onMouseLeave,
   onFocus,
@@ -214,6 +215,7 @@ export function IconButton({
         className={`icon-control ${className}`.trim()}
         aria-label={label}
         aria-describedby={tooltip?.measured ? tooltipId : undefined}
+        onClick={(event) => { setTooltip(undefined); onClick?.(event); }}
         onMouseEnter={(event) => { prepareTooltip(); onMouseEnter?.(event); }}
         onMouseLeave={(event) => { setTooltip(undefined); onMouseLeave?.(event); }}
         onFocus={(event) => { prepareTooltip(); onFocus?.(event); }}

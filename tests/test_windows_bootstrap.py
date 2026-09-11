@@ -244,7 +244,7 @@ def test_windows_bootstrap_plan_is_read_only_and_machine_parseable() -> None:
 def test_player_does_not_present_framework_assets_as_lyricrail_branding() -> None:
     app = (ROOT / "apps" / "player" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert 'className="topbar"' not in app
-    assert 'className="empty-brand-lockup"' in app
+    assert 'className="about-dialog panel"' in app
     assert "assets/brand/lyricrail-mark.svg" in app
     assert "src-tauri/icons/icon.png" not in app
     assert "tauri.svg" not in app

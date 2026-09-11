@@ -197,11 +197,11 @@ def test_player_and_bundle_use_only_the_canonical_brand_source() -> None:
     )
     assert 'import lyricRailMark from "../../../assets/brand/lyricrail-mark.svg"' in app
     assert 'className="topbar"' not in app
-    assert app.count("src={lyricRailMark}") == 2
-    assert 'className="empty-brand-lockup"' in app
-    assert app.count("<strong>LyricRail</strong>") == 1
-    assert ".empty-brand-mark" in css
-    assert ".brand-mark" not in css
+    assert app.count("src={lyricRailMark}") == 1
+    assert 'className="about-dialog panel"' in app
+    assert "<strong>LyricRail</strong>" not in app
+    assert ".empty-brand-mark" not in css
+    assert ".empty-stage" not in css
     assert "tauri.svg" not in app and "src-tauri/icons/icon.png" not in app
     assert package["scripts"]["brand:icons"] == "node scripts/generate_brand_icons.mjs"
     configured = {

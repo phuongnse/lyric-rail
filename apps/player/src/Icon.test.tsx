@@ -1,8 +1,27 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ICON_NAMES, Icon, IconButton, placeTooltip } from "./Icon";
 
 describe("LyricRail icon system", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    document.querySelectorAll('[role="tooltip"]').forEach((tooltip) => tooltip.remove());
+  });
+
   it("renders every repository-owned icon as SVG geometry", () => {
     for (const name of ICON_NAMES) {
       const markup = renderToStaticMarkup(<Icon name={name} />);
@@ -24,6 +43,20 @@ describe("LyricRail icon system", () => {
     expect(markup).not.toContain("title=");
     expect(markup).not.toContain("data-tooltip");
     expect(markup).toContain('class="icon-control"');
+  });
+
+  it("clears a visible tooltip before invoking a clicked action", async () => {
+    const onClick = vi.fn();
+    await act(async () => root.render(<IconButton icon="menu" label="Open menu" onClick={onClick} />));
+    const button = host.querySelector<HTMLButtonElement>("button")!;
+    await act(async () => {
+      button.focus();
+      await Promise.resolve();
+    });
+    expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+    await act(async () => button.click());
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    expect(onClick).toHaveBeenCalledOnce();
   });
 
   it("applies the shared top and viewport-edge placement matrix", () => {

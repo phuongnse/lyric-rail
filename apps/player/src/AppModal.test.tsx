@@ -12,6 +12,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 const readyCatalog: CatalogSnapshot = { items: [{ id: "song", title: "Song", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: false, hasThumbnail: false }], localSources: [], driveSources: [] };
 let catalogFixture: CatalogSnapshot = readyCatalog;
+let commitSnapshotFixture: CatalogSnapshot = readyCatalog;
 let systemIssuesFixture: SystemIssue[] = [];
 let taskSnapshotFixture: TaskSnapshot = { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
 const eventListeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -40,7 +41,7 @@ const liveIssue: SystemIssue = {
   occurrences: 1,
   createdAtMillis: 1_000,
   updatedAtMillis: 2_000,
-  actions: [],
+  actions: [{ kind: "reconnect-drive", label: "Reconnect Drive", requiresConfirmation: false }],
 };
 const presentation: KaraokePresentation = {
   referenceResolution: [1920, 1080],
@@ -59,6 +60,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command: string) =
   if (command === "task_runtime_snapshot") return taskSnapshotFixture;
   if (command === "open_library_item") return { packageId: "package", metadata: {}, renderPlan: { events: [] }, presentation, media: { videoUrl: "http://fixture/video", audioTracks: [{ id: "karaoke", name: "Karaoke", url: "http://fixture/karaoke", default: true }, { id: "original-reference", name: "Original", url: "http://fixture/original", default: false }] } };
   if (command === "prepare_local_clip") return { clipId: "clip", suggestedTitle: "Song", sizeBytes: 10, durationMillis: 3000, previewUrl: "http://fixture/preview" };
+  if (command === "commit_local_sections") return commitSnapshotFixture;
   if (command === "item_lyrics") return "Exact words";
   return null;
 }) }));
@@ -70,14 +72,18 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => ["song.mp4
 
 let host: HTMLDivElement;
 let root: Root;
+let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 beforeEach(async () => {
   catalogFixture = readyCatalog;
+  commitSnapshotFixture = readyCatalog;
   systemIssuesFixture = [];
   taskSnapshotFixture = { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
   eventListeners.clear();
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   Object.assign(window, { __TAURI_INTERNALS__: {} });
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as typeof ResizeObserver;
+  scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+  Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
@@ -86,6 +92,8 @@ beforeEach(async () => {
 });
 afterEach(() => {
   act(() => root.unmount()); host.remove();
+  if (scrollIntoViewDescriptor) Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+  else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   vi.restoreAllMocks();
 });
@@ -124,7 +132,8 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   expect(host.querySelector(".topbar")).toBeNull();
   const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
   const context = frame.querySelector<HTMLElement>(".player-context")!;
-  expect(context.querySelector(".now-playing")?.textContent).toContain("Ready to sing");
+  expect(context.querySelector(".now-playing")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).toBeNull();
   const trigger = context.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
 
   await act(async () => trigger.click());
@@ -202,6 +211,80 @@ it("keeps Library and Activity badges synchronized with live state", async () =>
   expect(host.querySelector<HTMLButtonElement>(".library-toggle b")?.textContent).toBe("1");
   expect(host.querySelector<HTMLButtonElement>(".issues-toggle b")?.textContent).toBe("2");
   expect(host.querySelector(".issues-toggle")?.className).toContain("has-issues");
+});
+
+it("keeps the menu, Library and Activity surfaces mutually exclusive", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
+  expect(library().classList.contains("open")).toBe(true);
+
+  await act(async () => trigger.click());
+  expect(host.querySelector("#player-application-menu")).not.toBeNull();
+  expect(library().classList.contains("open")).toBe(false);
+
+  await act(async () => host.querySelector<HTMLButtonElement>(".library-toggle")!.click());
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+  expect(library().classList.contains("open")).toBe(true);
+  expect(activity().classList.contains("open")).toBe(false);
+
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+  expect(library().classList.contains("open")).toBe(false);
+  expect(activity().classList.contains("open")).toBe(true);
+
+  await act(async () => trigger.click());
+  expect(host.querySelector("#player-application-menu")).not.toBeNull();
+  expect(activity().classList.contains("open")).toBe(false);
+});
+
+it("reconnects Drive into Library without leaving Activity open", async () => {
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => eventListeners.get("system-issues-changed")?.({ payload: [liveIssue] }));
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    .find((button) => button.textContent?.includes("Issues"))?.click());
+  const reconnect = [...host.querySelectorAll<HTMLButtonElement>(".issue-card button")]
+    .find((button) => button.textContent === "Reconnect Drive")!;
+  await act(async () => {
+    reconnect.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["connect_google_drive"]);
+  expect(library().classList.contains("open")).toBe(true);
+  expect(activity().classList.contains("open")).toBe(false);
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+});
+
+it("opens Library exclusively after committing a clip from Activity", async () => {
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true })));
+  const add = [...host.querySelectorAll<HTMLButtonElement>("[role=dialog] button")]
+    .find((button) => button.textContent === "Add 1 song to queue")!;
+  await act(async () => add.click());
+  expect(library().classList.contains("open")).toBe(true);
+  expect(activity().classList.contains("open")).toBe(false);
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+});
+
+it("opens Activity exclusively from an issue toast over Library", async () => {
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
+  await act(async () => eventListeners.get("system-issues-changed")?.({ payload: [liveIssue] }));
+  const toast = host.querySelector<HTMLButtonElement>(".issue-toast")!;
+  expect(toast).not.toBeNull();
+  await act(async () => toast.click());
+  expect(library().classList.contains("open")).toBe(false);
+  expect(activity().classList.contains("open")).toBe(true);
+  expect(host.querySelector("#player-application-menu")).toBeNull();
 });
 
 it("keeps main playback actions in a focused icon-only overlay", async () => {

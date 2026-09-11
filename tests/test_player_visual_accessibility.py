@@ -32,6 +32,13 @@ def test_player_uses_repository_owned_svg_icons_without_placeholder_glyphs() -> 
     assert 'className="player-context"' in APP
     assert 'icon="menu"' in APP
     assert 'id="player-application-menu"' in APP
+    assert 'className="empty-stage"' not in APP
+    assert ".empty-stage" not in CSS
+    assert ".player-context { position: absolute; z-index: 24; inset: 14px 14px auto; display: flex; width: calc(100% - 28px); align-items: flex-start;" in CSS
+    assert ".now-playing { min-width: 0; flex: 1;" in CSS
+    assert ".video-stage { position: relative; min-height: 0; overflow: hidden; border: 0; border-radius: 0;" in CSS
+    assert "box-shadow: none; background: #030407;" in CSS
+    assert ".player-area {\n  display: grid;\n  min-height: 0;\n  grid-template-rows: minmax(0, 1fr);\n}" in CSS
     assert 'className="media-control-overlay player-controls"' in APP
     assert 'icon={volume <= 0.001 ? "volume-muted" : "volume-high"}' in APP
     assert 'icon="music"' in APP
@@ -112,14 +119,16 @@ def test_player_drawers_keep_exact_viewport_geometry_across_layout_modes() -> No
     assert re.search(r"\.drawer-scrim \{[^}]*position: fixed;[^}]*inset: 0;", CSS)
     assert re.search(r"\.library-drawer \{[^}]*position: fixed;[^}]*top: 0;[^}]*bottom: 0;", CSS)
     assert re.search(r"\.issues-drawer \{[^}]*position: fixed;[^}]*top: 0;[^}]*bottom: 0;", CSS)
-    assert ".activity-drawer { width: clamp(420px, 48vw, 760px);" in CSS
+    assert "--drawer-width: clamp(360px, 42vw, 560px);" in CSS
+    assert ".library-drawer { position: fixed;" in CSS and "width: var(--drawer-width);" in CSS
+    assert ".issues-drawer { position: fixed;" in CSS and "width: var(--drawer-width);" in CSS
+    assert ".library-drawer, .issues-drawer { top: auto; left: 0; width: 100%; height: min(80vh, 720px);" in CSS
     assert ".app-shell:fullscreen .library-drawer { top: 0; }" in CSS
     assert ".app-shell:fullscreen .drawer-scrim { inset: 0; }" in CSS
     assert ".app-shell:fullscreen .issues-drawer { top: 0; }" in CSS
     assert ".app-shell:fullscreen .issues-scrim { inset: 0; }" in CSS
     narrow = CSS.split("@media (max-width: 760px) {", 1)[1]
-    assert ".library-drawer { top: auto;" in narrow
-    assert ".issues-drawer { top: auto;" in narrow
+    assert ".library-drawer, .issues-drawer { top: auto;" in narrow
     assert ".drawer-scrim { inset: 0; }" in narrow
     assert ".issues-scrim { inset: 0; }" in narrow
 
