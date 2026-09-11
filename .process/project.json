@@ -1,13 +1,13 @@
 {
   "lifecycle": {
+    "publication": {
+      "required": true
+    },
     "requiredProfiles": [
       "frontend",
       "python",
       "rust"
-    ],
-    "publication": {
-      "required": true
-    }
+    ]
   },
   "profiles": {
     "frontend": [
