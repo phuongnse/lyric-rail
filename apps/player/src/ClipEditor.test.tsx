@@ -71,6 +71,37 @@ it("keeps preview controls inside the 16:9 frame as icon-only actions", async ()
   expect(host.querySelector("audio")!.volume).toBeCloseTo(.8, 5);
 });
 
+it("keeps Trim overlay keyboard activation and disabled states usable", async () => {
+  const screen = host.querySelector<HTMLElement>(".clip-picker-screen")!;
+  screen.focus();
+  await act(async () => {
+    screen.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true }));
+    await Promise.resolve();
+  });
+  expect(button("Pause")).toBeDefined();
+  expect(document.activeElement).toBe(screen);
+
+  await act(async () => root.render(<ClipEditor key="busy" preview={source()} busy containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
+  for (const label of ["Play", "Previous frame", "Next frame", "Mute preview"]) {
+    expect(button(label)?.hasAttribute("disabled")).toBe(true);
+  }
+});
+
+it("keeps audio-only and unavailable-video fallbacks explicit", async () => {
+  const audioOnly = { ...source(), clipId: "audio-only", videoUrl: undefined };
+  await act(async () => root.render(<ClipEditor key="audio-only" preview={audioOnly} busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
+  expect(host.querySelector(".clip-audio-art")).not.toBeNull();
+  expect(button("Play")?.hasAttribute("disabled")).toBe(false);
+
+  await act(async () => root.render(<ClipEditor key="compatibility" preview={{ ...audioOnly, clipId: "compatibility", requiresCompatibility: true }} busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
+  expect(host.querySelector(".clip-audio-art")?.textContent).toContain("Compatible preview needed");
+  expect(button("Play")?.hasAttribute("disabled")).toBe(true);
+
+  await act(async () => root.render(<ClipEditor key="unavailable" preview={source()} busy={false} containerRef={createRef()} onClose={close} onCommit={commit} onPlay={play} />));
+  await act(async () => host.querySelector(".clip-screen video")!.dispatchEvent(new Event("error")));
+  expect(host.querySelector(".clip-error")?.textContent).toContain("Video preview is unavailable.");
+});
+
 it("keeps the whole video ready and creates ordered sections from timeline click pairs", async () => {
   expect(host.querySelectorAll(".clip-section-block")).toHaveLength(1);
   expect(button("Add 1 song to queue")?.hasAttribute("disabled")).toBe(false);
