@@ -56,7 +56,29 @@
   gap: 12px;
 }
 .media-control-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.media-control-group.player-transport { gap: 10px; }
 .media-control-group.end { justify-content: flex-end; }
+.media-control-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(12, 16, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+}
+.media-control-overlay .media-control-cluster .icon-control {
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+}
+.media-control-overlay .media-control-cluster .icon-control:hover:not(:disabled),
+.media-control-overlay .media-control-cluster .icon-control:focus-visible,
+.media-control-overlay .media-control-cluster .icon-control.active {
+  border-color: transparent;
+  color: var(--accent);
+  background: rgba(255, 204, 77, 0.14);
+}
 .media-control-overlay .icon-control {
   border-color: rgba(255,255,255,.14);
   color: var(--soft);

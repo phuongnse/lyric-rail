@@ -448,6 +448,13 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
   for (const label of ["Play song", "Stop playback", "Previous ready song", "Next ready song", "Enable vocals (Original)", "Mute volume", "Enter fullscreen"]) {
     expect(control(label)).toBeDefined();
   }
+  const clusters = overlay.querySelectorAll(".player-transport .media-control-cluster");
+  expect(clusters.length).toBe(2);
+  expect(clusters[0].querySelector('[aria-label="Play song"]')).not.toBeNull();
+  expect(clusters[0].querySelector('[aria-label="Stop playback"]')).not.toBeNull();
+  expect(clusters[1].querySelector('[aria-label="Previous ready song"]')).not.toBeNull();
+  expect(clusters[1].querySelector('[aria-label="Next ready song"]')).not.toBeNull();
+  expect(control("Play song").classList.contains("media-control-primary")).toBe(false);
   for (const action of overlay.querySelectorAll<HTMLButtonElement>("button")) {
     action.focus();
     expect(document.activeElement).toBe(action);

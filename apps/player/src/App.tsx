@@ -1873,10 +1873,14 @@ function App() {
               </div>
               <div className="media-control-row">
                 <div className="media-control-group player-transport">
-                  <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
-                  <IconButton icon="stop" iconSize={19} label="Stop playback" onClick={stopPlayback} disabled={!opened} />
-                  <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
-                  <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
+                  <div className="media-control-cluster">
+                    <IconButton icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
+                    <IconButton icon="stop" iconSize={19} label="Stop playback" onClick={stopPlayback} disabled={!opened} />
+                  </div>
+                  <div className="media-control-cluster">
+                    <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
+                    <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
+                  </div>
                 </div>
                 <div className="media-control-group end">
                   {(() => {
