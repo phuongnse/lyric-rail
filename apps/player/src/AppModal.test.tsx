@@ -150,6 +150,9 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   expect(document.activeElement).toBe(menu.querySelector("button"));
   const menuItems = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
   expect(menuItems).toHaveLength(4);
+  const settingsItem = menuItems.find((item) => item.textContent?.includes("Settings"));
+  expect(settingsItem?.querySelector("circle[cx='12'][cy='12'][r='3']")).not.toBeNull();
+  expect(settingsItem?.querySelector("path")?.getAttribute("d")).toContain("M19.4 15a1.65 1.65 0 0 0 .33 1.82");
   menuItems[menuItems.length - 1]!.focus();
   act(() => menuItems[menuItems.length - 1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
   expect(document.activeElement).toBe(menuItems[0]);
