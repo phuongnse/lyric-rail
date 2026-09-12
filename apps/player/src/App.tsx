@@ -1872,7 +1872,13 @@ function App() {
                 <output>{formatTime(effectiveDuration)}</output>
               </div>
               <div className="media-control-row">
-                <div className="media-control-group">
+                <div className="media-control-group player-transport">
+                  <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
+                  <IconButton icon="stop" iconSize={19} label="Stop playback" onClick={stopPlayback} disabled={!opened} />
+                  <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
+                  <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
+                </div>
+                <div className="media-control-group end">
                   {(() => {
                     const tracks = opened?.media.audioTracks ?? [];
                     if (tracks.length === 0) return null;
@@ -1897,13 +1903,6 @@ function App() {
                       />
                     );
                   })()}
-                </div>
-                <div className="media-control-group player-transport">
-                  <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
-                  <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
-                  <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
-                </div>
-                <div className="media-control-group end">
                   <IconButton className={shuffle ? "active" : ""} icon="shuffle" label={shuffle ? "Disable shuffle" : "Enable shuffle"} aria-pressed={shuffle} onClick={toggleShuffle} />
                   <IconButton icon={volume <= 0.001 ? "volume-muted" : "volume-high"} label={volume <= 0.001 ? "Unmute volume" : "Mute volume"} onClick={toggleMute} />
                   <input className="volume-range" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => applyVolume(Number(event.target.value))} style={{ "--progress": `${volume * 100}%` } as React.CSSProperties} />

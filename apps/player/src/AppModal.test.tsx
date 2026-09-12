@@ -445,7 +445,7 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
 
   expect(host.querySelector(".transport")).toBeNull();
   expect([...overlay.querySelectorAll("button")].every((button) => !button.textContent?.trim())).toBe(true);
-  for (const label of ["Play song", "Previous ready song", "Next ready song", "Enable vocals (Original)", "Mute volume", "Enter fullscreen"]) {
+  for (const label of ["Play song", "Stop playback", "Previous ready song", "Next ready song", "Enable vocals (Original)", "Mute volume", "Enter fullscreen"]) {
     expect(control(label)).toBeDefined();
   }
   for (const action of overlay.querySelectorAll<HTMLButtonElement>("button")) {
@@ -853,6 +853,36 @@ it("stops playback and exits to the empty stage when Escape is pressed during pl
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 
+  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).not.toBeNull();
+});
+
+it("stops playback and exits to the empty stage when Stop button is clicked", async () => {
+  await act(async () => root.unmount());
+  const firstSong = readyCatalog.items[0]!;
+  catalogFixture = {
+    ...readyCatalog,
+    items: [firstSong],
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  expect(frame.querySelector(".media-control-overlay.player-controls")).not.toBeNull();
+  expect(frame.querySelector(".empty-stage")).toBeNull();
+
+  const stopBtn = frame.querySelector<HTMLButtonElement>('.player-transport [aria-label="Stop playback"]')!;
+  expect(stopBtn).not.toBeNull();
+
+  vi.mocked(invoke).mockClear();
+  await act(async () => stopBtn.click());
+
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["set_playback_active", { playing: false }]);
   expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
   expect(frame.querySelector(".empty-stage")).not.toBeNull();
 });
