@@ -15,6 +15,7 @@ import {
   activeProcessingTasksByItem,
   adjacentReadyItem,
   issueForLibraryItem,
+  nextReadyItemOnEnded,
   sourceDisplayLabel,
   type CatalogSnapshot,
   type LibraryItem,
@@ -1807,13 +1808,11 @@ function App() {
                 onPlay={() => setPlaying(true)}
                 onPause={(event) => { setTime(event.currentTarget.currentTime); setPlaying(false); }}
                 onEnded={() => {
-                  if (ready.length > 1) {
-                    move(1);
+                  const nextItem = nextReadyItemOnEnded(catalog.items, currentId, shuffle);
+                  if (nextItem) {
+                    openItem(nextItem);
                   } else {
-                    setTime(0);
-                    setPlaying(false);
-                    if (audioRef.current) audioRef.current.currentTime = 0;
-                    if (videoRef.current) videoRef.current.currentTime = 0;
+                    stopPlayback();
                   }
                 }}
                 onError={() => reportError("playback", "Audio playback failed", "Audio range could not be authenticated or downloaded.")}

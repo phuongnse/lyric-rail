@@ -738,7 +738,7 @@ it("aligns now-playing header with menu toggle and supports interaction-driven v
   expect(context.classList.contains("is-visible")).toBe(true);
 });
 
-it("retains valid duration on song end and resynchronizes seekbar and playback on replay", async () => {
+it("cleanly stops playback and returns to the stage when playback ends and no next song is available", async () => {
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!.click());
   await act(async () => host.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
@@ -746,7 +746,6 @@ it("retains valid duration on song end and resynchronizes seekbar and playback o
   const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
   const overlay = frame.querySelector<HTMLElement>(".media-control-overlay.player-controls")!;
   const audio = frame.querySelector<HTMLAudioElement>("audio")!;
-  const video = frame.querySelector<HTMLVideoElement>("video")!;
   const control = (label: string) => overlay.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
 
   Object.defineProperty(audio, "duration", { configurable: true, value: 180 });
@@ -765,28 +764,47 @@ it("retains valid duration on song end and resynchronizes seekbar and playback o
   Object.defineProperty(audio, "currentTime", { configurable: true, value: 180, writable: true });
   await act(async () => audio.dispatchEvent(new Event("ended", { bubbles: true })));
 
-  // Position cleanly resets to 0 without re-invoking open_library_item or losing duration
-  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "open_library_item")).toBe(false);
-  expect(control("Play song")).toBeDefined();
-  expect(audio.currentTime).toBe(0);
-  expect(video.currentTime).toBe(0);
-  expect(seek.max).toBe("180");
-  expect(seek.value).toBe("0");
+  // Cleanly stops playback and returns to stage when no next song exists
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["set_playback_active", { playing: false }]);
+  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).not.toBeNull();
+});
 
-  // User seeks while stopped after song completed
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(seek, "45");
-  await act(async () => {
-    seek.dispatchEvent(new Event("input", { bubbles: true }));
-    seek.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  expect(audio.currentTime).toBe(45);
-  expect(video.currentTime).toBe(45);
+it("advances to next song on song end or returns to stage when reaching end of queue", async () => {
+  await act(async () => root.unmount());
+  const firstSong = readyCatalog.items[0]!;
+  catalogFixture = {
+    ...readyCatalog,
+    items: [firstSong, { ...firstSong, id: "song-2", title: "Second song" }],
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
 
-  // Replay starts from seek position with duration preserved
-  Object.defineProperty(audio, "ended", { configurable: true, value: false });
-  await act(async () => control("Play song").click());
-  expect(control("Pause song")).toBeDefined();
-  expect(seek.max).toBe("180");
+  // Play first song
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  const audio = frame.querySelector<HTMLAudioElement>("audio")!;
+
+  // First song ends -> advances to second song
+  vi.mocked(invoke).mockClear();
+  Object.defineProperty(audio, "ended", { configurable: true, value: true });
+  await act(async () => audio.dispatchEvent(new Event("ended", { bubbles: true })));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["open_library_item", { itemId: "song-2" }]);
+
+  // Second song ends -> end of queue without shuffle -> returns to stage
+  vi.mocked(invoke).mockClear();
+  const currentAudio = frame.querySelector<HTMLAudioElement>("audio")!;
+  Object.defineProperty(currentAudio, "ended", { configurable: true, value: true });
+  await act(async () => currentAudio.dispatchEvent(new Event("ended", { bubbles: true })));
+
+  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).not.toBeNull();
 });
 
 it("does not render a close button in now-playing", async () => {

@@ -81,6 +81,25 @@ export function shuffledReadyItem(
   return choices[Math.floor(random() * choices.length)];
 }
 
+export function nextReadyItemOnEnded(
+  items: LibraryItem[],
+  currentId: string | undefined,
+  shuffle: boolean,
+  random = Math.random,
+): LibraryItem | undefined {
+  const ready = readyItems(items);
+  if (shuffle) {
+    const choices = ready.filter((item) => item.id !== currentId);
+    if (!choices.length) return undefined;
+    return shuffledReadyItem(items, currentId, random);
+  }
+  const index = ready.findIndex((item) => item.id === currentId);
+  if (index >= 0 && index + 1 < ready.length) {
+    return ready[index + 1];
+  }
+  return undefined;
+}
+
 export function visibleRange(
   itemCount: number,
   scrollTop: number,
