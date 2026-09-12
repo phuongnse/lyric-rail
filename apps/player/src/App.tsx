@@ -985,6 +985,23 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [catalog.items, native, query, reportError]);
 
+  const pauseElements = useCallback(() => {
+    audioRef.current?.pause();
+    videoRef.current?.pause();
+    setPlaying(false);
+    if (native) invoke("set_playback_active", { playing: false }).catch(() => undefined);
+  }, [native]);
+
+  const stopPlayback = useCallback(() => {
+    pauseElements();
+    setOpened(undefined);
+    setCurrentId(undefined);
+    setTime(0);
+    setDuration(0);
+    setPendingPlay(false);
+    if (native) invoke("set_playback_active", { playing: false }).catch(() => undefined);
+  }, [native, pauseElements]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -1006,12 +1023,13 @@ function App() {
         }
         else if (menuOpen) closeMenu();
         else if (issuesOpen) setIssuesOpen(false);
-        else setDrawerOpen(false);
+        else if (drawerOpen) setDrawerOpen(false);
+        else if (opened) stopPlayback();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native]);
+  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, drawerOpen, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native, opened, stopPlayback]);
 
   useEffect(() => {
     if (issuesOpen) {
@@ -1294,13 +1312,6 @@ function App() {
     }
     setPlaying(true);
     if (native) invoke("set_playback_active", { playing: true }).catch(() => undefined);
-  };
-
-  const pauseElements = () => {
-    audioRef.current?.pause();
-    videoRef.current?.pause();
-    setPlaying(false);
-    if (native) invoke("set_playback_active", { playing: false }).catch(() => undefined);
   };
 
   const openItem = async (item: LibraryItem) => {
@@ -1877,6 +1888,7 @@ function App() {
                 <div className="media-control-group player-transport">
                   <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
                   <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
+                  <IconButton icon="stop" iconSize={19} label="Stop playback" onClick={stopPlayback} disabled={!opened} />
                   <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
                 </div>
                 <div className="media-control-group end">

@@ -17,6 +17,7 @@ export const ICON_NAMES = [
   "search",
   "play",
   "pause",
+  "stop",
   "previous",
   "next",
   "shuffle",
@@ -52,6 +53,8 @@ function glyph(name: IconName): ReactNode {
       return <path d="M8 5.7v12.6a1 1 0 0 0 1.55.83l8.4-6.3a1 1 0 0 0 0-1.66l-8.4-6.3A1 1 0 0 0 8 5.7Z" fill="currentColor" stroke="none"/>;
     case "pause":
       return <><path d="M9 6v12"/><path d="M15 6v12"/></>;
+    case "stop":
+      return <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none"/>;
     case "previous":
       return <><path d="M6.5 5v14"/><path d="m17.5 6-8 6 8 6Z" fill="currentColor" stroke="none"/></>;
     case "next":
