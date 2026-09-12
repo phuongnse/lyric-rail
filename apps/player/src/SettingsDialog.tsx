@@ -41,7 +41,17 @@ export function SettingsDialog({
   const models = snapshot?.modelCatalog ?? [];
   const missing = models.filter((model) => !model.installed).length;
   return (
-    <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div
+      className="modal-layer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !busy) {
+          onClose();
+        }
+      }}
+    >
       <div className="settings-dialog panel" ref={dialog} tabIndex={-1}>
         <header>
           <div><p className="eyebrow">Application</p><h2 id="settings-title">Settings</h2></div>

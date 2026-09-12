@@ -1856,7 +1856,16 @@ function App() {
       />
 
       {lyricDialog && (
-        <div className="modal-layer" role="dialog" aria-modal="true">
+        <div
+          className="modal-layer"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !busy) {
+              setLyricDialog(undefined);
+            }
+          }}
+        >
           <div ref={lyricDialogRef} className="lyric-dialog panel">
             <header><div><p className="eyebrow">{lyricDialog.mode === "edit" ? "Confirmed revision" : "Authoritative lyrics"}</p><h2>{lyricDialog.item.title}</h2></div><IconButton className="dialog-close" icon="close" label="Close lyric editor" onClick={() => setLyricDialog(undefined)} /></header>
             <p>{lyricDialog.mode === "edit" ? "Nothing changes until you confirm. The original package remains valid until its revision authenticates." : "Paste exact UTF-8 lyrics, one semantic phrase per line."}</p>
@@ -1868,7 +1877,17 @@ function App() {
       )}
 
       {deleteCandidate && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="delete-item-title">
+        <div
+          className="modal-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-item-title"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !busy) {
+              setDeleteCandidate(undefined);
+            }
+          }}
+        >
           <div ref={deleteDialogRef} className="setup-dialog panel" tabIndex={-1}>
             <header><div><p className="eyebrow">Unfinished Library item</p><h2 id="delete-item-title">Remove “{deleteCandidate.title}”?</h2></div><IconButton className="dialog-close" icon="close" label="Cancel removing item" onClick={() => setDeleteCandidate(undefined)} /></header>
             <p>This removes only this unfinished item from Library. The original media file and its lyric sidecar stay unchanged.</p>
@@ -1911,7 +1930,18 @@ function App() {
       />
 
       {confirmIssue && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="model-install-title">
+        <div
+          className="modal-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="model-install-title"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setConfirmIssue(undefined);
+              setLicenseConfirmed(false);
+            }
+          }}
+        >
           <div ref={setupDialogRef} className="setup-dialog panel" tabIndex={-1}>
             <header><div><p className="eyebrow">Processing setup</p><h2 id="model-install-title">Install pinned models?</h2></div><IconButton className="dialog-close" icon="close" label="Close model installation confirmation" onClick={() => { setConfirmIssue(undefined); setLicenseConfirmed(false); }} /></header>
             <p>This downloads several gigabytes of machine-local model files. LyricRail verifies every pinned revision and hash before retrying your songs.</p>
@@ -1923,7 +1953,17 @@ function App() {
       )}
 
       {aboutOpen && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <div
+          className="modal-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="about-title"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setAboutOpen(false);
+            }
+          }}
+        >
           <div ref={aboutDialogRef} className="about-dialog panel" tabIndex={-1}>
             <header><span className="about-kicker">About</span><IconButton className="dialog-close" icon="close" label="Close About" autoFocus onClick={() => setAboutOpen(false)} /></header>
             <div className="about-brand">

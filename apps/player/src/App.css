@@ -318,7 +318,7 @@ input[type="range"]::-webkit-slider-thumb { width: 15px; height: 15px; border: 2
 .task-output-line code { overflow: hidden; color: inherit; text-overflow: ellipsis; white-space: pre; }
 .task-output.raw .task-output-line code { overflow: visible; text-overflow: clip; }
 
-.modal-layer { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: 30px; background: var(--scrim); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.modal-layer { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: 30px; background: var(--scrim); }
 .lyric-dialog { display: grid; width: min(680px, 94vw); max-height: min(720px, 90vh); grid-template-rows: auto auto minmax(180px, 1fr) auto; padding: 18px; }
 .lyric-dialog header, .lyric-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .lyric-dialog h2 { margin: 0; font-size: 19px; }

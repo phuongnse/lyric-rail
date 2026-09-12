@@ -187,6 +187,15 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(host.querySelector("#about-title")).toBeNull();
   expect(document.activeElement).toBe(trigger);
+
+  await act(async () => trigger.click());
+  const aboutAgain = [...frame.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("About"))!;
+  await act(async () => aboutAgain.click());
+  const modalLayer = host.querySelector<HTMLElement>(".modal-layer")!;
+  expect(modalLayer).not.toBeNull();
+  await act(async () => modalLayer.click());
+  expect(host.querySelector("#about-title")).toBeNull();
 });
 
 it("removes the menu tooltip when the outside scrim is clicked", async () => {
