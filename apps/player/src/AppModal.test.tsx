@@ -167,6 +167,13 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   expect(document.activeElement).toBe(trigger);
 
   await act(async () => trigger.click());
+  expect(frame.querySelector("#player-application-menu")).not.toBeNull();
+  await act(async () => {
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+  });
+  expect(frame.querySelector("#player-application-menu")).toBeNull();
+
+  await act(async () => trigger.click());
   const about = [...frame.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
     .find((button) => button.textContent?.includes("About"))!;
   await act(async () => about.click());
