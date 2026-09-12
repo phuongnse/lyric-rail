@@ -9,7 +9,9 @@
   gap: 10px;
   padding: clamp(12px, 2.2vw, 22px);
   color: var(--soft);
-  background: linear-gradient(180deg, transparent, rgba(3,4,7,.9));
+  background: linear-gradient(180deg, transparent 0%, rgba(7,9,14,.45) 30%, rgba(7,9,14,.88) 100%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   opacity: 0;
   pointer-events: none;
   transform: translateY(8px);
@@ -45,31 +47,35 @@
 .media-control-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .media-control-group.end { justify-content: flex-end; }
 .media-control-overlay .icon-control {
-  border-color: rgba(255,255,255,.16);
+  border-color: rgba(255,255,255,.14);
   color: var(--soft);
-  background: rgba(5,7,11,.68);
+  background: rgba(10,14,20,.35);
   backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 .media-control-overlay .icon-control:hover:not(:disabled),
 .media-control-overlay .icon-control:focus-visible,
 .media-control-overlay .icon-control.active {
   border-color: rgba(255,204,77,.42);
   color: var(--accent);
-  background: rgba(255,204,77,.12);
+  background: rgba(255,204,77,.14);
 }
 .media-control-overlay .media-control-primary {
   width: 46px;
   height: 46px;
-  border: 0;
+  border: 1px solid rgba(255,204,77,.5);
   border-radius: 50%;
-  color: #17120a;
-  background: linear-gradient(145deg, #ffe18a, var(--accent-strong));
-  box-shadow: 0 8px 24px rgba(255,184,46,.2);
+  color: #151108;
+  background: var(--accent);
+  box-shadow: 0 4px 16px rgba(0,0,0,.32);
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
 }
 .media-control-overlay .media-control-primary:hover:not(:disabled),
 .media-control-overlay .media-control-primary:focus-visible {
-  color: #17120a;
-  background: linear-gradient(145deg, #ffebad, #ffc84a);
+  color: #151108;
+  background: #ffd86b;
+  border-color: rgba(255,204,77,.8);
+  transform: scale(1.04);
 }
 .media-control-overlay input[type="range"] { background: linear-gradient(90deg, var(--accent) var(--progress, 0%), rgba(255,255,255,.24) var(--progress, 0%)); }
 .media-control-overlay .volume-range { width: min(112px, 12vw); }
