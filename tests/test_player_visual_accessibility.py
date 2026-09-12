@@ -42,6 +42,27 @@ def test_player_uses_repository_owned_svg_icons_without_placeholder_glyphs() -> 
     assert ".player-context.is-visible { opacity: 1; pointer-events: auto; transform: translateY(0); }" in CSS
     assert ".now-playing { display: inline-flex; align-items: center; height: 44px; box-sizing: border-box; width: fit-content;" in CSS
     assert ".player-menu-toggle { width: 44px; height: 44px;" in CSS
+    assert 'visibleLabel="Application"' in APP
+    assert "onOpenActivity={opened ? undefined : showActivity}" in APP
+    shared_header_rule = CSS.split(".player-menu-toggle.player-application-toggle", 1)[1].split("}", 1)[0]
+    assert all(token in shared_header_rule for token in (
+        ".player-menu-toggle.player-library-toggle, .player-menu-toggle.player-activity-toggle",
+        "display: inline-flex",
+        "gap: 8px",
+        "height: 44px",
+        "padding: 0 14px",
+        "border: 1px solid rgba(255,255,255,.14)",
+        "border-radius: 12px",
+    ))
+    assert shared_header_rule.count("border:") == 1
+    assert all(token in CSS.split(".player-menu-toggle {", 1)[1].split("}", 1)[0] for token in (
+        "background: rgba(10,14,20,.22)",
+        "backdrop-filter: blur(10px)",
+        "-webkit-backdrop-filter: blur(10px)",
+    ))
+    assert ".player-menu-toggle.player-activity-toggle.has-running b" in CSS
+    assert ".player-menu-toggle.player-activity-toggle.has-issues b" in CSS
+    assert ".player-menu-toggle.player-activity-toggle.has-issues:hover" not in CSS
     assert ".video-stage { position: relative; min-height: 0; overflow: hidden; border: 0; border-radius: 0;" in CSS
     assert "box-shadow: none; background: #030407;" in CSS
     assert ".player-area {\n  display: grid;\n  min-height: 0;\n  grid-template-rows: minmax(0, 1fr);\n}" in CSS

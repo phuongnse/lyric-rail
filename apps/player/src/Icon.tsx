@@ -131,6 +131,7 @@ type IconButtonProps = Omit<
   label: string;
   icon: IconName;
   iconSize?: number;
+  visibleLabel?: string;
 };
 
 export function placeTooltip(
@@ -165,6 +166,7 @@ export function IconButton({
   label,
   icon,
   iconSize = 20,
+  visibleLabel,
   className = "",
   type = "button",
   onClick,
@@ -250,6 +252,7 @@ export function IconButton({
         onBlur={(event) => { setTooltip(undefined); onBlur?.(event); }}
       >
         <Icon name={icon} size={iconSize} />
+        {visibleLabel && <span className="icon-control-label">{visibleLabel}</span>}
       </button>
       {tooltip && typeof document !== "undefined" && createPortal(
         <span

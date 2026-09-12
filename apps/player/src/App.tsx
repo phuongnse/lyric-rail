@@ -124,6 +124,7 @@ type DrawerProps = {
   query: string;
   busy: boolean;
   blocked: boolean;
+  activityAvailable?: boolean;
   scrollToTopToken?: number;
   onClose: () => void;
   onRescan: () => void;
@@ -155,6 +156,7 @@ export function LibraryDrawer(props: DrawerProps) {
   const [height, setHeight] = useState(600);
   const [sourceMenu, setSourceMenu] = useState<"local" | "cloud">();
   const [itemMenu, setItemMenu] = useState<string>();
+  const activityAvailable = props.activityAvailable !== false;
   useEffect(() => {
     if (viewport.current) viewport.current.scrollTop = 0;
     setScrollTop(0);
@@ -305,8 +307,8 @@ export function LibraryDrawer(props: DrawerProps) {
                         {waiting && <button role="menuitem" onClick={() => closeItemMenu(() => props.onLyricsPaste(item))}><Icon name="edit" size={16} /><span>{item.canRename ? "Edit song" : "Paste lyrics"}</span></button>}
                         {waiting && <button role="menuitem" onClick={() => closeItemMenu(() => props.onLyricsFile(item))}><Icon name="music" size={16} /><span>Load TXT lyrics</span></button>}
                         {item.status === "failed" && item.canProcess && <button role="menuitem" onClick={() => closeItemMenu(() => props.onRetry(item))}><Icon name="refresh" size={16} /><span>Retry processing</span></button>}
-                        {(task || ["queued", "processing", "failed", "setup-required"].includes(item.status)) && <button role="menuitem" onClick={() => closeItemMenu(() => props.onShowContext(item))}><Icon name={item.status === "failed" || item.status === "setup-required" ? "alert" : "activity"} size={16} /><span>{item.status === "failed" || item.status === "setup-required" ? "View issue" : "View Activity"}</span></button>}
-                        {task && <button role="menuitem" onClick={() => closeItemMenu(() => props.onOpenActivity?.(item))}><Icon name="activity" size={16} /><span>Open Activity</span></button>}
+                        {activityAvailable && (task || ["queued", "processing", "failed", "setup-required"].includes(item.status)) && <button role="menuitem" onClick={() => closeItemMenu(() => props.onShowContext(item))}><Icon name={item.status === "failed" || item.status === "setup-required" ? "alert" : "activity"} size={16} /><span>{item.status === "failed" || item.status === "setup-required" ? "View issue" : "View Activity"}</span></button>}
+                        {activityAvailable && task && <button role="menuitem" onClick={() => closeItemMenu(() => props.onOpenActivity?.(item))}><Icon name="activity" size={16} /><span>Open Activity</span></button>}
                         {playable && item.sources.includes("Disk") && <button role="menuitem" onClick={() => closeItemMenu(() => props.onEditLyrics(item))}><Icon name="edit" size={16} /><span>Edit lyrics</span></button>}
                         {item.canDelete && <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}><Icon name="close" size={16} /><span>Remove from library</span></button>}
                       </div>}
@@ -1220,11 +1222,13 @@ function App() {
     setDrawerOpen((value) => !value);
   };
   const toggleActivity = () => {
+    if (opened) return;
     if (!issuesOpen) activityRestoreRef.current = menuOpen ? menuTriggerRef.current : (activityTriggerRef.current ?? contextFocusTarget());
     closeMenu();
     setIssuesOpen((value) => !value);
   };
   const showActivity = () => {
+    if (opened) return;
     if (!issuesOpen) activityRestoreRef.current = menuOpen ? menuTriggerRef.current : (activityTriggerRef.current ?? contextFocusTarget());
     closeMenu();
     setIssuesOpen(true);
@@ -1333,6 +1337,7 @@ function App() {
       }
       setPendingPlay(true);
       setDrawerOpen(false);
+      setIssuesOpen(false);
       setMenuOpen(false);
       setRecentIds((prev) => {
         const next = [item.id, ...prev.filter((id) => id !== item.id)].slice(0, 10);
@@ -1596,6 +1601,7 @@ function App() {
   };
 
   const showActivityTask = (task: TaskRecord) => {
+    if (opened) return;
     if (task.status !== "queued" && task.status !== "running" && task.status !== "paused") return;
     setSelectedIssueId(undefined);
     setActivityTab("tasks");
@@ -1609,6 +1615,7 @@ function App() {
   }, []);
 
   const showIssue = (issue: SystemIssue) => {
+    if (opened) return;
     setActivityTab("issues");
     showActivity();
     setPendingIssueFocusId(issue.id);
@@ -1721,6 +1728,7 @@ function App() {
 
   const events = opened?.renderPlan.events ?? [];
   const queueBadge = catalog.items.filter((item) => item.status === "processing" || item.status === "queued" || item.status === "waiting-for-lyrics").length;
+  const activityCount = activeTaskCount + systemIssues.length;
   const effectiveDuration = duration || (audioRef.current && Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0 ? audioRef.current.duration : 0);
 
   return (
@@ -1746,9 +1754,10 @@ function App() {
                   </button>
                 ) : (
                   <IconButton
-                    className="player-menu-toggle"
+                    className="player-menu-toggle player-application-toggle"
                     icon="menu"
                     label="Open application menu"
+                    visibleLabel="Application"
                     aria-haspopup="menu"
                     aria-expanded={menuOpen}
                     aria-controls="player-application-menu"
@@ -1786,18 +1795,20 @@ function App() {
                 )}
               </div>
             )}
-            <button
-              ref={activityTriggerRef}
-              className={`player-menu-toggle player-activity-toggle issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`}
-              onClick={toggleActivity}
-              aria-expanded={issuesOpen}
-              aria-controls="system-issues"
-              aria-label="Activity"
-            >
-              <Icon name={systemIssues.length ? "alert" : "activity"} size={18} />
-              <span>Activity</span>
-              {(activeTaskCount + systemIssues.length) > 0 && <b>{activeTaskCount + systemIssues.length}</b>}
-            </button>
+            {!opened && (
+              <button
+                ref={activityTriggerRef}
+                className={`player-menu-toggle player-activity-toggle issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`}
+                onClick={toggleActivity}
+                aria-expanded={issuesOpen}
+                aria-controls="system-issues"
+                aria-label={activityCount > 0 ? `Activity, ${activityCount} update${activityCount === 1 ? "" : "s"}` : "Activity"}
+              >
+                <Icon name={systemIssues.length ? "alert" : "activity"} size={18} />
+                <span>Activity</span>
+                {activityCount > 0 && <b aria-live="polite">{activityCount}</b>}
+              </button>
+            )}
           </div>
           {opened ? (
             <>
@@ -1828,11 +1839,11 @@ function App() {
             <div className="empty-stage">
               <div className="stage-video-grid" role="list" aria-label="Available songs">
                 <button
-                  className="stage-video-card stage-library-card empty-stage-library-btn"
+                  className="stage-video-card stage-library-card empty-stage-library-btn library-toggle"
                   onClick={showLibrary}
                   role="listitem"
-                  aria-label="Open library"
-                >Open library</button>
+                  aria-label={queueBadge > 0 ? `Open library, ${queueBadge} queued item${queueBadge === 1 ? "" : "s"}` : "Open library"}
+                >Open library{queueBadge > 0 && <b>{queueBadge}</b>}</button>
                 {stageSongs.map((item) => (
                   <button
                     key={item.id}
@@ -1933,6 +1944,7 @@ function App() {
         query={query}
         busy={busy || !native}
         blocked={systemModalOpen}
+        activityAvailable={!opened}
         onClose={() => setDrawerOpen(false)}
         onRescan={rescanLibrary}
         onQuery={setQuery}
@@ -1954,36 +1966,38 @@ function App() {
         onRecoveryRestore={restoreRecovery}
       />
 
-      <ActivityCenter
-        open={issuesOpen}
-        issues={systemIssues}
-        tasks={activityTasks}
-        runningTotal={taskState.activeTaskCount}
-        nowMillis={nowMillis}
-        tab={activityTab}
-        selectedTaskId={selectedTaskId}
-        selectedIssueId={selectedIssueId}
-        focusTaskId={pendingTaskFocusId}
-        focusIssueId={pendingIssueFocusId}
-        taskOutputById={taskState.output}
-        taskOutputTruncatedById={taskOutputTruncated}
-        headingRef={issuesHeadingRef}
-        onClose={() => { setIssuesOpen(false); setPendingTaskFocusId(undefined); setPendingIssueFocusId(undefined); }}
-        onTab={setActivityTab}
-        onSelectTask={selectActivityTask}
-        onOpenIssueTask={(issue) => { void openIssueTask(issue); }}
-        onTaskFocusComplete={completeTaskFocus}
-        onIssueFocusComplete={completeIssueFocus}
-        onCancelTask={cancelActivityTask}
-        onPauseTask={pauseActivityTask}
-        onResumeTask={resumeActivityTask}
-        onCopyTaskOutput={copyTaskOutput}
-        onDismiss={dismissIssue}
-        onResolve={resolveIssue}
-        onCopyDiagnostics={copyIssueDiagnostics}
-        blocked={systemModalOpen}
-        restoreRef={activityRestoreRef}
-      />
+      {!opened && (
+        <ActivityCenter
+          open={issuesOpen}
+          issues={systemIssues}
+          tasks={activityTasks}
+          runningTotal={taskState.activeTaskCount}
+          nowMillis={nowMillis}
+          tab={activityTab}
+          selectedTaskId={selectedTaskId}
+          selectedIssueId={selectedIssueId}
+          focusTaskId={pendingTaskFocusId}
+          focusIssueId={pendingIssueFocusId}
+          taskOutputById={taskState.output}
+          taskOutputTruncatedById={taskOutputTruncated}
+          headingRef={issuesHeadingRef}
+          onClose={() => { setIssuesOpen(false); setPendingTaskFocusId(undefined); setPendingIssueFocusId(undefined); }}
+          onTab={setActivityTab}
+          onSelectTask={selectActivityTask}
+          onOpenIssueTask={(issue) => { void openIssueTask(issue); }}
+          onTaskFocusComplete={completeTaskFocus}
+          onIssueFocusComplete={completeIssueFocus}
+          onCancelTask={cancelActivityTask}
+          onPauseTask={pauseActivityTask}
+          onResumeTask={resumeActivityTask}
+          onCopyTaskOutput={copyTaskOutput}
+          onDismiss={dismissIssue}
+          onResolve={resolveIssue}
+          onCopyDiagnostics={copyIssueDiagnostics}
+          blocked={systemModalOpen}
+          restoreRef={activityRestoreRef}
+        />
+      )}
 
       {lyricDialog && (
         <div
@@ -2040,7 +2054,7 @@ function App() {
 
       {clipDialogOpen && clipPreview && (
         <div className="modal-layer" style={{ display: clipPreparing ? "none" : undefined }} role="dialog" aria-modal="true" aria-labelledby="clip-editor-title">
-            <ClipEditor preparationError={clipPreparationError} aiMessage={clipAiMessage} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onAiProcess={startClipAiProcess} onOpenActivity={showActivity} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed", "clip-preparation"); }} />
+            <ClipEditor preparationError={clipPreparationError} aiMessage={clipAiMessage} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onAiProcess={startClipAiProcess} onOpenActivity={opened ? undefined : showActivity} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed", "clip-preparation"); }} />
         </div>
       )}
 
@@ -2107,7 +2121,7 @@ function App() {
       )}
 
       {!native && <div className="notice">Browser preview — native playback and processing controls are disabled.</div>}
-      {shouldShowIssueNotice(anyModalOpen, issuesOpen, systemIssues[0], seenIssueNotice) && <button className="issue-toast" onClick={() => { setSeenIssueNotice(`${systemIssues[0]!.id}:${systemIssues[0]!.updatedAtMillis}`); showIssue(systemIssues[0]!); }}><span><strong>{systemIssues[0]!.title}</strong>{systemIssues[0]!.summary}</span><span>View issue</span></button>}
+      {!opened && shouldShowIssueNotice(anyModalOpen, issuesOpen, systemIssues[0], seenIssueNotice) && <button className="issue-toast" onClick={() => { setSeenIssueNotice(`${systemIssues[0]!.id}:${systemIssues[0]!.updatedAtMillis}`); showIssue(systemIssues[0]!); }}><span><strong>{systemIssues[0]!.title}</strong>{systemIssues[0]!.summary}</span><span>View issue</span></button>}
     </main>
   );
 }

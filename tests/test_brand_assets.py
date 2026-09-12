@@ -201,7 +201,7 @@ def test_player_and_bundle_use_only_the_canonical_brand_source() -> None:
     assert 'className="about-dialog panel"' in app
     assert "<strong>LyricRail</strong>" not in app
     assert 'className="empty-stage"' in app
-    assert app.count(">Open library</button>") == 1
+    assert len(re.findall(r">Open library\{queueBadge > 0 && <b>\{queueBadge\}</b>\}</button>", app)) == 1
     assert ".empty-brand-mark" not in css
     assert ".empty-stage" in css
     assert "tauri.svg" not in app and "src-tauri/icons/icon.png" not in app

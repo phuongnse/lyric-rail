@@ -136,6 +136,8 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   expect(context.querySelector(".now-playing")).toBeNull();
   expect(frame.querySelector(".empty-stage")?.textContent).toContain("Open library");
   const trigger = context.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  expect(trigger.classList.contains("player-application-toggle")).toBe(true);
+  expect(trigger.querySelector(".icon-control-label")?.textContent).toBe("Application");
 
   await act(async () => trigger.click());
   const menu = frame.querySelector<HTMLElement>("#player-application-menu")!;
@@ -143,12 +145,14 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   expect(menu.textContent).toContain("Settings");
   expect(menu.textContent).toContain("About");
   expect(menu.textContent).not.toContain("Library");
+  expect(menu.textContent).not.toContain("Activity");
   expect(context.querySelector(".issues-toggle")).not.toBeNull();
   expect(context.querySelector(".issues-toggle")?.textContent).toContain("Activity");
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   expect(document.activeElement).toBe(menu.querySelector("button"));
   const menuItems = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
   expect(menuItems).toHaveLength(2);
+  expect(menuItems.map((item) => item.textContent?.trim())).toEqual(["Settings", "About"]);
   const settingsItem = menuItems.find((item) => item.textContent?.includes("Settings"));
   expect(settingsItem?.querySelector("circle[cx='12'][cy='12'][r='3']")).not.toBeNull();
   expect(settingsItem?.querySelector("path")?.getAttribute("d")).toContain("M19.4 15a1.65 1.65 0 0 0 .33 1.82");
@@ -328,6 +332,10 @@ it("keeps Library and Activity badges synchronized with live state", async () =>
   await act(async () => root.render(<App />));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
 
+  const libraryCard = host.querySelector<HTMLButtonElement>(".stage-library-card.library-toggle");
+  expect(libraryCard).not.toBeNull();
+  expect(libraryCard?.querySelector("b")?.textContent).toBe("1");
+  expect(libraryCard?.getAttribute("aria-label")).toBe("Open library, 1 queued item");
   expect(host.querySelector(".issues-toggle b")).toBeNull();
 
   const update: TaskRuntimeUpdate = {
@@ -346,6 +354,7 @@ it("keeps Library and Activity badges synchronized with live state", async () =>
     eventListeners.get("system-issues-changed")?.({ payload: [liveIssue] });
   });
   expect(host.querySelector<HTMLButtonElement>(".issues-toggle b")?.textContent).toBe("2");
+  expect(host.querySelector<HTMLButtonElement>(".issues-toggle")?.getAttribute("aria-label")).toBe("Activity, 2 updates");
   expect(host.querySelector(".issues-toggle")?.className).toContain("has-issues");
 });
 
@@ -905,7 +914,11 @@ it("renders icon+text Library toggle during playback and unified icons across ro
   // On idle stage, header renders application menu toggle
   const idleToggle = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]');
   expect(idleToggle).not.toBeNull();
+  expect(idleToggle?.textContent).toContain("Application");
   expect(host.querySelector(".player-library-toggle")).toBeNull();
+
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  expect(host.querySelector(".issues-drawer.open")).not.toBeNull();
 
   // Open song row action menu and verify all items have an icon and text span
   const actionTrigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
@@ -925,6 +938,8 @@ it("renders icon+text Library toggle during playback and unified icons across ro
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
   // During playback, header menu toggle transforms into icon+text Library toggle without tooltip
+  expect(host.querySelector(".issues-toggle")).toBeNull();
+  expect(host.querySelector(".issues-drawer")).toBeNull();
   const libraryToggle = host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle");
   expect(libraryToggle).not.toBeNull();
   expect(libraryToggle!.textContent).toContain("Library");
@@ -943,12 +958,18 @@ it("renders icon+text Library toggle during playback and unified icons across ro
   const activeToggle = host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle")!;
   expect(activeToggle.classList.contains("active")).toBe(true);
 
+  const playbackRowAction = library().querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => playbackRowAction.click());
+  const playbackRowMenu = library().querySelector<HTMLElement>(".row-menu")!;
+  expect(playbackRowMenu.textContent).not.toContain("Activity");
+  expect(playbackRowMenu.textContent).not.toContain("View issue");
+
   // Clicking it again closes the drawer
   await act(async () => activeToggle.click());
   expect(library().classList.contains("open")).toBe(false);
   expect(host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle")!.classList.contains("active")).toBe(false);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Stop playback"]')!.click());
+  expect(host.querySelector(".issues-toggle")).not.toBeNull();
+  expect(host.querySelector(".issues-drawer")).not.toBeNull();
 });
-
-
-
-
