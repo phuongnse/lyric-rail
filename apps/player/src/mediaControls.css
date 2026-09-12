@@ -21,6 +21,11 @@
   pointer-events: auto;
   transform: none;
 }
+.media-player-frame.is-idle .media-control-overlay {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}
 .media-control-progress {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

@@ -679,3 +679,28 @@ it("keeps the old editor when compatible preview preparation is cancelled", asyn
     vi.mocked(invoke).mockImplementation(original);
   }
 });
+
+it("aligns now-playing header with menu toggle and supports interaction-driven visibility", async () => {
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  const context = frame.querySelector<HTMLElement>(".player-context")!;
+  const menuToggle = context.querySelector<HTMLButtonElement>(".player-menu-toggle")!;
+  expect(menuToggle).not.toBeNull();
+  expect(context.classList.contains("is-visible")).toBe(true);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const nowPlaying = host.querySelector<HTMLElement>(".now-playing")!;
+  expect(nowPlaying).not.toBeNull();
+  const title = nowPlaying.querySelector<HTMLElement>(".now-playing-title")!;
+  expect(title).not.toBeNull();
+  expect(title.textContent).toBe("Song");
+  expect(context.classList.contains("is-visible")).toBe(true);
+
+  await act(async () => {
+    window.dispatchEvent(new Event("pointermove"));
+  });
+  expect(context.classList.contains("is-visible")).toBe(true);
+});
+

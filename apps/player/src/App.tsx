@@ -694,6 +694,45 @@ function App() {
   const systemModalOpen = Boolean(confirmIssue) || aboutOpen || settingsOpen || Boolean(lyricDialog) || Boolean(deleteCandidate) || clipDialogOpen;
   const anyModalOpen = systemModalOpen || menuOpen;
   const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const [headerActive, setHeaderActive] = useState(true);
+  const headerIdleTimerRef = useRef<number | null>(null);
+
+  const resetHeaderActivity = useCallback(() => {
+    setHeaderActive(true);
+    if (headerIdleTimerRef.current !== null) {
+      window.clearTimeout(headerIdleTimerRef.current);
+    }
+    headerIdleTimerRef.current = window.setTimeout(() => {
+      setHeaderActive(false);
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    resetHeaderActivity();
+    const onUserActivity = () => resetHeaderActivity();
+
+    window.addEventListener("pointermove", onUserActivity, { passive: true });
+    window.addEventListener("keydown", onUserActivity, { passive: true });
+    window.addEventListener("focusin", onUserActivity, { passive: true });
+
+    return () => {
+      if (headerIdleTimerRef.current !== null) {
+        window.clearTimeout(headerIdleTimerRef.current);
+      }
+      window.removeEventListener("pointermove", onUserActivity);
+      window.removeEventListener("keydown", onUserActivity);
+      window.removeEventListener("focusin", onUserActivity);
+    };
+  }, [resetHeaderActivity]);
+
+  useEffect(() => {
+    resetHeaderActivity();
+  }, [opened?.media.videoUrl, resetHeaderActivity]);
+
+  const isInteractingWithSystem = anyModalOpen || drawerOpen || issuesOpen;
+  const isHeaderVisible = !opened || isInteractingWithSystem || headerActive;
+  const isStageIdle = Boolean(opened) && !isInteractingWithSystem && !headerActive;
+
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
   useFocusContainment(menuOpen, menuRef, undefined, menuTriggerRef);
   useFocusContainment(aboutOpen, aboutDialogRef, undefined, menuTriggerRef);
@@ -1599,8 +1638,11 @@ function App() {
   return (
     <main className="app-shell">
       <section className="player-area" inert={systemModalOpen}>
-        <div className="video-stage media-player-frame panel" ref={stageRef}>
-          <div className="player-context">
+        <div className={`video-stage media-player-frame panel ${isStageIdle ? "is-idle" : ""}`} ref={stageRef}>
+          <div
+            className={`player-context ${isHeaderVisible ? "is-visible" : ""}`}
+            onMouseEnter={resetHeaderActivity}
+          >
             <div className="player-command-menu">
               <div ref={menuTriggerRef}>
                 <IconButton
@@ -1639,10 +1681,22 @@ function App() {
                 </>
               )}
             </div>
-            {opened && currentItem && <div className="now-playing" aria-live="polite">
-              <strong>{currentItem.title}</strong>
-              <span>{currentItem.artist || currentItem.firstLyricLine}</span>
-            </div>}
+            {opened && currentItem && (
+              <div
+                className="now-playing"
+                aria-live="polite"
+              >
+                <span className="now-playing-content">
+                  <strong className="now-playing-title">{currentItem.title}</strong>
+                  {(currentItem.artist || currentItem.firstLyricLine) && (
+                    <>
+                      <span className="now-playing-separator" aria-hidden="true">•</span>
+                      <span className="now-playing-artist">{currentItem.artist || currentItem.firstLyricLine}</span>
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
           </div>
           {opened ? (
             <>
