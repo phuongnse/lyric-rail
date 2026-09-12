@@ -299,15 +299,15 @@ export function LibraryDrawer(props: DrawerProps) {
                     <div className="row-actions" onClick={(event) => event.stopPropagation()}>
                       <IconButton className="row-icon" icon="more" iconSize={17} label={`Open actions for ${item.title}`} aria-haspopup="menu" aria-expanded={itemMenu === item.id} onClick={() => setItemMenu((current) => current === item.id ? undefined : item.id)} />
                       {itemMenu === item.id && <div className="row-menu" role="menu" aria-label={`Actions for ${item.title}`}>
-                        {playable && <button role="menuitem" onClick={() => closeItemMenu(() => props.onPlay(item))}><Icon name="play" size={16} />Play</button>}
-                        {item.canProcess && <button role="menuitem" className="ai-menu-action" onClick={() => closeItemMenu(() => props.onAiProcess?.(item))}><Icon name="sparkles" size={16} />AI process track</button>}
-                        {waiting && <button role="menuitem" onClick={() => closeItemMenu(() => props.onLyricsPaste(item))}>{item.canRename ? "Edit song" : "Paste lyrics"}</button>}
-                        {waiting && <button role="menuitem" onClick={() => closeItemMenu(() => props.onLyricsFile(item))}>Load TXT lyrics</button>}
-                        {item.status === "failed" && item.canProcess && <button role="menuitem" onClick={() => closeItemMenu(() => props.onRetry(item))}>Retry processing</button>}
-                        {(task || ["queued", "processing", "failed", "setup-required"].includes(item.status)) && <button role="menuitem" onClick={() => closeItemMenu(() => props.onShowContext(item))}>{item.status === "failed" || item.status === "setup-required" ? "View issue" : "View Activity"}</button>}
-                        {task && <button role="menuitem" onClick={() => closeItemMenu(() => props.onOpenActivity?.(item))}>Open Activity</button>}
-                        {playable && item.sources.includes("Disk") && <button role="menuitem" onClick={() => closeItemMenu(() => props.onEditLyrics(item))}><Icon name="edit" size={16} />Edit lyrics</button>}
-                        {item.canDelete && <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}>Remove from library</button>}
+                        {playable && <button role="menuitem" onClick={() => closeItemMenu(() => props.onPlay(item))}><Icon name="play" size={16} /><span>Play</span></button>}
+                        {item.canProcess && <button role="menuitem" className="ai-menu-action" onClick={() => closeItemMenu(() => props.onAiProcess?.(item))}><Icon name="sparkles" size={16} /><span>AI process track</span></button>}
+                        {waiting && <button role="menuitem" onClick={() => closeItemMenu(() => props.onLyricsPaste(item))}><Icon name="edit" size={16} /><span>{item.canRename ? "Edit song" : "Paste lyrics"}</span></button>}
+                        {waiting && <button role="menuitem" onClick={() => closeItemMenu(() => props.onLyricsFile(item))}><Icon name="music" size={16} /><span>Load TXT lyrics</span></button>}
+                        {item.status === "failed" && item.canProcess && <button role="menuitem" onClick={() => closeItemMenu(() => props.onRetry(item))}><Icon name="refresh" size={16} /><span>Retry processing</span></button>}
+                        {(task || ["queued", "processing", "failed", "setup-required"].includes(item.status)) && <button role="menuitem" onClick={() => closeItemMenu(() => props.onShowContext(item))}><Icon name={item.status === "failed" || item.status === "setup-required" ? "alert" : "activity"} size={16} /><span>{item.status === "failed" || item.status === "setup-required" ? "View issue" : "View Activity"}</span></button>}
+                        {task && <button role="menuitem" onClick={() => closeItemMenu(() => props.onOpenActivity?.(item))}><Icon name="activity" size={16} /><span>Open Activity</span></button>}
+                        {playable && item.sources.includes("Disk") && <button role="menuitem" onClick={() => closeItemMenu(() => props.onEditLyrics(item))}><Icon name="edit" size={16} /><span>Edit lyrics</span></button>}
+                        {item.canDelete && <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}><Icon name="close" size={16} /><span>Remove from library</span></button>}
                       </div>}
                     </div>
                   </article>
@@ -1331,6 +1331,7 @@ function App() {
       }
       setPendingPlay(true);
       setDrawerOpen(false);
+      setMenuOpen(false);
       setRecentIds((prev) => {
         const next = [item.id, ...prev.filter((id) => id !== item.id)].slice(0, 10);
         try {
@@ -1730,17 +1731,30 @@ function App() {
           >
             <div className="player-command-menu">
               <div ref={menuTriggerRef}>
-                <IconButton
-                  className="player-menu-toggle"
-                  icon="menu"
-                  label="Open application menu"
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                  aria-controls="player-application-menu"
-                  onClick={toggleMenu}
-                />
+                {opened ? (
+                  <button
+                    className={`player-menu-toggle player-library-toggle ${drawerOpen ? "active" : ""}`}
+                    onClick={toggleLibrary}
+                    aria-expanded={drawerOpen}
+                    aria-controls="library-drawer"
+                  >
+                    <Icon name="music" size={18} />
+                    <span>Library</span>
+                    {queueBadge > 0 && <b>{queueBadge}</b>}
+                  </button>
+                ) : (
+                  <IconButton
+                    className="player-menu-toggle"
+                    icon="menu"
+                    label="Open application menu"
+                    aria-haspopup="menu"
+                    aria-expanded={menuOpen}
+                    aria-controls="player-application-menu"
+                    onClick={toggleMenu}
+                  />
+                )}
               </div>
-              {menuOpen && (
+              {!opened && menuOpen && (
                 <>
                   <button className="player-menu-scrim" aria-label="Close application menu" onClick={closeMenu} />
                   <div ref={menuRef} id="player-application-menu" className="player-menu panel" role="menu" aria-label="Application actions" onKeyDown={moveApplicationMenuFocus}>

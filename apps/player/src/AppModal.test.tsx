@@ -839,5 +839,62 @@ it("stops playback and exits to the empty stage when Escape is pressed during pl
   expect(frame.querySelector(".empty-stage")).not.toBeNull();
 });
 
+it("renders icon+text Library toggle during playback and unified icons across row menu items", async () => {
+  await act(async () => root.unmount());
+  catalogFixture = {
+    ...readyCatalog,
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  // On idle stage, header renders application menu toggle
+  const idleToggle = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]');
+  expect(idleToggle).not.toBeNull();
+  expect(host.querySelector(".player-library-toggle")).toBeNull();
+
+  // Open song row action menu and verify all items have an icon and text span
+  const actionTrigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => actionTrigger.click());
+  const rowMenu = host.querySelector<HTMLElement>(".row-menu")!;
+  expect(rowMenu).not.toBeNull();
+  const menuButtons = Array.from(rowMenu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'));
+  expect(menuButtons.length).toBeGreaterThan(0);
+  for (const button of menuButtons) {
+    expect(button.querySelector("svg")).not.toBeNull();
+    expect(button.querySelector("span")).not.toBeNull();
+  }
+
+  // Play the song
+  const playItem = menuButtons.find((btn) => btn.textContent === "Play")!;
+  await act(async () => playItem.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  // During playback, header menu toggle transforms into icon+text Library toggle without tooltip
+  const libraryToggle = host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle");
+  expect(libraryToggle).not.toBeNull();
+  expect(libraryToggle!.textContent).toContain("Library");
+  expect(libraryToggle!.querySelector("svg")).not.toBeNull();
+  expect(libraryToggle!.querySelector("span")?.textContent).toBe("Library");
+  // Ensure no tooltip attributes
+  expect(libraryToggle!.getAttribute("title")).toBeNull();
+  expect(libraryToggle!.getAttribute("aria-describedby")).toBeNull();
+
+  // Clicking Library toggle opens library drawer
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  expect(library().classList.contains("open")).toBe(false);
+
+  await act(async () => libraryToggle!.click());
+  expect(library().classList.contains("open")).toBe(true);
+  const activeToggle = host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle")!;
+  expect(activeToggle.classList.contains("active")).toBe(true);
+
+  // Clicking it again closes the drawer
+  await act(async () => activeToggle.click());
+  expect(library().classList.contains("open")).toBe(false);
+  expect(host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle")!.classList.contains("active")).toBe(false);
+});
+
+
 
 
