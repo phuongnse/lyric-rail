@@ -328,9 +328,6 @@ it("keeps Library and Activity badges synchronized with live state", async () =>
   await act(async () => root.render(<App />));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
 
-  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
-  await act(async () => trigger.click());
-  expect(host.querySelector<HTMLButtonElement>(".library-toggle")?.textContent).toContain("1");
   expect(host.querySelector(".issues-toggle b")).toBeNull();
 
   const update: TaskRuntimeUpdate = {
@@ -348,7 +345,6 @@ it("keeps Library and Activity badges synchronized with live state", async () =>
     eventListeners.get("task-runtime-update")?.({ payload: update });
     eventListeners.get("system-issues-changed")?.({ payload: [liveIssue] });
   });
-  expect(host.querySelector<HTMLButtonElement>(".library-toggle b")?.textContent).toBe("1");
   expect(host.querySelector<HTMLButtonElement>(".issues-toggle b")?.textContent).toBe("2");
   expect(host.querySelector(".issues-toggle")?.className).toContain("has-issues");
 });

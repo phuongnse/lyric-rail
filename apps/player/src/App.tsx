@@ -1828,14 +1828,11 @@ function App() {
             <div className="empty-stage">
               <div className="stage-video-grid" role="list" aria-label="Available songs">
                 <button
-                  className="stage-video-card stage-library-card empty-stage-library-btn library-toggle"
+                  className="stage-video-card stage-library-card empty-stage-library-btn"
                   onClick={showLibrary}
                   role="listitem"
                   aria-label="Open library"
-                >
-                  <span>Open library</span>
-                  {queueBadge > 0 && <b>{queueBadge}</b>}
-                </button>
+                >Open library</button>
                 {stageSongs.map((item) => (
                   <button
                     key={item.id}
