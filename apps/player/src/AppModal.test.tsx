@@ -295,7 +295,7 @@ it("keeps a compact Open library shortcut in the idle Player", async () => {
   expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
   await act(async () => host.querySelector<HTMLButtonElement>(".library-drawer .drawer-tool[aria-label='Close library']")!.click());
   expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(false);
-  await act(async () => empty.querySelector<HTMLButtonElement>("button")!.click());
+  await act(async () => empty.querySelector<HTMLButtonElement>(".empty-stage-library-btn")!.click());
   expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
 });
 

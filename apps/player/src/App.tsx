@@ -1816,33 +1816,31 @@ function App() {
           ) : null}
           {!opened && (
             <div className="empty-stage">
-              <div className="empty-stage-header">
-                <button className="empty-stage-library-btn" onClick={showLibrary}>Open library</button>
+              <div className="stage-video-grid" role="list" aria-label="Available songs">
+                {stageSongs.map((item) => (
+                  <button
+                    key={item.id}
+                    className="stage-video-card"
+                    onClick={() => { void openItem(item); }}
+                    role="listitem"
+                    aria-label={`Play ${item.title}`}
+                  >
+                    <div className="stage-video-thumb-wrap">
+                      <Thumbnail item={item} selected={false} />
+                    </div>
+                    <div className="stage-video-meta">
+                      <strong className="stage-video-title">{item.title}</strong>
+                      <span className="stage-video-subtitle">{item.artist || item.firstLyricLine || "Karaoke"}</span>
+                    </div>
+                  </button>
+                ))}
+                <button
+                  className="stage-video-card stage-library-card empty-stage-library-btn"
+                  onClick={showLibrary}
+                  role="listitem"
+                  aria-label="Open library"
+                >Open library</button>
               </div>
-              {stageSongs.length > 0 && (
-                <div className="stage-video-grid" role="list" aria-label="Available songs">
-                  {stageSongs.map((item) => (
-                    <button
-                      key={item.id}
-                      className="stage-video-card"
-                      onClick={() => { void openItem(item); }}
-                      role="listitem"
-                      aria-label={`Play ${item.title}`}
-                    >
-                      <div className="stage-video-thumb-wrap">
-                        <Thumbnail item={item} selected={false} />
-                        <div className="stage-video-play-overlay" aria-hidden="true">
-                          <Icon name="play" size={24} />
-                        </div>
-                      </div>
-                      <div className="stage-video-meta">
-                        <strong className="stage-video-title">{item.title}</strong>
-                        <span className="stage-video-subtitle">{item.artist || item.firstLyricLine || "Karaoke"}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           )}
           {opened && (
