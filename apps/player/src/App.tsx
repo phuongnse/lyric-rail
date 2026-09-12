@@ -610,7 +610,7 @@ function App() {
   const [shuffle, setShuffle] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(0.9);
+  const [volume, setVolume] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [nativeIssues, setNativeIssues] = useState<SystemIssue[]>([]);
@@ -664,7 +664,7 @@ function App() {
   const deleteRestoreRef = useRef<HTMLElement>(null);
   const clipRestoreRef = useRef<HTMLElement>(null);
   const activityRestoreRef = useRef<HTMLElement>(null);
-  const lastAudibleVolumeRef = useRef(0.9);
+  const lastAudibleVolumeRef = useRef(1);
   const selectedTaskIdRef = useRef<string | undefined>(undefined);
   const taskReplayRef = useRef(new Map<string, { dirty: boolean }>());
   const modelReplayTaskRef = useRef<string | undefined>(undefined);
@@ -1787,7 +1787,7 @@ function App() {
                     return (
                       <IconButton
                         className={`track-control ${isVocalActive ? "active" : ""}`}
-                        icon="music"
+                        icon={hasToggle ? (isVocalActive ? "mic" : "mic-off") : "mic"}
                         iconSize={18}
                         label={
                           hasToggle

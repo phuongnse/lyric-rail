@@ -457,15 +457,17 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
   expect(audio.currentTime).toBe(12);
   expect(video.currentTime).toBe(12);
 
+  expect(control("Enable vocals (Original)").querySelector("svg")?.innerHTML).toContain("m2 2 20 20");
   await act(async () => control("Enable vocals (Original)").click());
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   expect(control("Mute vocals (Karaoke)").getAttribute("aria-pressed")).toBe("true");
+  expect(control("Mute vocals (Karaoke)").querySelector("svg")?.innerHTML).toContain("M12 2a3 3 0 0 0-3 3v7");
   expect(audio.src).toContain("/original");
 
   await act(async () => control("Mute volume").click());
   expect(audio.volume).toBe(0);
   await act(async () => control("Unmute volume").click());
-  expect(audio.volume).toBeCloseTo(.9, 5);
+  expect(audio.volume).toBeCloseTo(1, 5);
 
   vi.mocked(invoke).mockClear();
   await act(async () => control("Next ready song").click());

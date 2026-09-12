@@ -47,7 +47,7 @@ def test_player_uses_repository_owned_svg_icons_without_placeholder_glyphs() -> 
     assert ".player-area {\n  display: grid;\n  min-height: 0;\n  grid-template-rows: minmax(0, 1fr);\n}" in CSS
     assert 'className="media-control-overlay player-controls"' in APP
     assert 'icon={volume <= 0.001 ? "volume-muted" : "volume-high"}' in APP
-    assert 'icon="music"' in APP
+    assert 'icon={hasToggle ? (isVocalActive ? "mic" : "mic-off") : "mic"}' in APP
     player_controls = APP.split('className="media-control-overlay player-controls"', 1)[1].split(
         "</section>", 1
     )[0]

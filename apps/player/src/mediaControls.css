@@ -28,12 +28,25 @@
 }
 .media-control-progress {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
   gap: 10px;
   align-items: center;
   color: var(--soft);
   font-size: var(--font-small);
   font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.media-control-progress output {
+  width: 48px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.media-control-progress output:first-of-type {
+  text-align: left;
+}
+.media-control-progress output:last-of-type {
+  text-align: right;
 }
 .media-control-progress input { min-width: 0; }
 .media-control-row {
