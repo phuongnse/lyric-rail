@@ -1000,12 +1000,15 @@ function App() {
           setTime(audio.currentTime);
           last = now;
         }
+        if (audio.duration && (!duration || duration === 0)) {
+          setDuration(audio.duration);
+        }
       }
       frame = requestAnimationFrame(update);
     };
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
-  }, [playing]);
+  }, [duration, playing]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
@@ -1245,6 +1248,11 @@ function App() {
     const start = playbackStartTime(audio.currentTime, audio.duration, audio.ended);
     audio.currentTime = start;
     video.currentTime = start;
+    setTime(start);
+    const audioDuration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+    if (audioDuration > 0 && (!duration || duration === 0)) {
+      setDuration(audioDuration);
+    }
     const [, audioResult] = await Promise.allSettled([video.play(), audio.play()]);
     if (audioResult.status === "rejected") {
       video.pause();
@@ -1271,9 +1279,15 @@ function App() {
       setSelectedId(item.id);
       setTrackId(result.media.audioTracks.find((track) => track.default)?.id ?? result.media.audioTracks[0]?.id ?? "karaoke");
       setTime(0);
-      setDuration(0);
+      if (audioRef.current && Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0 && currentId === item.id) {
+        setDuration(audioRef.current.duration);
+      } else {
+        setDuration(0);
+      }
       setPendingPlay(true);
       setDrawerOpen(false);
+      videoRef.current?.load();
+      audioRef.current?.load();
     } catch (reason) { reportError("playback", "Song could not be opened", reason); }
   };
 
@@ -1648,6 +1662,7 @@ function App() {
 
   const events = opened?.renderPlan.events ?? [];
   const queueBadge = catalog.items.filter((item) => item.status === "processing" || item.status === "queued" || item.status === "waiting-for-lyrics").length;
+  const effectiveDuration = duration || (audioRef.current && Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0 ? audioRef.current.duration : 0);
 
   return (
     <main className="app-shell">
@@ -1718,9 +1733,19 @@ function App() {
                 src={activeTrack?.url}
                 preload="auto"
                 onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+                onDurationChange={(event) => setDuration(event.currentTarget.duration || 0)}
                 onPlay={() => setPlaying(true)}
                 onPause={(event) => { setTime(event.currentTarget.currentTime); setPlaying(false); }}
-                onEnded={() => move(1)}
+                onEnded={() => {
+                  if (ready.length > 1) {
+                    move(1);
+                  } else {
+                    setTime(0);
+                    setPlaying(false);
+                    if (audioRef.current) audioRef.current.currentTime = 0;
+                    if (videoRef.current) videoRef.current.currentTime = 0;
+                  }
+                }}
                 onError={() => reportError("playback", "Audio playback failed", "Audio range could not be authenticated or downloaded.")}
               />
               <div className="stage-shade" />
@@ -1728,66 +1753,68 @@ function App() {
             </>
           ) : null}
           {!opened && <div className="empty-stage"><button onClick={showLibrary}>Open library</button></div>}
-          {opened && <div className="media-control-overlay player-controls" aria-label="Player controls">
-            <div className="media-control-progress">
-              <output>{formatTime(time)}</output>
-              <input
-                type="range"
-                min="0"
-                max={Math.max(0, duration)}
-                step="0.01"
-                value={Math.min(time, duration || 0)}
-                aria-label="Seek song"
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (audioRef.current) audioRef.current.currentTime = next;
-                  if (videoRef.current) videoRef.current.currentTime = next;
-                  setTime(next);
-                }}
-                style={{ "--progress": `${duration ? (time / duration) * 100 : 0}%` } as React.CSSProperties}
-              />
-              <output>{formatTime(duration)}</output>
+          {opened && (
+            <div className="media-control-overlay player-controls" aria-label="Player controls">
+              <div className="media-control-progress">
+                <output>{formatTime(time)}</output>
+                <input
+                  type="range"
+                  min="0"
+                  max={Math.max(0, effectiveDuration)}
+                  step="0.01"
+                  value={Math.min(time, effectiveDuration || 0)}
+                  aria-label="Seek song"
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (audioRef.current) audioRef.current.currentTime = next;
+                    if (videoRef.current) videoRef.current.currentTime = next;
+                    setTime(next);
+                  }}
+                  style={{ "--progress": `${effectiveDuration ? (time / effectiveDuration) * 100 : 0}%` } as React.CSSProperties}
+                />
+                <output>{formatTime(effectiveDuration)}</output>
+              </div>
+              <div className="media-control-row">
+                <div className="media-control-group">
+                  {(() => {
+                    const tracks = opened?.media.audioTracks ?? [];
+                    if (tracks.length === 0) return null;
+                    const karaokeTrack = tracks.find((t) => t.id === "karaoke" || t.name.toLowerCase().includes("karaoke")) ?? tracks[0];
+                    const vocalTrack = tracks.find((t) => t.id !== karaokeTrack?.id) ?? tracks[1];
+                    const isVocalActive = Boolean(vocalTrack && activeTrack && activeTrack.id === vocalTrack.id);
+                    const nextTrack = isVocalActive ? karaokeTrack : (vocalTrack ?? karaokeTrack);
+                    const hasToggle = Boolean(vocalTrack && karaokeTrack && vocalTrack.id !== karaokeTrack.id);
+                    return (
+                      <IconButton
+                        className={`track-control ${isVocalActive ? "active" : ""}`}
+                        icon="music"
+                        iconSize={18}
+                        label={
+                          hasToggle
+                            ? (isVocalActive ? "Mute vocals (Karaoke)" : "Enable vocals (Original)")
+                            : `Audio: ${activeTrack?.name || "Track"}`
+                        }
+                        aria-pressed={isVocalActive}
+                        onClick={() => { if (hasToggle && nextTrack) switchTrack(nextTrack); }}
+                        disabled={!hasToggle}
+                      />
+                    );
+                  })()}
+                </div>
+                <div className="media-control-group player-transport">
+                  <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
+                  <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
+                  <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
+                </div>
+                <div className="media-control-group end">
+                  <IconButton className={shuffle ? "active" : ""} icon="shuffle" label={shuffle ? "Disable shuffle" : "Enable shuffle"} aria-pressed={shuffle} onClick={toggleShuffle} />
+                  <IconButton icon={volume <= 0.001 ? "volume-muted" : "volume-high"} label={volume <= 0.001 ? "Unmute volume" : "Mute volume"} onClick={toggleMute} />
+                  <input className="volume-range" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => applyVolume(Number(event.target.value))} style={{ "--progress": `${volume * 100}%` } as React.CSSProperties} />
+                  <IconButton icon={fullscreen ? "fullscreen-exit" : "fullscreen"} label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => { void toggleFullscreen(); }} />
+                </div>
+              </div>
             </div>
-            <div className="media-control-row">
-              <div className="media-control-group">
-                {(() => {
-                  const tracks = opened?.media.audioTracks ?? [];
-                  if (tracks.length === 0) return null;
-                  const karaokeTrack = tracks.find((t) => t.id === "karaoke" || t.name.toLowerCase().includes("karaoke")) ?? tracks[0];
-                  const vocalTrack = tracks.find((t) => t.id !== karaokeTrack?.id) ?? tracks[1];
-                  const isVocalActive = Boolean(vocalTrack && activeTrack && activeTrack.id === vocalTrack.id);
-                  const nextTrack = isVocalActive ? karaokeTrack : (vocalTrack ?? karaokeTrack);
-                  const hasToggle = Boolean(vocalTrack && karaokeTrack && vocalTrack.id !== karaokeTrack.id);
-                  return (
-                    <IconButton
-                      className={`track-control ${isVocalActive ? "active" : ""}`}
-                      icon="music"
-                      iconSize={18}
-                      label={
-                        hasToggle
-                          ? (isVocalActive ? "Mute vocals (Karaoke)" : "Enable vocals (Original)")
-                          : `Audio: ${activeTrack?.name || "Track"}`
-                      }
-                      aria-pressed={isVocalActive}
-                      onClick={() => { if (hasToggle && nextTrack) switchTrack(nextTrack); }}
-                      disabled={!hasToggle}
-                    />
-                  );
-                })()}
-              </div>
-              <div className="media-control-group player-transport">
-                <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
-                <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
-                <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
-              </div>
-              <div className="media-control-group end">
-                <IconButton className={shuffle ? "active" : ""} icon="shuffle" label={shuffle ? "Disable shuffle" : "Enable shuffle"} aria-pressed={shuffle} onClick={toggleShuffle} />
-                <IconButton icon={volume <= 0.001 ? "volume-muted" : "volume-high"} label={volume <= 0.001 ? "Unmute volume" : "Mute volume"} onClick={toggleMute} />
-                <input className="volume-range" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => applyVolume(Number(event.target.value))} style={{ "--progress": `${volume * 100}%` } as React.CSSProperties} />
-                <IconButton icon={fullscreen ? "fullscreen-exit" : "fullscreen"} label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => { void toggleFullscreen(); }} />
-              </div>
-            </div>
-          </div>}
+          )}
         </div>
       </section>
 
