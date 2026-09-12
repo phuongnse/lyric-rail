@@ -665,6 +665,7 @@ function App() {
   const deleteRestoreRef = useRef<HTMLElement>(null);
   const clipRestoreRef = useRef<HTMLElement>(null);
   const activityRestoreRef = useRef<HTMLElement>(null);
+  const activityTriggerRef = useRef<HTMLButtonElement>(null);
   const lastAudibleVolumeRef = useRef(1);
   const selectedTaskIdRef = useRef<string | undefined>(undefined);
   const taskReplayRef = useRef(new Map<string, { dirty: boolean }>());
@@ -1219,12 +1220,12 @@ function App() {
     setDrawerOpen((value) => !value);
   };
   const toggleActivity = () => {
-    if (!issuesOpen) activityRestoreRef.current = menuOpen ? menuTriggerRef.current : contextFocusTarget();
+    if (!issuesOpen) activityRestoreRef.current = menuOpen ? menuTriggerRef.current : (activityTriggerRef.current ?? contextFocusTarget());
     closeMenu();
     setIssuesOpen((value) => !value);
   };
   const showActivity = () => {
-    if (!issuesOpen) activityRestoreRef.current = menuOpen ? menuTriggerRef.current : contextFocusTarget();
+    if (!issuesOpen) activityRestoreRef.current = menuOpen ? menuTriggerRef.current : (activityTriggerRef.current ?? contextFocusTarget());
     closeMenu();
     setIssuesOpen(true);
   };
@@ -1734,7 +1735,7 @@ function App() {
               <div ref={menuTriggerRef}>
                 {opened ? (
                   <button
-                    className={`player-menu-toggle player-library-toggle ${drawerOpen ? "active" : ""}`}
+                    className={`player-menu-toggle player-library-toggle library-toggle ${drawerOpen ? "active" : ""}`}
                     onClick={toggleLibrary}
                     aria-expanded={drawerOpen}
                     aria-controls="library-drawer"
@@ -1759,17 +1760,7 @@ function App() {
                 <>
                   <button className="player-menu-scrim" aria-label="Close application menu" onClick={closeMenu} />
                   <div ref={menuRef} id="player-application-menu" className="player-menu panel" role="menu" aria-label="Application actions" onKeyDown={moveApplicationMenuFocus}>
-                    <div className="player-menu-group" role="group" aria-labelledby="player-menu-workspace">
-                      <span id="player-menu-workspace" className="player-menu-label">Workspace</span>
-                      <button role="menuitem" className={`player-menu-action library-toggle ${drawerOpen ? "active" : ""}`} onClick={toggleLibrary} aria-expanded={drawerOpen} aria-controls="library-drawer">
-                        <Icon name="music" size={18} /><span>Library</span>{queueBadge > 0 && <b>{queueBadge}</b>}
-                      </button>
-                      <button role="menuitem" className={`player-menu-action issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`} onClick={toggleActivity} aria-expanded={issuesOpen} aria-controls="system-issues">
-                        <Icon name={systemIssues.length ? "alert" : "activity"} size={18} /><span>Activity</span>{(activeTaskCount + systemIssues.length) > 0 && <b>{activeTaskCount + systemIssues.length}</b>}
-                      </button>
-                    </div>
-                    <div className="player-menu-group" role="group" aria-labelledby="player-menu-application">
-                      <span id="player-menu-application" className="player-menu-label">Application</span>
+                    <div className="player-menu-group" role="group">
                       <button role="menuitem" className="player-menu-action" onClick={showSettings}>
                         <Icon name="settings" size={18} /><span>Settings</span>
                       </button>
@@ -1795,6 +1786,18 @@ function App() {
                 )}
               </div>
             )}
+            <button
+              ref={activityTriggerRef}
+              className={`player-menu-toggle player-activity-toggle issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`}
+              onClick={toggleActivity}
+              aria-expanded={issuesOpen}
+              aria-controls="system-issues"
+              aria-label="Activity"
+            >
+              <Icon name={systemIssues.length ? "alert" : "activity"} size={18} />
+              <span>Activity</span>
+              {(activeTaskCount + systemIssues.length) > 0 && <b>{activeTaskCount + systemIssues.length}</b>}
+            </button>
           </div>
           {opened ? (
             <>
@@ -1824,6 +1827,15 @@ function App() {
           {!opened && (
             <div className="empty-stage">
               <div className="stage-video-grid" role="list" aria-label="Available songs">
+                <button
+                  className="stage-video-card stage-library-card empty-stage-library-btn library-toggle"
+                  onClick={showLibrary}
+                  role="listitem"
+                  aria-label="Open library"
+                >
+                  <span>Open library</span>
+                  {queueBadge > 0 && <b>{queueBadge}</b>}
+                </button>
                 {stageSongs.map((item) => (
                   <button
                     key={item.id}
@@ -1841,12 +1853,6 @@ function App() {
                     </div>
                   </button>
                 ))}
-                <button
-                  className="stage-video-card stage-library-card empty-stage-library-btn"
-                  onClick={showLibrary}
-                  role="listitem"
-                  aria-label="Open library"
-                >Open library</button>
               </div>
             </div>
           )}

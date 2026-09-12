@@ -140,16 +140,15 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   await act(async () => trigger.click());
   const menu = frame.querySelector<HTMLElement>("#player-application-menu")!;
   expect(menu).not.toBeNull();
-  expect(menu.querySelector("[aria-labelledby=player-menu-workspace]")).not.toBeNull();
-  expect(menu.querySelector("[aria-labelledby=player-menu-application]")).not.toBeNull();
-  expect(menu.textContent).toContain("Library");
-  expect(menu.textContent).toContain("Activity");
   expect(menu.textContent).toContain("Settings");
   expect(menu.textContent).toContain("About");
+  expect(menu.textContent).not.toContain("Library");
+  expect(context.querySelector(".issues-toggle")).not.toBeNull();
+  expect(context.querySelector(".issues-toggle")?.textContent).toContain("Activity");
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   expect(document.activeElement).toBe(menu.querySelector("button"));
   const menuItems = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-  expect(menuItems).toHaveLength(4);
+  expect(menuItems).toHaveLength(2);
   const settingsItem = menuItems.find((item) => item.textContent?.includes("Settings"));
   expect(settingsItem?.querySelector("circle[cx='12'][cy='12'][r='3']")).not.toBeNull();
   expect(settingsItem?.querySelector("path")?.getAttribute("d")).toContain("M19.4 15a1.65 1.65 0 0 0 .33 1.82");
@@ -303,7 +302,12 @@ it("renders YouTube-style video card grid on the idle stage and opens an item di
   const empty = host.querySelector<HTMLElement>(".empty-stage")!;
   const grid = empty.querySelector<HTMLElement>(".stage-video-grid")!;
   expect(grid).not.toBeNull();
-  const card = grid.querySelector<HTMLButtonElement>(".stage-video-card")!;
+  const libraryCard = grid.querySelector<HTMLButtonElement>(".stage-library-card")!;
+  expect(libraryCard).not.toBeNull();
+  expect(grid.firstElementChild).toBe(libraryCard);
+  expect(libraryCard.textContent).toContain("Open library");
+
+  const card = grid.querySelector<HTMLButtonElement>(".stage-video-card:not(.stage-library-card)")!;
   expect(card).not.toBeNull();
   expect(card.textContent).toContain("Song");
 
@@ -359,8 +363,7 @@ it("keeps Library context while the menu and Activity are inspected", async () =
   expect(host.querySelector("#player-application-menu")).not.toBeNull();
   expect(library().classList.contains("open")).toBe(true);
 
-  await act(async () => host.querySelector<HTMLButtonElement>(".library-toggle")!.click());
-  expect(host.querySelector("#player-application-menu")).toBeNull();
+  await act(async () => host.querySelector<HTMLButtonElement>(".library-drawer .drawer-tool[aria-label='Close library']")!.click());
   expect(library().classList.contains("open")).toBe(false);
   expect(activity().classList.contains("open")).toBe(false);
 
