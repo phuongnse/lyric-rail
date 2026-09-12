@@ -684,25 +684,25 @@ function App() {
     }
     return [];
   });
-  const recentSongs = useMemo(() => {
+  const stageSongs = useMemo(() => {
     const readyMap = new Map(ready.map((item) => [item.id, item]));
     const list: LibraryItem[] = [];
+    const seen = new Set<string>();
     for (const id of recentIds) {
       const item = readyMap.get(id);
-      if (item && !list.some((existing) => existing.id === item.id)) {
+      if (item && !seen.has(item.id)) {
+        seen.add(item.id);
         list.push(item);
-        if (list.length >= 5) break;
       }
     }
-    if (list.length < 5) {
-      for (const item of ready) {
-        if (!list.some((existing) => existing.id === item.id)) {
-          list.push(item);
-          if (list.length >= 5) break;
-        }
+    const remaining = [...ready].reverse();
+    for (const item of remaining) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id);
+        list.push(item);
       }
     }
-    return list.slice(0, 5);
+    return list;
   }, [ready, recentIds]);
   const currentItem = catalog.items.find((item) => item.id === currentId);
   const selectedItem = catalog.items.find((item) => item.id === selectedId);
@@ -1024,12 +1024,11 @@ function App() {
         else if (menuOpen) closeMenu();
         else if (issuesOpen) setIssuesOpen(false);
         else if (drawerOpen) setDrawerOpen(false);
-        else if (opened) stopPlayback();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, drawerOpen, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native, opened, stopPlayback]);
+  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, drawerOpen, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native]);
 
   useEffect(() => {
     if (issuesOpen) {
@@ -1778,6 +1777,13 @@ function App() {
                     <span className="now-playing-artist">{currentItem.artist || currentItem.firstLyricLine}</span>
                   </>
                 )}
+                <IconButton
+                  className="now-playing-close"
+                  icon="close"
+                  iconSize={14}
+                  label="Close song"
+                  onClick={stopPlayback}
+                />
               </div>
             )}
           </div>
@@ -1810,31 +1816,33 @@ function App() {
           ) : null}
           {!opened && (
             <div className="empty-stage">
-              <div className="empty-stage-content">
-                <button onClick={showLibrary}>Open library</button>
-                {recentSongs.length > 0 && (
-                  <div className="quick-start-section">
-                    <span className="quick-start-label">Recent songs</span>
-                    <div className="quick-start-list" role="list" aria-label="Recent songs">
-                      {recentSongs.map((item) => (
-                        <button
-                          key={item.id}
-                          className="quick-start-item"
-                          onClick={() => { void openItem(item); }}
-                          role="listitem"
-                          aria-label={`Play ${item.title}`}
-                        >
-                          <Icon name="play" size={14} />
-                          <span className="quick-start-meta">
-                            <strong className="quick-start-title">{item.title}</strong>
-                            {item.artist && <span className="quick-start-artist">{item.artist}</span>}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+              <div className="empty-stage-header">
+                <button className="empty-stage-library-btn" onClick={showLibrary}>Open library</button>
               </div>
+              {stageSongs.length > 0 && (
+                <div className="stage-video-grid" role="list" aria-label="Available songs">
+                  {stageSongs.map((item) => (
+                    <button
+                      key={item.id}
+                      className="stage-video-card"
+                      onClick={() => { void openItem(item); }}
+                      role="listitem"
+                      aria-label={`Play ${item.title}`}
+                    >
+                      <div className="stage-video-thumb-wrap">
+                        <Thumbnail item={item} selected={false} />
+                        <div className="stage-video-play-overlay" aria-hidden="true">
+                          <Icon name="play" size={24} />
+                        </div>
+                      </div>
+                      <div className="stage-video-meta">
+                        <strong className="stage-video-title">{item.title}</strong>
+                        <span className="stage-video-subtitle">{item.artist || item.firstLyricLine || "Karaoke"}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {opened && (
@@ -1888,7 +1896,6 @@ function App() {
                 <div className="media-control-group player-transport">
                   <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
                   <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
-                  <IconButton icon="stop" iconSize={19} label="Stop playback" onClick={stopPlayback} disabled={!opened} />
                   <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
                 </div>
                 <div className="media-control-group end">

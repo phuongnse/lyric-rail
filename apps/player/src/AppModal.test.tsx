@@ -299,16 +299,15 @@ it("keeps a compact Open library shortcut in the idle Player", async () => {
   expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
 });
 
-it("renders Quick Start recent songs and opens an item directly from the idle stage", async () => {
+it("renders YouTube-style video card grid on the idle stage and opens an item directly on click", async () => {
   const empty = host.querySelector<HTMLElement>(".empty-stage")!;
-  const quickStart = empty.querySelector<HTMLElement>(".quick-start-section")!;
-  expect(quickStart).not.toBeNull();
-  expect(quickStart.querySelector(".quick-start-label")?.textContent).toBe("Recent songs");
-  const recentButton = quickStart.querySelector<HTMLButtonElement>(".quick-start-item")!;
-  expect(recentButton).not.toBeNull();
-  expect(recentButton.textContent).toContain("Song");
+  const grid = empty.querySelector<HTMLElement>(".stage-video-grid")!;
+  expect(grid).not.toBeNull();
+  const card = grid.querySelector<HTMLButtonElement>(".stage-video-card")!;
+  expect(card).not.toBeNull();
+  expect(card.textContent).toContain("Song");
 
-  await act(async () => recentButton.click());
+  await act(async () => card.click());
   expect(vi.mocked(invoke)).toHaveBeenCalledWith("open_library_item", { itemId: "song" });
 });
 
@@ -446,7 +445,7 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
 
   expect(host.querySelector(".transport")).toBeNull();
   expect([...overlay.querySelectorAll("button")].every((button) => !button.textContent?.trim())).toBe(true);
-  for (const label of ["Play song", "Stop playback", "Previous ready song", "Next ready song", "Enable vocals (Original)", "Mute volume", "Enter fullscreen"]) {
+  for (const label of ["Play song", "Previous ready song", "Next ready song", "Enable vocals (Original)", "Mute volume", "Enter fullscreen"]) {
     expect(control(label)).toBeDefined();
   }
   for (const action of overlay.querySelectorAll<HTMLButtonElement>("button")) {
@@ -790,7 +789,7 @@ it("retains valid duration on song end and resynchronizes seekbar and playback o
   expect(seek.max).toBe("180");
 });
 
-it("stops playback and returns to the empty stage when the Stop button is clicked", async () => {
+it("stops playback and returns to the empty stage when the Close button in now-playing is clicked", async () => {
   await act(async () => root.unmount());
   const firstSong = readyCatalog.items[0]!;
   catalogFixture = {
@@ -809,15 +808,15 @@ it("stops playback and returns to the empty stage when the Stop button is clicke
   expect(frame.querySelector(".media-control-overlay.player-controls")).not.toBeNull();
   expect(frame.querySelector(".empty-stage")).toBeNull();
 
-  const stopBtn = frame.querySelector<HTMLButtonElement>('[aria-label="Stop playback"]')!;
-  expect(stopBtn).not.toBeNull();
-  await act(async () => stopBtn.click());
+  const closeBtn = frame.querySelector<HTMLButtonElement>('.now-playing [aria-label="Close song"]')!;
+  expect(closeBtn).not.toBeNull();
+  await act(async () => closeBtn.click());
 
   expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
   expect(frame.querySelector(".empty-stage")).not.toBeNull();
 });
 
-it("stops playback and exits to the empty stage when Escape is pressed during playback", async () => {
+it("does not stop playback when Escape is pressed during playback", async () => {
   await act(async () => root.unmount());
   const firstSong = readyCatalog.items[0]!;
   catalogFixture = {
@@ -840,8 +839,8 @@ it("stops playback and exits to the empty stage when Escape is pressed during pl
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 
-  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
-  expect(frame.querySelector(".empty-stage")).not.toBeNull();
+  expect(frame.querySelector(".media-control-overlay.player-controls")).not.toBeNull();
+  expect(frame.querySelector(".empty-stage")).toBeNull();
 });
 
 
