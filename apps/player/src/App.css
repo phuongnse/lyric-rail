@@ -129,10 +129,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .video-stage video { width: 100%; height: 100%; object-fit: contain; background: #030407; }
 .video-stage audio { display: none; }
 .stage-shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.22), transparent 30%, transparent 62%, rgba(0,0,0,.66)); }
-.empty-stage { display: grid; height: 100%; place-items: center; }
+.empty-stage { display: grid; height: 100%; place-items: center; background: radial-gradient(circle at 50% 45%, rgba(255,204,77,.035) 0%, rgba(91,216,210,.015) 35%, transparent 70%); }
+.empty-stage-content { display: flex; flex-direction: column; align-items: center; gap: 24px; width: min(380px, calc(100vw - 48px)); }
 .empty-stage button { min-height: 44px; padding: 0 24px; border: 1px solid rgba(255,204,77,.45); border-radius: 12px; color: #151108; background: var(--accent); font-size: var(--font-ui); font-weight: 700; box-shadow: 0 4px 20px rgba(0,0,0,.35); cursor: pointer; transition: transform 120ms ease, background 120ms ease, box-shadow 120ms ease; }
 .empty-stage button:hover { background: #ffd86b; border-color: rgba(255,204,77,.75); transform: translateY(-1px); box-shadow: 0 6px 24px rgba(0,0,0,.45); }
 .empty-stage button:active { transform: translateY(0); }
+.quick-start-section { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.quick-start-label { padding: 0 4px; color: var(--muted); font-size: var(--font-caption); font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.quick-start-list { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.empty-stage button.quick-start-item { display: flex; min-height: 42px; width: 100%; align-items: center; gap: 12px; padding: 8px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; color: var(--soft); background: rgba(255,255,255,.035); box-shadow: none; font-size: var(--font-ui); font-weight: 500; text-align: left; }
+.empty-stage button.quick-start-item:hover { background: rgba(255,255,255,.07); border-color: rgba(255,204,77,.28); color: white; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+.empty-stage button.quick-start-item:active { transform: translateY(0); }
+.quick-start-meta { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.quick-start-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; font-size: var(--font-ui); font-weight: 650; }
+.quick-start-artist { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--font-small); }
 
 .lyric-overlay { position: absolute; z-index: 2; inset: 0; display: block; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
 .lyric-canvas { position: relative; width: 100%; height: 100%; overflow: hidden; font-family: "Be Vietnam Pro", sans-serif; font-weight: 500; }

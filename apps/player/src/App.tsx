@@ -670,6 +670,40 @@ function App() {
   const modelReplayTaskRef = useRef<string | undefined>(undefined);
 
   const ready = useMemo(() => catalog.items.filter((item) => item.status === "ready"), [catalog.items]);
+  const [recentIds, setRecentIds] = useState<string[]>(() => {
+    try {
+      if (typeof window !== "undefined" && window.localStorage) {
+        const stored = window.localStorage.getItem("lyricrail.recent-songs");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) return parsed.filter((id): id is string => typeof id === "string");
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return [];
+  });
+  const recentSongs = useMemo(() => {
+    const readyMap = new Map(ready.map((item) => [item.id, item]));
+    const list: LibraryItem[] = [];
+    for (const id of recentIds) {
+      const item = readyMap.get(id);
+      if (item && !list.some((existing) => existing.id === item.id)) {
+        list.push(item);
+        if (list.length >= 5) break;
+      }
+    }
+    if (list.length < 5) {
+      for (const item of ready) {
+        if (!list.some((existing) => existing.id === item.id)) {
+          list.push(item);
+          if (list.length >= 5) break;
+        }
+      }
+    }
+    return list.slice(0, 5);
+  }, [ready, recentIds]);
   const currentItem = catalog.items.find((item) => item.id === currentId);
   const selectedItem = catalog.items.find((item) => item.id === selectedId);
   const activeTrack = opened?.media.audioTracks.find((track) => track.id === trackId) ?? opened?.media.audioTracks[0];
@@ -1286,6 +1320,17 @@ function App() {
       }
       setPendingPlay(true);
       setDrawerOpen(false);
+      setRecentIds((prev) => {
+        const next = [item.id, ...prev.filter((id) => id !== item.id)].slice(0, 10);
+        try {
+          if (typeof window !== "undefined" && window.localStorage) {
+            window.localStorage.setItem("lyricrail.recent-songs", JSON.stringify(next));
+          }
+        } catch {
+          // ignore storage write errors
+        }
+        return next;
+      });
       videoRef.current?.load();
       audioRef.current?.load();
     } catch (reason) { reportError("playback", "Song could not be opened", reason); }
@@ -1752,7 +1797,35 @@ function App() {
               <LyricOverlay events={events} time={time} presentation={opened.presentation} mediaRef={audioRef} playing={playing} />
             </>
           ) : null}
-          {!opened && <div className="empty-stage"><button onClick={showLibrary}>Open library</button></div>}
+          {!opened && (
+            <div className="empty-stage">
+              <div className="empty-stage-content">
+                <button onClick={showLibrary}>Open library</button>
+                {recentSongs.length > 0 && (
+                  <div className="quick-start-section">
+                    <span className="quick-start-label">Recent songs</span>
+                    <div className="quick-start-list" role="list" aria-label="Recent songs">
+                      {recentSongs.map((item) => (
+                        <button
+                          key={item.id}
+                          className="quick-start-item"
+                          onClick={() => { void openItem(item); }}
+                          role="listitem"
+                          aria-label={`Play ${item.title}`}
+                        >
+                          <Icon name="play" size={14} />
+                          <span className="quick-start-meta">
+                            <strong className="quick-start-title">{item.title}</strong>
+                            {item.artist && <span className="quick-start-artist">{item.artist}</span>}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           {opened && (
             <div className="media-control-overlay player-controls" aria-label="Player controls">
               <div className="media-control-progress">

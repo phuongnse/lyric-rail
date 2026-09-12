@@ -134,7 +134,7 @@ it("replaces the main topbar with an in-player grouped application menu", async 
   const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
   const context = frame.querySelector<HTMLElement>(".player-context")!;
   expect(context.querySelector(".now-playing")).toBeNull();
-  expect(frame.querySelector(".empty-stage")?.textContent).toBe("Open library");
+  expect(frame.querySelector(".empty-stage")?.textContent).toContain("Open library");
   const trigger = context.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
 
   await act(async () => trigger.click());
@@ -297,6 +297,19 @@ it("keeps a compact Open library shortcut in the idle Player", async () => {
   expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(false);
   await act(async () => empty.querySelector<HTMLButtonElement>("button")!.click());
   expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
+});
+
+it("renders Quick Start recent songs and opens an item directly from the idle stage", async () => {
+  const empty = host.querySelector<HTMLElement>(".empty-stage")!;
+  const quickStart = empty.querySelector<HTMLElement>(".quick-start-section")!;
+  expect(quickStart).not.toBeNull();
+  expect(quickStart.querySelector(".quick-start-label")?.textContent).toBe("Recent songs");
+  const recentButton = quickStart.querySelector<HTMLButtonElement>(".quick-start-item")!;
+  expect(recentButton).not.toBeNull();
+  expect(recentButton.textContent).toContain("Song");
+
+  await act(async () => recentButton.click());
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("open_library_item", { itemId: "song" });
 });
 
 it("keeps Library and Activity badges synchronized with live state", async () => {
