@@ -1686,15 +1686,13 @@ function App() {
                 className="now-playing"
                 aria-live="polite"
               >
-                <span className="now-playing-content">
-                  <strong className="now-playing-title">{currentItem.title}</strong>
-                  {(currentItem.artist || currentItem.firstLyricLine) && (
-                    <>
-                      <span className="now-playing-separator" aria-hidden="true">•</span>
-                      <span className="now-playing-artist">{currentItem.artist || currentItem.firstLyricLine}</span>
-                    </>
-                  )}
-                </span>
+                <strong className="now-playing-title">{currentItem.title}</strong>
+                {(currentItem.artist || currentItem.firstLyricLine) && (
+                  <>
+                    <span className="now-playing-separator" aria-hidden="true">•</span>
+                    <span className="now-playing-artist">{currentItem.artist || currentItem.firstLyricLine}</span>
+                  </>
+                )}
               </div>
             )}
           </div>
