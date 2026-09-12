@@ -1024,11 +1024,12 @@ function App() {
         else if (menuOpen) closeMenu();
         else if (issuesOpen) setIssuesOpen(false);
         else if (drawerOpen) setDrawerOpen(false);
+        else if (opened) stopPlayback();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, drawerOpen, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native]);
+  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, drawerOpen, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native, opened, stopPlayback]);
 
   useEffect(() => {
     if (issuesOpen) {
@@ -1777,13 +1778,6 @@ function App() {
                     <span className="now-playing-artist">{currentItem.artist || currentItem.firstLyricLine}</span>
                   </>
                 )}
-                <IconButton
-                  className="now-playing-close"
-                  icon="close"
-                  iconSize={14}
-                  label="Close song"
-                  onClick={stopPlayback}
-                />
               </div>
             )}
           </div>

@@ -789,7 +789,7 @@ it("retains valid duration on song end and resynchronizes seekbar and playback o
   expect(seek.max).toBe("180");
 });
 
-it("stops playback and returns to the empty stage when the Close button in now-playing is clicked", async () => {
+it("does not render a close button in now-playing", async () => {
   await act(async () => root.unmount());
   const firstSong = readyCatalog.items[0]!;
   catalogFixture = {
@@ -808,15 +808,11 @@ it("stops playback and returns to the empty stage when the Close button in now-p
   expect(frame.querySelector(".media-control-overlay.player-controls")).not.toBeNull();
   expect(frame.querySelector(".empty-stage")).toBeNull();
 
-  const closeBtn = frame.querySelector<HTMLButtonElement>('.now-playing [aria-label="Close song"]')!;
-  expect(closeBtn).not.toBeNull();
-  await act(async () => closeBtn.click());
-
-  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
-  expect(frame.querySelector(".empty-stage")).not.toBeNull();
+  const closeBtn = frame.querySelector<HTMLButtonElement>('.now-playing [aria-label="Close song"]');
+  expect(closeBtn).toBeNull();
 });
 
-it("does not stop playback when Escape is pressed during playback", async () => {
+it("stops playback and exits to the empty stage when Escape is pressed during playback", async () => {
   await act(async () => root.unmount());
   const firstSong = readyCatalog.items[0]!;
   catalogFixture = {
@@ -839,8 +835,8 @@ it("does not stop playback when Escape is pressed during playback", async () => 
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 
-  expect(frame.querySelector(".media-control-overlay.player-controls")).not.toBeNull();
-  expect(frame.querySelector(".empty-stage")).toBeNull();
+  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).not.toBeNull();
 });
 
 
