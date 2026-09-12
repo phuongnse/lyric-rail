@@ -9,9 +9,7 @@
   gap: 10px;
   padding: clamp(12px, 2.2vw, 22px);
   color: var(--soft);
-  background: linear-gradient(180deg, transparent 0%, rgba(7,9,14,.45) 30%, rgba(7,9,14,.88) 100%);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,.35) 40%, rgba(0,0,0,.82) 100%);
   opacity: 0;
   pointer-events: none;
   transform: translateY(8px);
@@ -49,9 +47,7 @@
 .media-control-overlay .icon-control {
   border-color: rgba(255,255,255,.14);
   color: var(--soft);
-  background: rgba(10,14,20,.35);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgba(12,16,24,.85);
 }
 .media-control-overlay .icon-control:hover:not(:disabled),
 .media-control-overlay .icon-control:focus-visible,

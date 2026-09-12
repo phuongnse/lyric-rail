@@ -413,7 +413,7 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
 
   expect(host.querySelector(".transport")).toBeNull();
   expect([...overlay.querySelectorAll("button")].every((button) => !button.textContent?.trim())).toBe(true);
-  for (const label of ["Play song", "Previous ready song", "Next ready song", "Use Karaoke audio", "Use Original audio", "Mute volume", "Enter fullscreen"]) {
+  for (const label of ["Play song", "Previous ready song", "Next ready song", "Enable vocals (Original)", "Mute volume", "Enter fullscreen"]) {
     expect(control(label)).toBeDefined();
   }
   for (const action of overlay.querySelectorAll<HTMLButtonElement>("button")) {
@@ -440,9 +440,9 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
   expect(audio.currentTime).toBe(12);
   expect(video.currentTime).toBe(12);
 
-  await act(async () => control("Use Original audio").click());
+  await act(async () => control("Enable vocals (Original)").click());
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-  expect(control("Use Original audio").getAttribute("aria-pressed")).toBe("true");
+  expect(control("Mute vocals (Karaoke)").getAttribute("aria-pressed")).toBe("true");
   expect(audio.src).toContain("/original");
 
   await act(async () => control("Mute volume").click());

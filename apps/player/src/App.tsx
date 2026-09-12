@@ -1736,17 +1736,30 @@ function App() {
             </div>
             <div className="media-control-row">
               <div className="media-control-group">
-                {(opened?.media.audioTracks ?? []).map((track) => (
-                  <IconButton
-                    className={`track-control ${track.id === trackId ? "active" : ""}`}
-                    icon="music"
-                    iconSize={18}
-                    label={`Use ${track.name} audio`}
-                    aria-pressed={track.id === trackId}
-                    onClick={() => switchTrack(track)}
-                    key={track.id}
-                  />
-                ))}
+                {(() => {
+                  const tracks = opened?.media.audioTracks ?? [];
+                  if (tracks.length === 0) return null;
+                  const karaokeTrack = tracks.find((t) => t.id === "karaoke" || t.name.toLowerCase().includes("karaoke")) ?? tracks[0];
+                  const vocalTrack = tracks.find((t) => t.id !== karaokeTrack?.id) ?? tracks[1];
+                  const isVocalActive = Boolean(vocalTrack && activeTrack && activeTrack.id === vocalTrack.id);
+                  const nextTrack = isVocalActive ? karaokeTrack : (vocalTrack ?? karaokeTrack);
+                  const hasToggle = Boolean(vocalTrack && karaokeTrack && vocalTrack.id !== karaokeTrack.id);
+                  return (
+                    <IconButton
+                      className={`track-control ${isVocalActive ? "active" : ""}`}
+                      icon="music"
+                      iconSize={18}
+                      label={
+                        hasToggle
+                          ? (isVocalActive ? "Mute vocals (Karaoke)" : "Enable vocals (Original)")
+                          : `Audio: ${activeTrack?.name || "Track"}`
+                      }
+                      aria-pressed={isVocalActive}
+                      onClick={() => { if (hasToggle && nextTrack) switchTrack(nextTrack); }}
+                      disabled={!hasToggle}
+                    />
+                  );
+                })()}
               </div>
               <div className="media-control-group player-transport">
                 <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
