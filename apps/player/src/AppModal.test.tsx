@@ -54,7 +54,7 @@ const presentation: KaraokePresentation = {
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command: string) => {
   if (command === "catalog_snapshot") return catalogFixture;
-  if (command === "remove_unprocessed_local_item") return { items: [], localSources: [], driveSources: [] };
+  if (command === "delete_library_item") return { items: [], localSources: [], driveSources: [] };
   if (command === "player_status") return { version: "0.8.0", platform: "windows", vaultAvailable: true, processing: { pendingJobs: 0, runtimeAvailable: true } };
   if (command === "system_issues") return systemIssuesFixture;
   if (command === "task_runtime_snapshot") return taskSnapshotFixture;
@@ -616,7 +616,7 @@ it("keeps the Library editor preview and draft usable after a save failure", asy
   vi.mocked(invoke).mockImplementation(original);
 });
 
-it("requires confirmation before removing an unfinished Library item", async () => {
+it("requires confirmation before deleting any Library item", async () => {
   await act(async () => root.unmount());
   catalogFixture = { items: [{ id: "unfinished", title: "Unfinished", status: "queued", progressPercent: 0, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false }], localSources: [], driveSources: [] };
   root = createRoot(host);
@@ -633,19 +633,58 @@ it("requires confirmation before removing an unfinished Library item", async () 
   vi.mocked(invoke).mockClear();
   await act(async () => removeAction().click());
   const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-  expect(dialog.textContent).toContain("Remove “Unfinished”?");
-  expect(dialog.textContent).toContain("original media file and its lyric sidecar stay unchanged");
-  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "remove_unprocessed_local_item")).toBe(false);
+  expect(dialog.textContent).toContain("Delete “Unfinished”?");
+  expect(dialog.textContent).toContain("permanently removes the item from Library");
+  expect(dialog.textContent).toContain("original local media, lyric sidecar, and external cloud file stay unchanged");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "delete_library_item")).toBe(false);
   await act(async () => [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Cancel")!.click());
   expect(host.querySelector('[role="dialog"]')).toBeNull();
 
   await act(async () => rowRemove().click());
   await act(async () => removeAction().click());
   const confirm = [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
-    .find((button) => button.textContent === "Remove from library")!;
+    .find((button) => button.textContent === "Delete permanently")!;
   vi.mocked(invoke).mockClear();
   await act(async () => confirm.click());
-  expect(vi.mocked(invoke).mock.calls).toContainEqual(["remove_unprocessed_local_item", { itemId: "unfinished" }]);
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["delete_library_item", { itemId: "unfinished" }]);
+  expect(host.querySelector('[aria-label="Open actions for Unfinished"]')).toBeNull();
+});
+
+it("exposes Delete for every local or cloud Library status", async () => {
+  await act(async () => root.unmount());
+  const rows: CatalogSnapshot["items"] = [
+    { id: "ready-local", title: "Ready local", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: true, hasThumbnail: false },
+    { id: "offline-cloud", title: "Offline cloud", status: "offline", progressPercent: 0, sources: ["Drive"], canProcess: false, hasThumbnail: false },
+    { id: "failed-local", title: "Failed local", status: "failed", progressPercent: 0, sources: ["Disk"], canProcess: true, hasThumbnail: false },
+    { id: "processing-cloud", title: "Processing cloud", status: "processing", progressPercent: 42, sources: ["Drive"], canProcess: false, hasThumbnail: false },
+  ];
+  catalogFixture = { items: rows, localSources: [], driveSources: [] };
+  root = createRoot(host);
+  await act(async () => { root.render(<App />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+  for (const row of rows) {
+    const shell = [...host.querySelectorAll<HTMLElement>(".song-row")]
+      .find((candidate) => candidate.textContent?.includes(row.title))!;
+    const trigger = shell.querySelector<HTMLButtonElement>('[aria-label^="Open actions for"]')!;
+    await act(async () => trigger.click());
+    expect([...shell.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].some((button) => button.textContent === "Delete")).toBe(true);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  }
+});
+
+it("keeps the permanent-delete confirmation when native deletion fails", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args, options) => command === "delete_library_item"
+    ? Promise.reject(new Error("Synthetic persistence failure"))
+    : original(command, args, options));
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => trigger.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Delete")!.click());
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+  await act(async () => dialog.querySelector<HTMLButtonElement>('button.danger')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(host.querySelector('[role="dialog"]')).toBe(dialog);
+  vi.mocked(invoke).mockImplementation(original);
 });
 
 it("wraps focus around visible controls while a clip commit disables the footer", async () => {
@@ -980,10 +1019,10 @@ it("renders icon+text Library toggle during playback and clear Library actions",
   await act(async () => actionTrigger.click());
   const rowMenu = rowShell.querySelector<HTMLElement>(".row-menu")!;
   const menuButtons = Array.from(rowMenu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'));
-  expect(menuButtons).toHaveLength(1);
-  expect(menuButtons[0]?.textContent).toBe("Edit video");
-  expect(menuButtons[0]?.querySelector("svg")).not.toBeNull();
-  expect(menuButtons[0]?.querySelector("span")).not.toBeNull();
+  expect(menuButtons).toHaveLength(2);
+  const editButton = menuButtons.find((button) => button.textContent === "Edit video");
+  expect(editButton?.querySelector("svg")).not.toBeNull();
+  expect(editButton?.querySelector("span")).not.toBeNull();
   expect(rowMenu.textContent).not.toContain("Play");
   await act(async () => actionTrigger.click());
 

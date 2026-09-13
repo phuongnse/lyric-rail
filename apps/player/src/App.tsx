@@ -378,8 +378,7 @@ export function LibraryDrawer(props: DrawerProps) {
                       <IconButton className="row-icon row-action-trigger" icon="more-vertical" iconSize={18} label={`Open actions for ${item.title}`} aria-haspopup="menu" aria-expanded={itemMenu === item.id} data-library-item-id={item.id} onClick={() => setItemMenu((current) => current === item.id ? undefined : item.id)} />
                       {itemMenu === item.id && <div className="row-menu" role="menu" aria-label={`Actions for ${item.title}`} onKeyDown={moveItemMenuFocus}>
                         {editable && <button role="menuitem" onClick={() => closeItemMenu(() => props.onEditVideo(item))}><Icon name="edit" size={16} /><span>Edit video</span></button>}
-                        {item.canDelete && <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}><Icon name="trash" size={16} /><span>Delete</span></button>}
-                        {!editable && !item.canDelete && <span className="row-menu-empty">No actions available</span>}
+                        <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}><Icon name="trash" size={16} /><span>Delete</span></button>
                       </div>}
                     </div>
                   </article>
@@ -389,7 +388,7 @@ export function LibraryDrawer(props: DrawerProps) {
           )}
         </div>
         <footer className="drawer-footer">
-          <p className="processing-note">Remove from library is available only for unfinished local media after confirmation. The source file, lyric sidecar, and .lrail packages are protected.</p>
+          <p className="processing-note">Delete permanently removes the item from Library after confirmation. Original local media, lyric sidecars, .lrail packages, and external cloud files stay protected.</p>
           <div className="source-pills">
             {props.catalog.localSources.map((source) => (
               <span key={source.id}>Local <IconButton className="source-remove" icon="close" iconSize={13} label={`Remove local source ${source.path}`} onClick={() => props.onRemoveSource(source.id)} /></span>
@@ -1178,12 +1177,14 @@ function App() {
     if (!native || !item || busy) return;
     setBusy(true);
     try {
-      const snapshot = await invoke<CatalogSnapshot>("remove_unprocessed_local_item", { itemId: item.id });
+      const snapshot = await invoke<CatalogSnapshot>("delete_library_item", { itemId: item.id });
       setCatalog(snapshot);
+      setShownItems(snapshot.items);
+      if (currentId === item.id) stopPlayback();
       if (selectedId === item.id) setSelectedId(undefined);
       setDeleteCandidate(undefined);
     } catch (reason) {
-      reportError("library", "Library item could not be removed", reason, "Only unfinished local media items can be removed here; the source file is never changed.", undefined, item.id);
+      reportError("library", "Library item could not be deleted", reason, "The item was kept. Terminate processing or retry the permanent Library deletion.", undefined, item.id);
     } finally {
       setBusy(false);
     }
@@ -2128,11 +2129,10 @@ function App() {
           }}
         >
           <div ref={deleteDialogRef} className="setup-dialog panel" tabIndex={-1}>
-            <header><div><p className="eyebrow">Unfinished Library item</p><h2 id="delete-item-title">Remove “{deleteCandidate.title}”?</h2></div><IconButton className="dialog-close" icon="close" label="Cancel removing item" onClick={() => setDeleteCandidate(undefined)} /></header>
-            <p>This removes only this unfinished item from Library. The original media file and its lyric sidecar stay unchanged.</p>
-            {deleteCandidate.status === "queued" && <p className="processing-note">This song is queued but has not finished processing; confirming will cancel only its pending work first.</p>}
-            <p className="processing-note">Authenticated <code>.lrail</code> packages are protected and never use this action.</p>
-            <footer><button onClick={() => setDeleteCandidate(undefined)} disabled={busy}>Cancel</button><button className="danger" onClick={() => { void confirmRemove(); }} disabled={busy}>Remove from library</button></footer>
+            <header><div><p className="eyebrow">Permanent Library delete</p><h2 id="delete-item-title">Delete “{deleteCandidate.title}”?</h2></div><IconButton className="dialog-close" icon="close" label="Cancel deleting item" onClick={() => setDeleteCandidate(undefined)} /></header>
+            <p>This permanently removes the item from Library. The original local media, lyric sidecar, and external cloud file stay unchanged.</p>
+            {(deleteCandidate.status === "queued" || deleteCandidate.status === "processing") && <p className="processing-note">Processing will be terminated before this item is deleted. Unrelated queued work stays intact.</p>}
+            <footer><button onClick={() => setDeleteCandidate(undefined)} disabled={busy}>Cancel</button><button className="danger" onClick={() => { void confirmRemove(); }} disabled={busy}>Delete permanently</button></footer>
           </div>
         </div>
       )}

@@ -190,6 +190,10 @@ def test_library_rows_keep_video_actions_and_clean_lyric_preview_separate() -> N
     assert "Lyrics preview" not in APP
     assert ".row-menu" in APP and ".row-menu" in CSS
     assert 'role="menu"' in APP and 'role="menuitem"' in APP
+    assert 'onClick={() => closeItemMenu(() => props.onRemoveItem(item))}' in APP
+    assert 'delete_library_item' in APP and 'Delete permanently' in APP
+    assert "justify-content: center; padding: 10px 8px;" in CSS
+    assert "margin: 0;" in CSS
     assert "const ROW_HEIGHT = 88" in APP
     assert ".song-row { position: absolute;" in CSS and "height: 80px;" in CSS
     assert "Edit video unavailable" in APP and "Try again" in APP
@@ -201,6 +205,17 @@ def test_library_rows_keep_video_actions_and_clean_lyric_preview_separate() -> N
     assert "Package identity does not match the Library authority" in native
     assert "let _ = local_clip::cancel(&app, &clip_id);" in native
     assert "owned_lyrics_path" in native and "fs::remove_file(path)" in native
+    assert "processing::fence_item(&app" in native
+    assert "processing::cleanup_fenced_lyrics" in native
+    assert "catalog.remove_item_candidate" in native
+    assert "restore_processing_after_delete_failure" in native
+    assert "remove_item_candidate" in catalog
+    assert "can_delete: true" in catalog
+    processing = (ROOT / "apps" / "player" / "src-tauri" / "src" / "processing.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "keep_transient_lyrics" in processing
+    assert "WORKER_TERMINATION_GRACE" in processing and "SIGKILL" in processing
     local_clip = (ROOT / "apps" / "player" / "src-tauri" / "src" / "local_clip.rs").read_text(
         encoding="utf-8"
     )

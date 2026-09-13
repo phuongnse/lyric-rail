@@ -1,12 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     fs,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::Mutex,
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::DateTime;
@@ -40,19 +40,50 @@ struct WorkerProcess {
 impl Drop for WorkerProcess {
     fn drop(&mut self) {
         self.stdin.take();
-        #[cfg(unix)]
-        {
-            if let Ok(process_id) = i32::try_from(self.child.id()) {
-                unsafe {
-                    libc::kill(-process_id, libc::SIGTERM);
-                }
-            }
+        terminate_worker(&mut self.child);
+    }
+}
+
+const WORKER_TERMINATION_GRACE: Duration = Duration::from_secs(5);
+
+fn terminate_worker(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_some() {
+        return;
+    }
+    #[cfg(unix)]
+    if let Ok(process_id) = i32::try_from(child.id()) {
+        unsafe {
+            libc::kill(-process_id, libc::SIGTERM);
         }
-        #[cfg(windows)]
-        {
-            let _ = self.child.kill();
+    }
+    #[cfg(windows)]
+    {
+        let _ = child.kill();
+    }
+    let deadline = Instant::now() + WORKER_TERMINATION_GRACE;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(_) => break,
         }
-        let _ = self.child.wait();
+    }
+    #[cfg(unix)]
+    if let Ok(process_id) = i32::try_from(child.id()) {
+        unsafe {
+            libc::kill(-process_id, libc::SIGKILL);
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = child.kill();
+    }
+    let deadline = Instant::now() + WORKER_TERMINATION_GRACE;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+        }
     }
 }
 
@@ -71,7 +102,6 @@ struct ProcessingInner {
     pending: HashMap<String, PendingJob>,
     waiting: VecDeque<WorkerRequest>,
     active_request: Option<String>,
-    removal_reservations: HashSet<String>,
 }
 
 struct FencedItem {
@@ -83,20 +113,6 @@ struct FencedItem {
 #[derive(Default)]
 pub struct ProcessingState {
     inner: Mutex<ProcessingInner>,
-}
-
-#[derive(Debug)]
-pub enum RemovalPreparation {
-    Active,
-    Ready(Box<RemovalReservation>),
-}
-
-#[derive(Debug)]
-pub struct RemovalReservation {
-    item_id: String,
-    request: Option<WorkerRequest>,
-    pending: Option<PendingJob>,
-    waiting_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1182,9 +1198,6 @@ fn commit_waiting_request(
 
 impl ProcessingInner {
     fn fence_item(&mut self, item_id: &str) -> Result<Option<FencedItem>, String> {
-        if self.removal_reservations.contains(item_id) {
-            return Err("This item is being removed from the Library".into());
-        }
         if self.active_request.as_deref() == Some(item_id) {
             let pending = self
                 .pending
@@ -1217,91 +1230,6 @@ impl ProcessingInner {
             transient_lyrics: pending.transient_lyrics,
             restart_worker: false,
         }))
-    }
-
-    fn prepare_item_removal(&mut self, item_id: &str) -> Result<RemovalPreparation, String> {
-        if self.active_request.as_deref() == Some(item_id) {
-            return Ok(RemovalPreparation::Active);
-        }
-        if self.removal_reservations.contains(item_id) {
-            return Err("This item is already being removed".into());
-        }
-
-        let waiting_index = self
-            .waiting
-            .iter()
-            .position(|request| request.request_id == item_id);
-        let (request, pending) = match waiting_index {
-            Some(index) => {
-                if !self.pending.contains_key(item_id) {
-                    return Err("Processing state is missing the queued item".into());
-                }
-                let request = self
-                    .waiting
-                    .get(index)
-                    .cloned()
-                    .expect("the queued request remains at its recorded index");
-                let pending = self
-                    .pending
-                    .remove(item_id)
-                    .expect("the queued item was checked above");
-                self.waiting.remove(index);
-                (Some(request), Some(pending))
-            }
-            None => {
-                if self.pending.contains_key(item_id) {
-                    return Err("Processing state has an unowned pending item".into());
-                }
-                (None, None)
-            }
-        };
-        self.removal_reservations.insert(item_id.to_owned());
-        Ok(RemovalPreparation::Ready(Box::new(RemovalReservation {
-            item_id: item_id.to_owned(),
-            request,
-            pending,
-            waiting_index,
-        })))
-    }
-
-    fn rollback_item_removal(&mut self, reservation: RemovalReservation) -> Result<(), String> {
-        if !self.removal_reservations.contains(&reservation.item_id) {
-            return Err("Item removal reservation is no longer active".into());
-        }
-        if reservation.request.is_some() != reservation.pending.is_some()
-            || reservation
-                .pending
-                .as_ref()
-                .is_some_and(|_| self.pending.contains_key(&reservation.item_id))
-            || reservation.request.as_ref().is_some_and(|request| {
-                self.waiting
-                    .iter()
-                    .any(|candidate| candidate.request_id == request.request_id)
-            })
-        {
-            return Err("Processing state changed while restoring the queued item".into());
-        }
-
-        self.removal_reservations.remove(&reservation.item_id);
-        if let (Some(request), Some(pending)) = (reservation.request, reservation.pending) {
-            self.pending.insert(reservation.item_id, pending);
-            let index = reservation.waiting_index.unwrap_or(self.waiting.len());
-            self.waiting.insert(index.min(self.waiting.len()), request);
-        }
-        Ok(())
-    }
-
-    fn commit_item_removal(&mut self, reservation: &RemovalReservation) -> Result<bool, String> {
-        if !self.removal_reservations.contains(&reservation.item_id) {
-            return Err("Item removal reservation is no longer active".into());
-        }
-        let transient_lyrics = reservation
-            .pending
-            .as_ref()
-            .and_then(|pending| pending.transient_lyrics.clone());
-        cleanup_transient_lyrics(transient_lyrics.as_deref())?;
-        self.removal_reservations.remove(&reservation.item_id);
-        Ok(reservation.pending.is_some())
     }
 }
 
@@ -1900,9 +1828,6 @@ pub fn enqueue_item(
         .inner
         .lock()
         .map_err(|_| "Processing state lock is poisoned".to_string())?;
-    if inner.removal_reservations.contains(&request_id) {
-        return Err("This item is being removed from the Library".into());
-    }
     if inner.pending.contains_key(&request_id) {
         return Ok(());
     }
@@ -2051,56 +1976,15 @@ fn request_cancel(app: AppHandle, job_id: String) {
     });
 }
 
-pub fn prepare_item_removal(app: &AppHandle, item_id: &str) -> Result<RemovalPreparation, String> {
-    let state = app.state::<ProcessingState>();
-    let mut inner = state
-        .inner
-        .lock()
-        .map_err(|_| "Processing state lock is poisoned".to_string())?;
-    inner.prepare_item_removal(item_id)
-}
-
-pub fn rollback_item_removal(
-    app: &AppHandle,
-    reservation: RemovalReservation,
-) -> Result<(), String> {
-    let state = app.state::<ProcessingState>();
-    let mut inner = state
-        .inner
-        .lock()
-        .map_err(|_| "Processing state lock is poisoned".to_string())?;
-    inner.rollback_item_removal(reservation)
-}
-
-pub fn commit_item_removal(
-    app: &AppHandle,
-    reservation: &RemovalReservation,
-) -> Result<(), String> {
-    let item_id = reservation.item_id.clone();
-    let cancelled_waiting = {
-        let state = app.state::<ProcessingState>();
-        let mut inner = state
-            .inner
-            .lock()
-            .map_err(|_| "Processing state lock is poisoned".to_string())?;
-        inner.commit_item_removal(reservation)?
-    };
-    if cancelled_waiting {
-        tasks::finish(
-            app,
-            &item_id,
-            TaskStatus::Cancelled,
-            Some("Removed from Library before processing started".into()),
-        );
-    }
-    Ok(())
-}
-
 pub fn cancel_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
     cancel_item_inner(app, item_id).map(|_| ())
 }
 
-pub fn fence_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
+pub fn fence_item(
+    app: &AppHandle,
+    item_id: &str,
+    keep_transient_lyrics: bool,
+) -> Result<Option<PathBuf>, String> {
     let fenced = {
         let state = app.state::<ProcessingState>();
         let mut inner = state
@@ -2115,10 +1999,15 @@ pub fn fence_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
         restart_worker,
     }) = fenced
     else {
-        return Ok(());
+        return Ok(None);
     };
     drop(process);
-    cleanup_transient_lyrics(transient_lyrics.as_deref())?;
+    let transient_lyrics = if keep_transient_lyrics {
+        transient_lyrics
+    } else {
+        cleanup_transient_lyrics(transient_lyrics.as_deref())?;
+        None
+    };
     if restart_worker {
         let failures = {
             let state = app.state::<ProcessingState>();
@@ -2134,9 +2023,13 @@ pub fn fence_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
         app,
         item_id,
         TaskStatus::Cancelled,
-        Some("Library edit rolled back before processing could continue".into()),
+        Some("Library operation terminated processing before it could continue".into()),
     );
-    Ok(())
+    Ok(transient_lyrics)
+}
+
+pub fn cleanup_fenced_lyrics(path: Option<&Path>) -> Result<(), String> {
+    cleanup_transient_lyrics(path)
 }
 
 pub fn pause_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
@@ -2193,9 +2086,6 @@ fn cancel_item_inner(app: &AppHandle, item_id: &str) -> Result<bool, String> {
             .inner
             .lock()
             .map_err(|_| "Processing state lock is poisoned".to_string())?;
-        if inner.removal_reservations.contains(item_id) {
-            return Err("This item is being removed from the Library".into());
-        }
         let waiting = inner.active_request.as_deref() != Some(item_id);
         if waiting {
             inner
@@ -2317,11 +2207,10 @@ mod tests {
     use super::encode_worker_request;
     use super::{
         DispatchFailure, DispatchFailureKind, MODEL_PROVENANCE_FAILURE_PREFIX, PendingJob,
-        ProcessingInner, RemovalPreparation, WorkerRequest, apply_current_generation,
-        commit_waiting_request, dispatch_failure_projection, drain_dispatch_failures,
-        durable_task_record, error_code, load_durable_manifest, read_bounded_lines,
-        read_durable_output, read_worker_stdout, recover_worker_disconnect,
-        take_worker_disconnect_failure, worker_command, worker_request,
+        ProcessingInner, WorkerRequest, apply_current_generation, commit_waiting_request,
+        dispatch_failure_projection, drain_dispatch_failures, durable_task_record, error_code,
+        load_durable_manifest, read_bounded_lines, read_durable_output, read_worker_stdout,
+        recover_worker_disconnect, take_worker_disconnect_failure, worker_command, worker_request,
     };
     use crate::catalog::{
         CatalogItem, ItemLocation, ItemStatus, MediaOrigin, ProcessingEvidenceStatus,
@@ -2333,7 +2222,7 @@ mod tests {
     use std::{
         collections::{HashMap, VecDeque},
         fs,
-        path::PathBuf,
+        path::{Path, PathBuf},
     };
 
     fn test_request(request_id: &str) -> WorkerRequest {
@@ -2360,65 +2249,16 @@ mod tests {
     }
 
     #[test]
-    fn removal_rejects_active_request_without_cancellation_side_effects() {
-        let mut inner = ProcessingInner {
-            active_request: Some("active-item".into()),
-            ..Default::default()
-        };
-        inner
-            .pending
-            .insert("active-item".into(), test_pending(None));
-
-        assert!(matches!(
-            inner.prepare_item_removal("active-item").unwrap(),
-            RemovalPreparation::Active
-        ));
-        assert_eq!(inner.active_request.as_deref(), Some("active-item"));
-        assert!(!inner.removal_reservations.contains("active-item"));
-        assert!(!inner.pending["active-item"].cancel_requested);
-    }
-
-    #[test]
-    fn queued_removal_reservation_rolls_back_without_losing_transient_lyrics() {
-        let transient = PathBuf::from("transient-lyrics.txt");
-        let request = test_request("queued-item");
-        let mut inner = ProcessingInner {
-            waiting: VecDeque::from([request.clone()]),
-            ..Default::default()
-        };
-        inner.pending.insert(
-            request.request_id.clone(),
-            test_pending(Some(transient.clone())),
-        );
-
-        let RemovalPreparation::Ready(reservation) =
-            inner.prepare_item_removal("queued-item").unwrap()
-        else {
-            panic!("queued request must be reserved, not treated as active");
-        };
-        assert!(inner.waiting.is_empty());
-        assert!(!inner.pending.contains_key("queued-item"));
-        assert!(inner.removal_reservations.contains("queued-item"));
-
-        inner.rollback_item_removal(*reservation).unwrap();
-        assert_eq!(inner.waiting.front().unwrap().request_id, "queued-item");
-        assert_eq!(
-            inner.pending["queued-item"].transient_lyrics.as_deref(),
-            Some(transient.as_path())
-        );
-        assert!(!inner.removal_reservations.contains("queued-item"));
-    }
-
-    #[test]
     fn fencing_active_request_detaches_it_before_catalog_rollback() {
         let mut inner = ProcessingInner {
             waiting: VecDeque::from([test_request("sibling-item")]),
             active_request: Some("edited-item".into()),
             ..Default::default()
         };
-        inner
-            .pending
-            .insert("edited-item".into(), test_pending(None));
+        inner.pending.insert(
+            "edited-item".into(),
+            test_pending(Some(PathBuf::from("task-lyrics.txt"))),
+        );
         inner
             .pending
             .insert("sibling-item".into(), test_pending(None));
@@ -2426,6 +2266,10 @@ mod tests {
         let fenced = inner.fence_item("edited-item").unwrap().unwrap();
         assert!(fenced.restart_worker);
         assert!(fenced.process.is_none());
+        assert_eq!(
+            fenced.transient_lyrics.as_deref(),
+            Some(Path::new("task-lyrics.txt"))
+        );
         assert!(inner.active_request.is_none());
         assert!(!inner.pending.contains_key("edited-item"));
         assert!(inner.pending.contains_key("sibling-item"));
@@ -2433,64 +2277,30 @@ mod tests {
     }
 
     #[test]
-    fn queued_removal_commit_detaches_only_the_selected_request() {
-        let directory = tempfile::tempdir().unwrap();
-        let transient = directory.path().join("transient-lyrics.txt");
-        fs::write(&transient, "Exact pasted lyrics").unwrap();
-        let selected = test_request("selected-item");
-        let sibling = test_request("sibling-item");
+    fn fencing_queued_request_keeps_sibling_and_transient_lyrics() {
+        let target = test_request("queued-item");
         let mut inner = ProcessingInner {
-            waiting: VecDeque::from([selected.clone(), sibling.clone()]),
+            waiting: VecDeque::from([target.clone(), test_request("sibling-item")]),
             ..Default::default()
         };
         inner.pending.insert(
-            selected.request_id.clone(),
-            test_pending(Some(transient.clone())),
+            target.request_id.clone(),
+            test_pending(Some(PathBuf::from("queued-lyrics.txt"))),
         );
         inner
             .pending
-            .insert(sibling.request_id.clone(), test_pending(None));
+            .insert("sibling-item".into(), test_pending(None));
 
-        let RemovalPreparation::Ready(reservation) =
-            inner.prepare_item_removal("selected-item").unwrap()
-        else {
-            panic!("queued request must be reserved, not treated as active");
-        };
-        assert!(inner.commit_item_removal(reservation.as_ref()).unwrap());
-        assert!(!inner.pending.contains_key("selected-item"));
-        assert!(inner.pending.contains_key("sibling-item"));
-        assert_eq!(inner.waiting.front().unwrap().request_id, "sibling-item");
-        assert!(!transient.exists());
-    }
-
-    #[test]
-    fn failed_removal_cleanup_keeps_reservation_for_rollback() {
-        let directory = tempfile::tempdir().unwrap();
-        let request = test_request("queued-item");
-        let mut inner = ProcessingInner {
-            waiting: VecDeque::from([request.clone()]),
-            ..Default::default()
-        };
-        inner.pending.insert(
-            request.request_id.clone(),
-            test_pending(Some(directory.path().to_owned())),
-        );
-
-        let RemovalPreparation::Ready(reservation) =
-            inner.prepare_item_removal("queued-item").unwrap()
-        else {
-            panic!("queued request must be reserved, not treated as active");
-        };
-        let error = inner.commit_item_removal(reservation.as_ref()).unwrap_err();
-        assert!(error.contains("Unable to remove task-owned lyric snapshot"));
-        assert!(inner.removal_reservations.contains("queued-item"));
-
-        inner.rollback_item_removal(*reservation).unwrap();
-        assert_eq!(inner.waiting.front().unwrap().request_id, "queued-item");
+        let fenced = inner.fence_item("queued-item").unwrap().unwrap();
+        assert!(!fenced.restart_worker);
+        assert!(fenced.process.is_none());
         assert_eq!(
-            inner.pending["queued-item"].transient_lyrics.as_deref(),
-            Some(directory.path())
+            fenced.transient_lyrics.as_deref(),
+            Some(Path::new("queued-lyrics.txt"))
         );
+        assert_eq!(inner.waiting.front().unwrap().request_id, "sibling-item");
+        assert!(!inner.pending.contains_key("queued-item"));
+        assert!(inner.pending.contains_key("sibling-item"));
     }
 
     #[test]

@@ -3,11 +3,10 @@
 Open **Library → Local → Files** and choose one audio or video file. Your original
 file stays unchanged.
 
-In **Library**, an unfinished local media item can also be removed with **Remove from
-library**. LyricRail asks for confirmation and removes only that one unfinished row;
-the source media, lyric sidecar and sibling sections stay untouched. A queued item is
-cancelled only if processing has not started. Authenticated `.lrail` packages, cloud
-items and active processing never expose this action.
+In **Library**, any local or cloud item can be deleted with **Delete permanently**.
+LyricRail asks for confirmation, terminates that item's active processing first, and
+removes only the Library record; source media, lyric sidecars, packages, sibling
+sections, and external cloud files stay untouched.
 
 ## One timeline for sections
 

@@ -52,11 +52,11 @@ PTS normalization to preserve source timing. Preview, cancel and commit leave so
 bytes unchanged. Packages and multi-file selections still enter the library directly.
 
 Playable Library rows start playback on click. Each row has one consistent action
-trigger; its menu contains only **Edit video** for available local-backed media and
-the policy-limited **Delete** action. Edit opens the shared bounded metadata/preview
-dialog and requeues the local source without changing source bytes. Delete remains
-available only for confirmed unfinished local media; it leaves the source file and
-lyric sidecar untouched and never directly deletes `.lrail` packages or cloud items.
+trigger; its menu contains **Edit video** for available local-backed media and
+**Delete** for every item. Edit opens the shared bounded metadata/preview dialog and
+requeues the local source without changing source bytes. Delete is permanent for the
+Library record, terminates that item's processing first, and leaves source files,
+lyric sidecars, `.lrail` packages, and cloud objects untouched.
 Hovering or focusing a row reveals an exact lyric preview without putting lyrics into
 the thumbnail image itself; the thumbnail remains a clean representative video frame.
 

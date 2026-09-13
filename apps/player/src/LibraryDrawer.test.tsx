@@ -195,7 +195,7 @@ describe("Library source groups", () => {
     window.removeEventListener("keydown", escapedToWindow);
   });
 
-  it("shows Remove from library only for a native-eligible unfinished local item", () => {
+  it("routes Delete for a queued local item", () => {
     const onRemoveItem = vi.fn();
     act(() => root.render(
       <LibraryDrawer
@@ -284,10 +284,12 @@ describe("Library source groups", () => {
     act(() => trigger.click());
     expect(onPlay).toHaveBeenCalledTimes(3);
     const menu = article.querySelector<HTMLElement>('[role="menu"]')!;
-    expect(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).toHaveLength(1);
-    act(() => menu.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
+    const menuItems = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(menuItems).toHaveLength(2);
+    act(() => menuItems.find((button) => button.textContent === "Edit video")!.click());
     expect(onEditVideo).toHaveBeenCalledWith(expect.objectContaining({ title: "Editable song" }));
-    expect(article.querySelector('[aria-label*="Delete"]')).toBeNull();
+    act(() => trigger.click());
+    expect([...article.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].some((button) => button.textContent === "Delete")).toBe(true);
   });
 
   it("refetches the lyric preview after a Library package or lyric revision", async () => {
@@ -335,34 +337,38 @@ describe("Library source groups", () => {
     expect(row.querySelector(".thumbnail-lyric")?.textContent).toContain("New exact lyric");
   });
 
-  it("uses the same action menu for zero, one and multiple available actions", () => {
+  it("uses the same action menu for local and cloud rows", () => {
+    const onRemoveItem = vi.fn();
     const rows = [
-      { ...item, id: "none", title: "No actions", canProcess: false },
-      { ...item, id: "one", title: "One action" },
-      { ...item, id: "two", title: "Two actions", status: "waiting-for-lyrics" as const, canDelete: true },
+      { ...item, id: "cloud", title: "Cloud offline", status: "offline" as const, canProcess: false, sources: ["Drive"] },
+      { ...item, id: "local", title: "Local ready" },
+      { ...item, id: "queued", title: "Queued local", status: "queued" as const },
     ];
     act(() => root.render(
       <LibraryDrawer
         open items={rows} catalog={{ ...catalog, items: rows }} tasksByItem={new Map()} query="" busy={false} blocked={false}
         onClose={() => undefined} onRescan={() => undefined} onQuery={() => undefined} onSelect={() => undefined}
         onPlay={() => undefined} onEditVideo={() => undefined} onAddFiles={() => undefined} onAddFolder={() => undefined}
-        onDrive={() => undefined} onRemoveItem={() => undefined} onRemoveSource={() => undefined}
+        onDrive={() => undefined} onRemoveItem={onRemoveItem} onRemoveSource={() => undefined}
         onRecoveryExport={() => undefined} onRecoveryRestore={() => undefined}
       />,
     ));
-    for (const [title, count] of [["No actions", 0], ["One action", 1], ["Two actions", 2]] as const) {
+    for (const [title, count] of [["Cloud offline", 1], ["Local ready", 2], ["Queued local", 1]] as const) {
       const row = [...host.querySelectorAll<HTMLElement>(".song-row")]
         .find((candidate) => candidate.textContent?.includes(title))!;
       const trigger = row.querySelector<HTMLButtonElement>('[aria-label^="Open actions for"]')!;
       act(() => trigger.click());
       expect(row.querySelector('[role="menu"]')).not.toBeNull();
       expect(row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).toHaveLength(count);
-      if (count) expect(document.activeElement).toBe(row.querySelector('[role="menuitem"]'));
-      if (count) {
+      expect(document.activeElement).toBe(row.querySelector('[role="menuitem"]'));
+      expect([...row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].some((button) => button.textContent === "Delete")).toBe(true);
+      if (title === "Cloud offline") {
+        act(() => [...row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Delete")!.click());
+        expect(onRemoveItem).toHaveBeenCalledWith(expect.objectContaining({ title }));
+      } else {
         act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
         expect(document.activeElement).toBe(trigger);
       }
-      else act(() => trigger.click());
     }
   });
 });

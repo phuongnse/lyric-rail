@@ -169,44 +169,6 @@ pub struct CatalogItem {
 }
 
 impl CatalogItem {
-    pub fn can_delete_unprocessed_media(&self) -> bool {
-        self.unprocessed_local_media_path().is_some()
-    }
-
-    pub fn unprocessed_local_media_path(&self) -> Option<PathBuf> {
-        if self.package_id.is_some()
-            || !matches!(
-                self.status,
-                ItemStatus::Queued
-                    | ItemStatus::WaitingForLyrics
-                    | ItemStatus::Failed
-                    | ItemStatus::SetupRequired
-            )
-            || self
-                .processing_task_evidence
-                .as_ref()
-                .is_some_and(|evidence| {
-                    matches!(evidence.status, ProcessingEvidenceStatus::Running)
-                })
-        {
-            return None;
-        }
-        let [
-            ItemLocation::LocalMedia {
-                path,
-                available: true,
-                ..
-            },
-        ] = self.locations.as_slice()
-        else {
-            return None;
-        };
-        (path.is_absolute()
-            && crate::local_source::is_media(path)
-            && !crate::local_source::is_lrail(path))
-        .then(|| path.clone())
-    }
-
     pub fn source_labels(&self) -> Vec<&'static str> {
         let mut labels = self
             .locations
@@ -332,7 +294,7 @@ pub(crate) struct LocalMediaUpdate {
 }
 
 impl CatalogItemView {
-    fn from_item(item: &CatalogItem, can_delete: bool) -> Self {
+    fn from_item(item: &CatalogItem) -> Self {
         let (trim_start_millis, trim_end_millis) = item
             .locations
             .iter()
@@ -358,7 +320,7 @@ impl CatalogItemView {
             status_message: item.status_message.clone(),
             has_thumbnail: item.has_thumbnail,
             can_rename: item.section_id.is_some() && item.status == ItemStatus::WaitingForLyrics,
-            can_delete,
+            can_delete: true,
             can_process: item.locations.iter().any(|location| {
                 matches!(
                     location,
@@ -500,9 +462,7 @@ impl Catalog {
                 .document
                 .items
                 .iter()
-                .map(|item| {
-                    CatalogItemView::from_item(item, self.can_delete_unprocessed_media(&item.id))
-                })
+                .map(CatalogItemView::from_item)
                 .collect(),
             local_sources: self.document.local_sources.clone(),
             drive_sources: self.document.drive_sources.clone(),
@@ -728,11 +688,6 @@ impl Catalog {
         self.document.items.get_mut(index)
     }
 
-    pub fn can_delete_unprocessed_media(&self, id: &str) -> bool {
-        self.item(id)
-            .is_some_and(CatalogItem::can_delete_unprocessed_media)
-    }
-
     pub fn remove_item(&mut self, id: &str) -> Option<CatalogItem> {
         let index = *self.item_lookup.get(id)?;
         let removed = self.document.items.remove(index);
@@ -740,13 +695,13 @@ impl Catalog {
         Some(removed)
     }
 
-    pub fn remove_unprocessed_item_candidate(
+    pub fn remove_item_candidate(
         &self,
         id: &str,
         persist: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<Self, String> {
-        if !self.can_delete_unprocessed_media(id) {
-            return Err("Only unfinished local media items can be removed".into());
+        if self.item(id).is_none() {
+            return Err("Library item no longer exists".into());
         }
         let mut candidate = self.clone();
         candidate
@@ -1309,10 +1264,7 @@ impl Catalog {
                 .iter()
                 .take(MAX_SEARCH_RESULTS)
                 .map(|item| SearchResult {
-                    item: CatalogItemView::from_item(
-                        item,
-                        self.can_delete_unprocessed_media(&item.id),
-                    ),
+                    item: CatalogItemView::from_item(item),
                     lyric_snippet: None,
                 })
                 .collect();
@@ -1342,10 +1294,7 @@ impl Catalog {
                     Reverse(score),
                     item.title.clone(),
                     SearchResult {
-                        item: CatalogItemView::from_item(
-                            item,
-                            self.can_delete_unprocessed_media(&item.id),
-                        ),
+                        item: CatalogItemView::from_item(item),
                         lyric_snippet: lyric_match.then(|| lyric_snippet(&item.lyric_text, &query)),
                     },
                 ))
@@ -1656,8 +1605,7 @@ fn lyric_snippet(original: &str, normalized_query: &str) -> String {
 mod tests {
     use super::{
         CATALOG_SCHEMA, Catalog, CatalogDocument, CatalogItem, ItemLocation, ItemStatus,
-        LocalMediaUpdate, MediaOrigin, ProcessingEvidenceStatus, ProcessingTaskEvidence,
-        migrate_catalog_document, normalize,
+        LocalMediaUpdate, MediaOrigin, migrate_catalog_document, normalize,
     };
     use std::{
         collections::{HashMap, HashSet},
@@ -1881,98 +1829,6 @@ mod tests {
     }
 
     #[test]
-    fn remove_capability_requires_one_available_unfinished_media_location() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut waiting = unfinished_item(directory.path().join("unfinished.mp4"));
-        assert!(waiting.can_delete_unprocessed_media());
-
-        waiting.status = ItemStatus::Queued;
-        assert!(waiting.can_delete_unprocessed_media());
-
-        waiting.locations[0] = ItemLocation::LocalMedia {
-            path: directory.path().join("unfinished.lrail"),
-            source_id: None,
-            lyrics_path: None,
-            origin: MediaOrigin::Disk,
-            trim_start_millis: None,
-            trim_end_millis: None,
-            available: true,
-        };
-        assert!(!waiting.can_delete_unprocessed_media());
-
-        let mut section = unfinished_item(directory.path().join("section.mp4"));
-        section.section_id = Some("section".into());
-        assert!(section.can_delete_unprocessed_media());
-
-        let mut processing = unfinished_item(directory.path().join("processing.mp4"));
-        processing.status = ItemStatus::Processing;
-        assert!(!processing.can_delete_unprocessed_media());
-
-        let mut terminal = unfinished_item(directory.path().join("failed.mp4"));
-        terminal.status = ItemStatus::Failed;
-        terminal.processing_task_evidence = Some(ProcessingTaskEvidence {
-            job_id: Some("job".into()),
-            status: ProcessingEvidenceStatus::Running,
-            progress_percent: 10.0,
-            stage_key: None,
-            stage_title: None,
-            stage_progress_percent: None,
-            started_at_millis: 1,
-            updated_at_millis: 2,
-            finished_at_millis: None,
-        });
-        assert!(!terminal.can_delete_unprocessed_media());
-
-        terminal.processing_task_evidence.as_mut().unwrap().status =
-            ProcessingEvidenceStatus::Queued;
-        assert!(terminal.can_delete_unprocessed_media());
-
-        terminal.status = ItemStatus::Queued;
-        assert!(terminal.can_delete_unprocessed_media());
-    }
-
-    #[test]
-    fn catalog_remove_capability_allows_each_shared_unfinished_row() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("shared.mp4");
-        let mut catalog = catalog(0);
-        catalog.document.items = (1..=5)
-            .map(|index| {
-                let mut item = unfinished_item(path.clone());
-                item.id = format!("section-{index}");
-                item.section_id = Some(item.id.clone());
-                item
-            })
-            .collect();
-        catalog.rebuild_indexes();
-        for index in 1..=5 {
-            assert!(catalog.can_delete_unprocessed_media(&format!("section-{index}")));
-        }
-        assert_eq!(
-            catalog.remove_item("section-3").map(|item| item.id),
-            Some("section-3".into())
-        );
-        assert_eq!(catalog.items().len(), 4);
-        assert!(catalog.item("section-3").is_none());
-        for index in [1, 2, 4, 5] {
-            assert!(catalog.can_delete_unprocessed_media(&format!("section-{index}")));
-        }
-    }
-
-    #[test]
-    fn catalog_snapshot_exposes_remove_for_an_unshared_queued_section() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut catalog = catalog(0);
-        let mut section = unfinished_item(directory.path().join("queued.mp4"));
-        section.id = "queued-section".into();
-        section.section_id = Some("section".into());
-        section.status = ItemStatus::Queued;
-        catalog.document.items.push(section);
-        catalog.rebuild_indexes();
-        assert!(catalog.snapshot().items[0].can_delete);
-    }
-
-    #[test]
     fn removing_item_rebuilds_catalog_indexes() {
         let mut catalog = catalog(3);
         assert_eq!(
@@ -2002,15 +1858,14 @@ mod tests {
         let media_before = fs::read(&media).unwrap();
         let lyrics_before = fs::read(&lyrics).unwrap();
 
-        let failed =
-            catalog.remove_unprocessed_item_candidate("unfinished", |_| Err("disk full".into()));
+        let failed = catalog.remove_item_candidate("unfinished", |_| Err("disk full".into()));
         assert_eq!(failed.as_ref().err().map(String::as_str), Some("disk full"));
         assert!(catalog.item("unfinished").is_some());
         assert_eq!(fs::read(&media).unwrap(), media_before);
         assert_eq!(fs::read(&lyrics).unwrap(), lyrics_before);
 
         let candidate = catalog
-            .remove_unprocessed_item_candidate("unfinished", |candidate| {
+            .remove_item_candidate("unfinished", |candidate| {
                 assert!(candidate.item("unfinished").is_none());
                 Ok(())
             })
@@ -2022,27 +1877,56 @@ mod tests {
     }
 
     #[test]
-    fn removal_candidate_rejects_authenticated_package_rows() {
+    fn universal_removal_handles_local_and_cloud_items_without_touching_sources() {
         let directory = tempfile::tempdir().unwrap();
-        let mut item = unfinished_item(directory.path().join("package.lrail"));
-        item.package_id = Some("package-id".into());
-        item.locations[0] = ItemLocation::LocalPackage {
+        let media = directory.path().join("ready.mp4");
+        fs::write(&media, b"source bytes").unwrap();
+        let mut local = unfinished_item(media.clone());
+        local.id = "local-ready".into();
+        local.package_id = Some("local-package".into());
+        local.status = ItemStatus::Ready;
+        local.locations.push(ItemLocation::LocalPackage {
             source_id: None,
-            path: directory.path().join("package.lrail"),
+            path: directory.path().join("ready.lrail"),
             available: true,
-        };
-        let mut catalog = catalog(0);
-        catalog.document.items.push(item);
-        catalog.rebuild_indexes();
-
-        let result = catalog.remove_unprocessed_item_candidate("unfinished", |_| {
-            panic!("protected package rows must not reach persistence")
         });
-        assert_eq!(
-            result.as_ref().err().map(String::as_str),
-            Some("Only unfinished local media items can be removed")
-        );
-        assert!(catalog.item("unfinished").is_some());
+        let mut cloud = item(1);
+        cloud.id = "cloud-processing".into();
+        cloud.package_id = Some("cloud-package".into());
+        cloud.status = ItemStatus::Processing;
+        cloud.locations = vec![ItemLocation::GoogleDrive {
+            source_id: "drive".into(),
+            root_id: "root".into(),
+            file_id: "file".into(),
+            name: "cloud.lrail".into(),
+            size: 1,
+            version: "v1".into(),
+            modified_time: None,
+            md5_checksum: None,
+            available: true,
+        }];
+        let mut catalog = catalog(0);
+        catalog.upsert(local).unwrap();
+        catalog.upsert(cloud).unwrap();
+        assert!(catalog.snapshot().items.iter().all(|item| item.can_delete));
+        let media_before = fs::read(&media).unwrap();
+
+        let candidate = catalog
+            .remove_item_candidate("local-ready", |candidate| {
+                let persisted = serde_json::to_vec(&candidate.document).unwrap();
+                let reloaded: CatalogDocument = serde_json::from_slice(&persisted).unwrap();
+                assert!(!reloaded.items.iter().any(|item| item.id == "local-ready"));
+                Ok(())
+            })
+            .unwrap();
+        assert!(candidate.item("local-ready").is_none());
+        assert!(catalog.item("local-ready").is_some());
+        assert_eq!(fs::read(&media).unwrap(), media_before);
+
+        let failed =
+            candidate.remove_item_candidate("cloud-processing", |_| Err("disk full".into()));
+        assert_eq!(failed.as_ref().err().map(String::as_str), Some("disk full"));
+        assert!(candidate.item("cloud-processing").is_some());
     }
 
     #[test]

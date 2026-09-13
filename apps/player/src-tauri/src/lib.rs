@@ -955,8 +955,8 @@ fn rollback_library_update(
     owned_lyrics_path: &Option<PathBuf>,
     error: String,
 ) -> String {
-    let rollback = fence_item(app, item_id)
-        .and_then(|()| restore_catalog_item(app, item_id, expected, previous));
+    let rollback = fence_item(app, item_id, false)
+        .and_then(|_| restore_catalog_item(app, item_id, expected, previous));
     if rollback.is_ok() {
         cleanup_owned_lyrics(owned_lyrics_path);
     }
@@ -1686,71 +1686,79 @@ fn remove_library_source(
 }
 
 ipc_command! {
-fn remove_unprocessed_local_item(
+fn delete_library_item(
     app: tauri::AppHandle,
     item_id: String,
 ) -> Result<CatalogSnapshot, String> {
-    let reservation = match processing::prepare_item_removal(&app, &item_id)? {
-        processing::RemovalPreparation::Active => {
-            return Err(
-                "This item is already processing; stop processing before removing it from the Library".into(),
-            );
-        }
-        processing::RemovalPreparation::Ready(reservation) => *reservation,
-    };
-    let state = app.state::<CatalogState>();
-    let mut catalog = match state.0.lock() {
-        Ok(catalog) => catalog,
-        Err(_) => {
-            let error = "Catalog lock is poisoned".to_string();
-            if let Err(rollback) = processing::rollback_item_removal(&app, reservation) {
-                return Err(format!("{error}; unable to restore queued processing: {rollback}"));
-            }
-            return Err(error);
-        }
-    };
-    let previous_catalog = catalog.clone();
-    let candidate = catalog.remove_unprocessed_item_candidate(&item_id, |candidate| candidate.save());
-    let candidate = match candidate {
-        Ok(candidate) => candidate,
-        Err(error) => {
-            drop(catalog);
-            if let Err(rollback) = processing::rollback_item_removal(&app, reservation) {
-                return Err(format!("{error}; unable to restore queued processing: {rollback}"));
-            }
-            return Err(error);
+    let transient_lyrics = processing::fence_item(&app, &item_id, true)?;
+    let deletion = {
+        let state = app.state::<CatalogState>();
+        let mut catalog = state
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?;
+        let previous = catalog
+            .item(&item_id)
+            .cloned()
+            .ok_or_else(|| "Library item no longer exists".to_string())?;
+        match processing::cleanup_fenced_lyrics(transient_lyrics.as_deref()) {
+            Ok(()) => match catalog.remove_item_candidate(&item_id, |candidate| candidate.save()) {
+                Ok(candidate) => {
+                    *catalog = candidate;
+                    Ok((catalog.snapshot(), previous))
+                }
+                Err(error) => Err((previous, error)),
+            },
+            Err(error) => Err((previous, error)),
         }
     };
-    *catalog = candidate;
-    let snapshot = catalog.snapshot();
-    drop(catalog);
-    if let Err(error) = processing::commit_item_removal(&app, &reservation) {
-        let restore = (|| {
-            let state = app.state::<CatalogState>();
-            let mut catalog = state
-                .0
-                .lock()
-                .map_err(|_| "Catalog lock is poisoned".to_string())?;
-            *catalog = previous_catalog;
-            catalog.save()?;
-            Ok::<CatalogSnapshot, String>(catalog.snapshot())
-        })();
-        if let Ok(snapshot) = &restore {
-            let _ = app.emit("library-changed", snapshot.clone());
+    let snapshot = match deletion {
+        Ok((snapshot, _)) => snapshot,
+        Err((previous, error)) => {
+            return Err(restore_processing_after_delete_failure(
+                &app,
+                &previous,
+                transient_lyrics,
+                error,
+            ));
         }
-        let rollback = processing::rollback_item_removal(&app, reservation);
-        return Err(match (restore, rollback) {
-            (Ok(_), Ok(())) => format!("{error}; the unfinished item was restored"),
-            (Err(restore), Ok(())) => format!("{error}; unable to restore the Library catalog: {restore}"),
-            (Ok(_), Err(rollback)) => format!("{error}; unable to restore processing state: {rollback}"),
-            (Err(restore), Err(rollback)) => format!(
-                "{error}; unable to restore the Library catalog: {restore}; unable to restore processing state: {rollback}"
-            ),
-        });
-    }
+    };
     let _ = app.emit("library-changed", snapshot.clone());
     Ok(snapshot)
 }
+}
+
+fn restore_processing_after_delete_failure(
+    app: &tauri::AppHandle,
+    item: &CatalogItem,
+    transient_lyrics: Option<PathBuf>,
+    error: String,
+) -> String {
+    if matches!(item.status, ItemStatus::Queued | ItemStatus::Processing) {
+        let transient_lyrics = match transient_lyrics {
+            Some(path) if path.is_file() => Some(path),
+            Some(_) => match write_pasted_lyrics(app, &item.id, &item.lyric_text) {
+                Ok(path) => Some(path),
+                Err(recreate) => {
+                    return format!(
+                        "{error}; Library item was kept but lyric recovery failed: {recreate}"
+                    );
+                }
+            },
+            None => None,
+        };
+        if let Err(restart) = enqueue_item(app, item.clone(), transient_lyrics) {
+            return format!(
+                "{error}; Library item was kept but processing restart failed: {restart}"
+            );
+        }
+        if let Err(save) = save_and_emit(app) {
+            return format!(
+                "{error}; Library item was kept but recovery could not be saved: {save}"
+            );
+        }
+    }
+    format!("{error}; Library item was kept")
 }
 
 ipc_command! {
@@ -2732,7 +2740,7 @@ pub fn run() {
             rename_waiting_section,
             rescan_local_sources,
             remove_library_source,
-            remove_unprocessed_local_item,
+            delete_library_item,
             provide_lyrics_file,
             provide_lyrics_text,
             retry_processing_item,
