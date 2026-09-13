@@ -27,7 +27,8 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use catalog::{
-    Catalog, CatalogItem, CatalogSnapshot, DriveRoot, ItemLocation, ItemStatus, SearchResult,
+    Catalog, CatalogItem, CatalogSnapshot, DriveRoot, ItemLocation, ItemStatus, LocalMediaUpdate,
+    SearchResult,
 };
 use google_drive::{
     DriveFile, GoogleConfig, GoogleDriveTransport, GoogleTokenProvider, authorize_and_pick,
@@ -35,7 +36,7 @@ use google_drive::{
 };
 use local_source::{read_authoritative_lyrics, scan_files, scan_root};
 use lrail_format::{LockedSecret, PackageReader, load_vault_master};
-use processing::{ProcessingState, enqueue_item};
+use processing::{ProcessingState, enqueue_item, fence_item};
 use range_cache::{CachedRandomAccessSource, RangeCache, RangeTransport, RemoteObject};
 use scheduler::{IoPriority, PriorityScheduler};
 use semver::Version;
@@ -70,6 +71,19 @@ struct LoadedPackage {
 
 type RemoteDownload = (Arc<RangeCache>, RemoteObject);
 type ItemReader = (PackageReader, Option<RemoteDownload>);
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LibraryVideoUpdate {
+    item_id: String,
+    clip_id: String,
+    start_millis: u64,
+    end_millis: u64,
+    title: String,
+    artist: Option<String>,
+    composer: Option<String>,
+    lyrics: String,
+}
 
 #[derive(Default)]
 struct PlayerState {
@@ -566,11 +580,12 @@ fn catalog_item_from_reader(
     let artist = metadata_string(&reader.manifest.metadata, "referenceArtist")
         .or_else(|| metadata_string(&reader.manifest.metadata, "artist"));
     let composer = metadata_string(&reader.manifest.metadata, "composer");
-    let has_thumbnail = reader
-        .manifest
-        .assets
-        .iter()
-        .any(|asset| asset.logical_name == "artwork/thumbnail.webp");
+    let has_thumbnail = reader.manifest.assets.iter().any(|asset| {
+        matches!(
+            asset.logical_name.as_str(),
+            "artwork/thumbnail.webp" | "artwork/thumbnail-base.webp"
+        )
+    });
     let authoritative_is_bounded = reader
         .manifest
         .assets
@@ -874,7 +889,16 @@ fn reader_for_item(
             ItemLocation::LocalMedia { .. } => unreachable!(),
         };
         match result {
-            Ok(reader) => return Ok(reader),
+            Ok((reader, remote)) => {
+                if item
+                    .package_id
+                    .as_deref()
+                    .is_none_or(|expected| reader.manifest.package_id.to_string() == expected)
+                {
+                    return Ok((reader, remote));
+                }
+                errors.push("Package identity does not match the Library authority".into());
+            }
             Err(error) => errors.push(error),
         }
     }
@@ -895,6 +919,51 @@ fn save_and_emit(app: &tauri::AppHandle) -> Result<CatalogSnapshot, String> {
     let snapshot = catalog.snapshot();
     let _ = app.emit("library-changed", snapshot.clone());
     Ok(snapshot)
+}
+
+fn restore_catalog_item(
+    app: &tauri::AppHandle,
+    item_id: &str,
+    expected: &CatalogItem,
+    previous: &CatalogItem,
+) -> Result<(), String> {
+    let snapshot = {
+        let state = app.state::<CatalogState>();
+        let mut catalog = state
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?;
+        catalog.restore_local_media_if_unchanged(item_id, expected, previous.clone())?;
+        catalog.save()?;
+        catalog.snapshot()
+    };
+    let _ = app.emit("library-changed", snapshot);
+    Ok(())
+}
+
+fn cleanup_owned_lyrics(path: &Option<PathBuf>) {
+    if let Some(path) = path {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn rollback_library_update(
+    app: &tauri::AppHandle,
+    item_id: &str,
+    expected: &CatalogItem,
+    previous: &CatalogItem,
+    owned_lyrics_path: &Option<PathBuf>,
+    error: String,
+) -> String {
+    let rollback = fence_item(app, item_id)
+        .and_then(|()| restore_catalog_item(app, item_id, expected, previous));
+    if rollback.is_ok() {
+        cleanup_owned_lyrics(owned_lyrics_path);
+    }
+    match rollback {
+        Ok(()) => error,
+        Err(rollback_error) => format!("{error}; Library rollback failed: {rollback_error}"),
+    }
 }
 
 fn enqueue_ready(app: &tauri::AppHandle, items: Vec<CatalogItem>) {
@@ -1347,7 +1416,163 @@ async fn prepare_local_clip(
     replace_clip_id: Option<String>,
 ) -> Result<Option<local_clip::LocalClipPreview>, String> {
     let scheduler = app.state::<CloudState>().scheduler.clone();
-    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false), replace_clip_id).await
+    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false), replace_clip_id, None).await
+}
+}
+
+fn local_media_path(app: &tauri::AppHandle, item_id: &str) -> Result<PathBuf, String> {
+    let item = app
+        .state::<CatalogState>()
+        .0
+        .lock()
+        .map_err(|_| "Catalog lock is poisoned".to_string())?
+        .item(item_id)
+        .cloned()
+        .ok_or_else(|| "Library item no longer exists".to_string())?;
+    if matches!(&item.status, ItemStatus::Queued | ItemStatus::Processing) {
+        return Err("Finish the active processing task before editing this video".into());
+    }
+    item.locations
+        .into_iter()
+        .find_map(|location| match location {
+            ItemLocation::LocalMedia {
+                path,
+                available: true,
+                ..
+            } => Some(path),
+            _ => None,
+        })
+        .ok_or_else(|| "Only videos with an available local source can be edited".into())
+}
+
+ipc_command! {
+async fn prepare_library_item(
+    app: tauri::AppHandle,
+    item_id: String,
+    request_id: String,
+    compatible: Option<bool>,
+    replace_clip_id: Option<String>,
+) -> Result<Option<local_clip::LocalClipPreview>, String> {
+    let path = local_media_path(&app, &item_id)?;
+    let scheduler = app.state::<CloudState>().scheduler.clone();
+    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false), replace_clip_id, Some(item_id)).await
+}
+}
+
+ipc_command! {
+fn update_library_item(
+    app: tauri::AppHandle,
+    update: LibraryVideoUpdate,
+) -> Result<CatalogSnapshot, String> {
+    let LibraryVideoUpdate {
+        item_id,
+        clip_id,
+        start_millis,
+        end_millis,
+        title,
+        artist,
+        composer,
+        lyrics,
+    } = update;
+    let (source_path, duration_millis) = local_clip::verify_existing_item(
+        &app,
+        &clip_id,
+        &item_id,
+        start_millis,
+        end_millis,
+    )?;
+    let (title, artist, composer) = local_clip::validate_video_metadata(
+        &title,
+        artist.as_deref(),
+        composer.as_deref(),
+        &lyrics,
+    )?;
+    let (existing_lyrics, existing_path, previous_item) = {
+        let state = app.state::<CatalogState>();
+        let catalog = state
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?;
+        let item = catalog
+            .item(&item_id)
+            .ok_or_else(|| "Library item no longer exists".to_string())?;
+        let path = item.locations.iter().find_map(|location| match location {
+            ItemLocation::LocalMedia { lyrics_path, .. } => lyrics_path.clone(),
+            _ => None,
+        });
+        (item.lyric_text.clone(), path, item.clone())
+    };
+    let (lyrics_path, owned_lyrics_path) = if lyrics.trim().is_empty() {
+        (None, None)
+    } else if existing_lyrics == lyrics && existing_path.as_ref().is_some_and(|path| path.is_file()) {
+        (existing_path, None)
+    } else {
+        let candidate = pasted_lyrics_path(&app, &item_id, &lyrics)?;
+        let existed = candidate.exists();
+        let path = write_pasted_lyrics(&app, &item_id, &lyrics)?;
+        let owned = (!existed).then_some(path.clone());
+        (Some(path), owned)
+    };
+    let item_result = app
+        .state::<CatalogState>()
+        .0
+        .lock()
+        .map_err(|_| "Catalog lock is poisoned".to_string())
+        .and_then(|mut catalog| {
+            catalog.update_local_media(
+                &item_id,
+                LocalMediaUpdate {
+                title,
+                artist,
+                composer,
+                source_path,
+                lyrics_path,
+                    lyrics,
+                    start_millis,
+                    end_millis,
+                    duration_millis,
+                },
+            )
+        });
+    let item = match item_result {
+        Ok(item) => item,
+        Err(error) => {
+            cleanup_owned_lyrics(&owned_lyrics_path);
+            return Err(error);
+        }
+    };
+    let expected_item = item.clone();
+    let enqueue_result = if item.status == ItemStatus::Queued {
+        enqueue_item(&app, item, None)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = enqueue_result {
+        return Err(rollback_library_update(
+            &app,
+            &item_id,
+            &expected_item,
+            &previous_item,
+            &owned_lyrics_path,
+            error,
+        ));
+    }
+    let snapshot = save_and_emit(&app);
+    let snapshot = match snapshot {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return Err(rollback_library_update(
+                &app,
+                &item_id,
+                &expected_item,
+                &previous_item,
+                &owned_lyrics_path,
+                error,
+            ));
+        }
+    };
+    let _ = local_clip::cancel(&app, &clip_id);
+    Ok(snapshot)
 }
 }
 
@@ -1555,7 +1780,7 @@ fn provide_lyrics_file(
 }
 }
 
-fn write_pasted_lyrics(
+fn pasted_lyrics_path(
     app: &tauri::AppHandle,
     item_id: &str,
     text: &str,
@@ -1580,7 +1805,15 @@ fn write_pasted_lyrics(
     digest.update(item_id.as_bytes());
     digest.update([0]);
     digest.update(text.as_bytes());
-    let path = root.join(format!("{}.txt", hex::encode(digest.finalize())));
+    Ok(root.join(format!("{}.txt", hex::encode(digest.finalize()))))
+}
+
+fn write_pasted_lyrics(
+    app: &tauri::AppHandle,
+    item_id: &str,
+    text: &str,
+) -> Result<PathBuf, String> {
+    let path = pasted_lyrics_path(app, item_id, text)?;
     if !path.exists() {
         let temporary = path.with_extension("txt.partial");
         let mut file = fs::OpenOptions::new()
@@ -2293,17 +2526,20 @@ fn load_item_thumbnail(app: tauri::AppHandle, item_id: String) -> Result<Option<
         return Ok(None);
     }
     let (mut reader, _) = reader_for_item(&app, &item, IoPriority::AlternateTrack)?;
-    let asset = reader
+    let asset_name = "artwork/thumbnail-base.webp";
+    let Some(asset) = reader
         .manifest
         .assets
         .iter()
-        .find(|asset| asset.logical_name == "artwork/thumbnail.webp")
-        .ok_or_else(|| "Package thumbnail is missing".to_string())?;
+        .find(|asset| asset.logical_name == asset_name)
+    else {
+        return Ok(None);
+    };
     if asset.plaintext_length == 0 || asset.plaintext_length > MAX_THUMBNAIL_BYTES {
         return Err("Package thumbnail exceeds the display bound".into());
     }
     let bytes = reader
-        .read_asset("artwork/thumbnail.webp")
+        .read_asset(asset_name)
         .map_err(|error| error.to_string())?;
     Ok(Some(format!(
         "data:image/webp;base64,{}",
@@ -2485,6 +2721,8 @@ pub fn run() {
             add_local_files,
             add_local_folder,
             prepare_local_clip,
+            prepare_library_item,
+            update_library_item,
             cancel_clip_preparation,
             local_clip_frames,
             cancel_clip_frames,

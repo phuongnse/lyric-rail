@@ -9,6 +9,7 @@ use std::{
 use keyring::v1::{Entry, Error as KeyringError};
 use lrail_format::{LockedSecret, open_library_record, seal_library_record};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use uuid::Uuid;
@@ -305,6 +306,7 @@ pub struct CatalogItemView {
     pub artist: Option<String>,
     pub composer: Option<String>,
     pub first_lyric_line: Option<String>,
+    pub lyric_sha256: String,
     pub status: ItemStatus,
     pub progress_percent: f32,
     pub status_message: Option<String>,
@@ -312,11 +314,37 @@ pub struct CatalogItemView {
     pub can_process: bool,
     pub can_rename: bool,
     pub can_delete: bool,
+    pub trim_start_millis: Option<u64>,
+    pub trim_end_millis: Option<u64>,
     pub sources: Vec<String>,
+}
+
+pub(crate) struct LocalMediaUpdate {
+    pub title: String,
+    pub artist: Option<String>,
+    pub composer: Option<String>,
+    pub source_path: PathBuf,
+    pub lyrics_path: Option<PathBuf>,
+    pub lyrics: String,
+    pub start_millis: u64,
+    pub end_millis: u64,
+    pub duration_millis: u64,
 }
 
 impl CatalogItemView {
     fn from_item(item: &CatalogItem, can_delete: bool) -> Self {
+        let (trim_start_millis, trim_end_millis) = item
+            .locations
+            .iter()
+            .find_map(|location| match location {
+                ItemLocation::LocalMedia {
+                    trim_start_millis,
+                    trim_end_millis,
+                    ..
+                } => Some((*trim_start_millis, *trim_end_millis)),
+                _ => None,
+            })
+            .unwrap_or((None, None));
         Self {
             id: item.id.clone(),
             package_id: item.package_id.clone(),
@@ -324,21 +352,29 @@ impl CatalogItemView {
             artist: item.artist.clone(),
             composer: item.composer.clone(),
             first_lyric_line: item.first_lyric_line.clone(),
+            lyric_sha256: hex::encode(Sha256::digest(item.lyric_text.as_bytes())),
             status: item.status.clone(),
             progress_percent: item.progress_percent,
             status_message: item.status_message.clone(),
             has_thumbnail: item.has_thumbnail,
             can_rename: item.section_id.is_some() && item.status == ItemStatus::WaitingForLyrics,
             can_delete,
-            can_process: item
-                .locations
-                .iter()
-                .any(|location| matches!(location, ItemLocation::LocalMedia { .. })),
+            can_process: item.locations.iter().any(|location| {
+                matches!(
+                    location,
+                    ItemLocation::LocalMedia {
+                        available: true,
+                        ..
+                    }
+                )
+            }),
             sources: item
                 .source_labels()
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
+            trim_start_millis,
+            trim_end_millis,
         }
     }
 }
@@ -847,6 +883,127 @@ impl Catalog {
         Ok(())
     }
 
+    pub(crate) fn update_local_media(
+        &mut self,
+        id: &str,
+        update: LocalMediaUpdate,
+    ) -> Result<CatalogItem, String> {
+        let LocalMediaUpdate {
+            title,
+            artist,
+            composer,
+            source_path,
+            lyrics_path,
+            lyrics,
+            start_millis,
+            end_millis,
+            duration_millis,
+        } = update;
+        let index = *self
+            .item_lookup
+            .get(id)
+            .ok_or_else(|| "Library item no longer exists".to_string())?;
+        if matches!(
+            &self.document.items[index].status,
+            ItemStatus::Queued | ItemStatus::Processing
+        ) {
+            return Err("Finish the active processing task before editing this video".into());
+        }
+        let catalog_source = self.document.items[index]
+            .locations
+            .iter()
+            .find_map(|location| match location {
+                ItemLocation::LocalMedia {
+                    path,
+                    available: true,
+                    ..
+                } => Some(path.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| "Library item has no available local media source".to_string())?
+            .canonicalize()
+            .map_err(|error| format!("Unable to open Library media: {error}"))?;
+        if catalog_source != source_path {
+            return Err("Library media source changed while the editor was open".into());
+        }
+        if end_millis <= start_millis || end_millis > duration_millis {
+            return Err("Video interval is outside the source duration".into());
+        }
+        let old_bytes = self.document.items[index].lyric_text.len();
+        let existing_bytes = self.indexed_lyric_bytes.saturating_sub(old_bytes);
+        if existing_bytes.saturating_add(lyrics.len()) > MAX_INDEXED_LYRIC_TOTAL_BYTES {
+            return Err("The private lyric search catalog reached its 32 MiB text limit".into());
+        }
+        let item = &mut self.document.items[index];
+        let location = item
+            .locations
+            .iter_mut()
+            .find_map(|location| match location {
+                ItemLocation::LocalMedia {
+                    lyrics_path: current_lyrics,
+                    trim_start_millis,
+                    trim_end_millis,
+                    ..
+                } => Some((current_lyrics, trim_start_millis, trim_end_millis)),
+                _ => None,
+            })
+            .ok_or_else(|| "Only local media can be edited".to_string())?;
+        *location.0 = lyrics_path;
+        let whole_source = start_millis == 0 && end_millis == duration_millis;
+        *location.1 = (!whole_source).then_some(start_millis);
+        *location.2 = (!whole_source).then_some(end_millis);
+        item.title = title;
+        item.artist = artist;
+        item.composer = composer;
+        item.lyric_text = lyrics;
+        item.first_lyric_line = item
+            .lyric_text
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .map(str::to_owned);
+        item.status = if item.lyric_text.trim().is_empty() {
+            ItemStatus::WaitingForLyrics
+        } else {
+            ItemStatus::Queued
+        };
+        item.progress_percent = 0.0;
+        item.status_message = None;
+        item.processing_job_id = None;
+        item.processing_task_evidence = None;
+        self.indexed_lyric_bytes = existing_bytes + item.lyric_text.len();
+        self.search
+            .insert(item.id.clone(), SearchRecord::from(&*item));
+        Ok(item.clone())
+    }
+
+    pub(crate) fn restore_local_media_if_unchanged(
+        &mut self,
+        id: &str,
+        expected: &CatalogItem,
+        previous: CatalogItem,
+    ) -> Result<(), String> {
+        let index = *self
+            .item_lookup
+            .get(id)
+            .ok_or_else(|| "Library item no longer exists".to_string())?;
+        let current = &self.document.items[index];
+        let unchanged = current.id == expected.id
+            && current.section_id == expected.section_id
+            && current.package_id == expected.package_id
+            && current.title == expected.title
+            && current.artist == expected.artist
+            && current.composer == expected.composer
+            && current.first_lyric_line == expected.first_lyric_line
+            && current.lyric_text == expected.lyric_text
+            && current.has_thumbnail == expected.has_thumbnail
+            && current.locations == expected.locations;
+        if !unchanged {
+            return Err("Library item changed while rolling back the video edit".into());
+        }
+        self.replace_at(index, previous);
+        Ok(())
+    }
+
     pub fn complete_processing(
         &mut self,
         id: &str,
@@ -863,7 +1020,11 @@ impl Catalog {
             return Err("The private lyric search catalog reached its 32 MiB text limit".into());
         }
         let original_id = self.document.items[index].id.clone();
+        let replaces_local_package = package.locations.iter().any(ItemLocation::is_local_package);
         let mut locations = self.document.items[index].locations.clone();
+        if replaces_local_package {
+            locations.retain(|location| !location.is_local_package());
+        }
         for location in package.locations.drain(..) {
             if let Some(existing) = locations
                 .iter_mut()
@@ -1495,8 +1656,8 @@ fn lyric_snippet(original: &str, normalized_query: &str) -> String {
 mod tests {
     use super::{
         CATALOG_SCHEMA, Catalog, CatalogDocument, CatalogItem, ItemLocation, ItemStatus,
-        MediaOrigin, ProcessingEvidenceStatus, ProcessingTaskEvidence, migrate_catalog_document,
-        normalize,
+        LocalMediaUpdate, MediaOrigin, ProcessingEvidenceStatus, ProcessingTaskEvidence,
+        migrate_catalog_document, normalize,
     };
     use std::{
         collections::{HashMap, HashSet},
@@ -1567,6 +1728,156 @@ mod tests {
             available: true,
         }];
         item
+    }
+
+    #[test]
+    fn local_media_update_preserves_package_and_requeues_exact_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_path = directory.path().join("editable.mp4");
+        fs::write(&source_path, b"editable source").unwrap();
+        let mut editable = unfinished_item(source_path.clone());
+        editable.package_id = Some("package-editable".into());
+        editable.status = ItemStatus::Ready;
+        editable.locations.push(ItemLocation::LocalPackage {
+            source_id: None,
+            path: directory.path().join("editable.lrail"),
+            available: true,
+        });
+        let mut catalog = catalog(0);
+        catalog.upsert(editable).unwrap();
+
+        let updated = catalog
+            .update_local_media(
+                "unfinished",
+                LocalMediaUpdate {
+                    title: "Edited title".into(),
+                    artist: Some("Edited artist".into()),
+                    composer: None,
+                    source_path: source_path.canonicalize().unwrap(),
+                    lyrics_path: Some(directory.path().join("edited.txt")),
+                    lyrics: "Exact edited line\nSecond line".into(),
+                    start_millis: 100,
+                    end_millis: 900,
+                    duration_millis: 1_000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.package_id.as_deref(), Some("package-editable"));
+        assert_eq!(updated.title, "Edited title");
+        assert_eq!(
+            updated.first_lyric_line.as_deref(),
+            Some("Exact edited line")
+        );
+        assert_eq!(updated.status, ItemStatus::Queued);
+        assert!(matches!(
+            updated.locations.first(),
+            Some(ItemLocation::LocalMedia {
+                trim_start_millis: Some(100),
+                trim_end_millis: Some(900),
+                ..
+            })
+        ));
+        assert_eq!(catalog.search("edited line").len(), 1);
+
+        let mut package = item(1);
+        package.id = "new-package".into();
+        package.package_id = Some("package-new".into());
+        package.locations = vec![ItemLocation::LocalPackage {
+            source_id: None,
+            path: directory.path().join("new-package.lrail"),
+            available: true,
+        }];
+        catalog.complete_processing("unfinished", package).unwrap();
+        let completed = catalog.item("unfinished").unwrap();
+        assert_eq!(completed.status, ItemStatus::Ready);
+        assert_eq!(completed.package_id.as_deref(), Some("package-new"));
+        assert!(completed.locations.iter().any(|location| matches!(
+            location,
+            ItemLocation::LocalPackage { path, .. } if path.ends_with("new-package.lrail")
+        )));
+        assert!(!completed.locations.iter().any(|location| matches!(
+            location,
+            ItemLocation::LocalPackage { path, .. } if path.ends_with("editable.lrail")
+        )));
+    }
+
+    #[test]
+    fn local_media_rollback_restores_only_the_unchanged_item() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_path = directory.path().join("rollback.mp4");
+        fs::write(&source_path, b"rollback source").unwrap();
+        let mut catalog = catalog(0);
+        let previous = unfinished_item(source_path.clone());
+        let previous_item = previous.clone();
+        catalog.upsert(previous).unwrap();
+        let expected = catalog
+            .update_local_media(
+                "unfinished",
+                LocalMediaUpdate {
+                    title: "Edited title".into(),
+                    artist: None,
+                    composer: None,
+                    source_path: source_path.canonicalize().unwrap(),
+                    lyrics_path: None,
+                    lyrics: "Exact edited line".into(),
+                    start_millis: 0,
+                    end_millis: 1_000,
+                    duration_millis: 1_000,
+                },
+            )
+            .unwrap();
+        catalog.item_mut("unfinished").unwrap().status = ItemStatus::Processing;
+        catalog
+            .restore_local_media_if_unchanged("unfinished", &expected, previous_item.clone())
+            .unwrap();
+        assert_eq!(
+            catalog.item("unfinished").unwrap().title,
+            previous_item.title
+        );
+        assert_eq!(
+            catalog.item("unfinished").unwrap().status,
+            previous_item.status
+        );
+
+        let expected = catalog
+            .update_local_media(
+                "unfinished",
+                LocalMediaUpdate {
+                    title: "Edited again".into(),
+                    artist: None,
+                    composer: None,
+                    source_path: source_path.canonicalize().unwrap(),
+                    lyrics_path: None,
+                    lyrics: "Exact edited line".into(),
+                    start_millis: 0,
+                    end_millis: 1_000,
+                    duration_millis: 1_000,
+                },
+            )
+            .unwrap();
+        catalog.item_mut("unfinished").unwrap().title = "Concurrent title".into();
+        assert!(
+            catalog
+                .restore_local_media_if_unchanged("unfinished", &expected, previous_item)
+                .is_err()
+        );
+        assert_eq!(
+            catalog.item("unfinished").unwrap().title,
+            "Concurrent title"
+        );
+    }
+
+    #[test]
+    fn unavailable_local_media_does_not_expose_edit_capability() {
+        let mut unavailable = unfinished_item(PathBuf::from("missing.mp4"));
+        unavailable.status = ItemStatus::Ready;
+        if let ItemLocation::LocalMedia { available, .. } = &mut unavailable.locations[0] {
+            *available = false;
+        }
+        let mut catalog = catalog(0);
+        catalog.upsert(unavailable).unwrap();
+        assert!(!catalog.snapshot().items[0].can_process);
     }
 
     #[test]

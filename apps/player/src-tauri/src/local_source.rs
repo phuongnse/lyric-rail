@@ -128,11 +128,12 @@ fn package_item(path: PathBuf) -> CatalogItem {
             let artist = metadata_string(&reader.manifest.metadata, "referenceArtist")
                 .or_else(|| metadata_string(&reader.manifest.metadata, "artist"));
             let composer = metadata_string(&reader.manifest.metadata, "composer");
-            let has_thumbnail = reader
-                .manifest
-                .assets
-                .iter()
-                .any(|asset| asset.logical_name == "artwork/thumbnail.webp");
+            let has_thumbnail = reader.manifest.assets.iter().any(|asset| {
+                matches!(
+                    asset.logical_name.as_str(),
+                    "artwork/thumbnail.webp" | "artwork/thumbnail-base.webp"
+                )
+            });
             let authoritative_is_bounded = reader
                 .manifest
                 .assets

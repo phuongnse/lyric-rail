@@ -54,7 +54,7 @@ export function SettingsDialog({
     >
       <div className="settings-dialog panel" ref={dialog} tabIndex={-1}>
         <header>
-          <div><p className="eyebrow">Application</p><h2 id="settings-title">Settings</h2></div>
+          <h2 id="settings-title">Settings</h2>
           <IconButton className="dialog-close" icon="close" label="Close Settings" onClick={onClose} />
         </header>
         <div className="settings-content">

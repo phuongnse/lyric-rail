@@ -27,6 +27,7 @@ export const ICON_NAMES = [
   "fullscreen-exit",
   "music",
   "edit",
+  "trash",
   "plus",
   "alert",
   "activity",
@@ -35,6 +36,7 @@ export const ICON_NAMES = [
   "sparkles",
   "menu",
   "more",
+  "more-vertical",
   "mic",
   "mic-off",
 ] as const;
@@ -73,6 +75,8 @@ function glyph(name: IconName): ReactNode {
       return <><path d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18.5" r="2.5" fill="currentColor" stroke="none"/><circle cx="16.5" cy="16.5" r="2.5" fill="currentColor" stroke="none"/></>;
     case "edit":
       return <><path d="m14.5 5.5 4 4"/><path d="M5 19l1-4L16.5 4.5a1.4 1.4 0 0 1 2 0l1 1a1.4 1.4 0 0 1 0 2L9 18l-4 1Z"/><path d="M13.5 7.5l4 4"/></>;
+    case "trash":
+      return <><path d="M4 7h16"/><path d="m9 7 .7-2h4.6L15 7"/><path d="M6.5 7l1 14h9l1-14"/><path d="M10 11v6"/><path d="M14 11v6"/></>;
     case "plus":
       return <><path d="M12 5v14"/><path d="M5 12h14"/></>;
     case "alert":
@@ -89,6 +93,8 @@ function glyph(name: IconName): ReactNode {
       return <><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></>;
     case "more":
       return <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></>;
+    case "more-vertical":
+      return <><circle cx="12" cy="5" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.2" fill="currentColor" stroke="none"/></>;
     case "mic":
       return <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></>;
     case "mic-off":

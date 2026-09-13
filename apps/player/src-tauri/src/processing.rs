@@ -74,6 +74,12 @@ struct ProcessingInner {
     removal_reservations: HashSet<String>,
 }
 
+struct FencedItem {
+    process: Option<WorkerProcess>,
+    transient_lyrics: Option<PathBuf>,
+    restart_worker: bool,
+}
+
 #[derive(Default)]
 pub struct ProcessingState {
     inner: Mutex<ProcessingInner>,
@@ -1175,6 +1181,44 @@ fn commit_waiting_request(
 }
 
 impl ProcessingInner {
+    fn fence_item(&mut self, item_id: &str) -> Result<Option<FencedItem>, String> {
+        if self.removal_reservations.contains(item_id) {
+            return Err("This item is being removed from the Library".into());
+        }
+        if self.active_request.as_deref() == Some(item_id) {
+            let pending = self
+                .pending
+                .remove(item_id)
+                .ok_or_else(|| "Processing state is missing the active item".to_string())?;
+            self.active_request = None;
+            return Ok(Some(FencedItem {
+                process: self.process.take(),
+                transient_lyrics: pending.transient_lyrics,
+                restart_worker: true,
+            }));
+        }
+        let Some(waiting_index) = self
+            .waiting
+            .iter()
+            .position(|request| request.request_id == item_id)
+        else {
+            if self.pending.contains_key(item_id) {
+                return Err("Processing state has an unowned pending item".into());
+            }
+            return Ok(None);
+        };
+        self.waiting.remove(waiting_index);
+        let pending = self
+            .pending
+            .remove(item_id)
+            .ok_or_else(|| "Processing state is missing the queued item".to_string())?;
+        Ok(Some(FencedItem {
+            process: None,
+            transient_lyrics: pending.transient_lyrics,
+            restart_worker: false,
+        }))
+    }
+
     fn prepare_item_removal(&mut self, item_id: &str) -> Result<RemovalPreparation, String> {
         if self.active_request.as_deref() == Some(item_id) {
             return Ok(RemovalPreparation::Active);
@@ -2056,6 +2100,45 @@ pub fn cancel_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
     cancel_item_inner(app, item_id).map(|_| ())
 }
 
+pub fn fence_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
+    let fenced = {
+        let state = app.state::<ProcessingState>();
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "Processing state lock is poisoned".to_string())?;
+        inner.fence_item(item_id)?
+    };
+    let Some(FencedItem {
+        process,
+        transient_lyrics,
+        restart_worker,
+    }) = fenced
+    else {
+        return Ok(());
+    };
+    drop(process);
+    cleanup_transient_lyrics(transient_lyrics.as_deref())?;
+    if restart_worker {
+        let failures = {
+            let state = app.state::<ProcessingState>();
+            let mut inner = state
+                .inner
+                .lock()
+                .map_err(|_| "Processing state lock is poisoned".to_string())?;
+            dispatch_next(app, &mut inner).err().unwrap_or_default()
+        };
+        handle_dispatch_failures(app, failures);
+    }
+    tasks::finish(
+        app,
+        item_id,
+        TaskStatus::Cancelled,
+        Some("Library edit rolled back before processing could continue".into()),
+    );
+    Ok(())
+}
+
 pub fn pause_item(app: &AppHandle, item_id: &str) -> Result<(), String> {
     let job_id = {
         let state = app.state::<ProcessingState>();
@@ -2324,6 +2407,29 @@ mod tests {
             Some(transient.as_path())
         );
         assert!(!inner.removal_reservations.contains("queued-item"));
+    }
+
+    #[test]
+    fn fencing_active_request_detaches_it_before_catalog_rollback() {
+        let mut inner = ProcessingInner {
+            waiting: VecDeque::from([test_request("sibling-item")]),
+            active_request: Some("edited-item".into()),
+            ..Default::default()
+        };
+        inner
+            .pending
+            .insert("edited-item".into(), test_pending(None));
+        inner
+            .pending
+            .insert("sibling-item".into(), test_pending(None));
+
+        let fenced = inner.fence_item("edited-item").unwrap().unwrap();
+        assert!(fenced.restart_worker);
+        assert!(fenced.process.is_none());
+        assert!(inner.active_request.is_none());
+        assert!(!inner.pending.contains_key("edited-item"));
+        assert!(inner.pending.contains_key("sibling-item"));
+        assert_eq!(inner.waiting.front().unwrap().request_id, "sibling-item");
     }
 
     #[test]

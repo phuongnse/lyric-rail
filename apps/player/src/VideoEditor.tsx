@@ -42,7 +42,7 @@ export function VideoEditor({ preview, range, value, busy, onClose, onSave, onPl
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!busy) onClose(); }
     }}>
     <div className="clip-dialog clip-workbench clip-video-dialog panel" ref={dialog} tabIndex={-1}>
-      <header><h2 id="video-editor-title">Edit video</h2><IconButton label="Close video editor" icon="close" onClick={onClose} disabled={busy} /></header>
+      <header><div><h2 id="video-editor-title">Edit video</h2><p>Edit metadata and exact lyrics. Saving reprocesses the unchanged local source.</p></div><IconButton label="Close video editor" icon="close" onClick={onClose} disabled={busy} /></header>
       <div className="clip-video-content">
         <section aria-label="Video preview">
           <div className="clip-screen">

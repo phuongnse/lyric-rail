@@ -48,11 +48,11 @@ The final queue action is the only action that publishes the sections.
 
 `VideoEditor` is a shared component: callers provide media, playback bounds and
 metadata, and receive metadata only when saving. It is independent of the section
-picker and can also be used by a future Library edit action.
+picker and is shared by the Clip Editor and local-backed Library Edit action.
 
 Lyrics remain exactly as entered. LyricRail never infers, corrects or replaces them.
-Empty lyrics leave the Library item waiting for Paste or TXT. A full-source sidecar
-is never silently assigned to an extracted section.
+Empty lyrics leave the Library item waiting for lyrics; reopen Edit video to supply
+them. A full-source sidecar is never silently assigned to an extracted section.
 
 ## Preview and precision
 

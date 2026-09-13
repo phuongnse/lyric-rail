@@ -14,7 +14,6 @@ import {
 import {
   activeProcessingTasksByItem,
   adjacentReadyItem,
-  issueForLibraryItem,
   nextReadyItemOnEnded,
   sourceDisplayLabel,
   type CatalogSnapshot,
@@ -69,6 +68,9 @@ import {
 } from "./issues";
 import { shouldOpenClipEditor } from "./clipSelection";
 import ClipEditor, { type ClipSection, type LocalClipPreview } from "./ClipEditor";
+import { VideoEditor } from "./VideoEditor";
+import type { ClipPlaybackRange } from "./useClipPlayback";
+import type { VideoMetadata } from "./videoMetadata";
 import SettingsDialog from "./SettingsDialog";
 import type { PreferencesDraft, PreferencesSnapshot } from "./settings";
 
@@ -86,31 +88,53 @@ type PlayerStatus = {
   vaultAvailable: boolean;
   processing: { pendingJobs: number; runtimeAvailable: boolean; runtimeError?: string };
 };
+type LibraryVideoEdit = {
+  item: LibraryItem;
+  preview: LocalClipPreview;
+  range: ClipPlaybackRange;
+  value: VideoMetadata;
+};
+type LibraryVideoOpenError = { item: LibraryItem; message: string };
 
 const EMPTY_CATALOG: CatalogSnapshot = { items: [], localSources: [], driveSources: [] };
-const ROW_HEIGHT = 104;
+const ROW_HEIGHT = 88;
 
 function hasNativeBridge(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function Thumbnail({ item, selected, lyrics }: { item: LibraryItem; selected: boolean; lyrics?: string }) {
+function Thumbnail({ item, lyrics, showLyrics = true }: { item: LibraryItem; lyrics?: string; showLyrics?: boolean }) {
   const [source, setSource] = useState<string>();
+  const thumbnailKey = [item.id, item.packageId || "", item.status, item.firstLyricLine || "", item.hasThumbnail].join("\u001f");
   useEffect(() => {
     let disposed = false;
+    setSource(undefined);
     if (!item.hasThumbnail || !hasNativeBridge()) return;
     invoke<string | null>("load_item_thumbnail", { itemId: item.id })
       .then((value) => { if (!disposed && value) setSource(value); })
       .catch(() => undefined);
     return () => { disposed = true; };
-  }, [item.id, item.hasThumbnail]);
-  if (selected) return <div className="song-thumbnail lyric-thumbnail" aria-label={`${item.title} lyrics`}><p>{lyrics || item.firstLyricLine || "No lyrics yet"}</p></div>;
-  if (source) return <img className="song-thumbnail" src={source} alt="" />;
+  }, [item.hasThumbnail, item.id, thumbnailKey]);
   return (
-    <div className="song-thumbnail thumbnail-fallback" aria-hidden="true">
-      <Icon name="music" size={22} />
+    <div className="song-thumbnail-wrap">
+      {source ? <img className="song-thumbnail" src={source} alt="" /> : (
+        <div className="song-thumbnail thumbnail-fallback" aria-hidden="true">
+          <Icon name="music" size={22} />
+        </div>
+      )}
+      {showLyrics && <div className="thumbnail-lyric" aria-label={lyrics || item.firstLyricLine ? `${item.title} lyrics` : `${item.title} has no lyrics`}>
+        <p>{lyrics || item.firstLyricLine || "No lyrics yet"}</p>
+      </div>}
     </div>
   );
+}
+
+function lyricPreviewKey(item: LibraryItem): string {
+  return [item.id, item.packageId || "", item.status, item.lyricSha256 || `${item.firstLyricLine || ""}\u001f${item.lyricSnippet || ""}`].join("\u001f");
+}
+
+function libraryVideoOpenMessage(item: LibraryItem): string {
+  return `Edit video could not open for “${item.title}”. LyricRail could not prepare a bounded preview from its local source. Check that the file still exists, then try again.`;
 }
 
 type DrawerProps = {
@@ -119,28 +143,21 @@ type DrawerProps = {
   catalog: CatalogSnapshot;
   tasksByItem: ReadonlyMap<string, TaskRecord>;
   selectedId?: string;
-  selectedLyrics?: string;
   currentId?: string;
   query: string;
   busy: boolean;
   blocked: boolean;
-  activityAvailable?: boolean;
   scrollToTopToken?: number;
   onClose: () => void;
   onRescan: () => void;
   onQuery: (value: string) => void;
   onSelect: (item: LibraryItem) => void;
   onPlay: (item: LibraryItem) => void;
+  onEditVideo: (item: LibraryItem) => void;
+  onLyricsPreview?: (item: LibraryItem) => Promise<string | undefined>;
   onAddFiles: () => void;
   onAddFolder: () => void;
   onDrive: () => void;
-  onLyricsFile: (item: LibraryItem) => void;
-  onLyricsPaste: (item: LibraryItem) => void;
-  onEditLyrics: (item: LibraryItem) => void;
-  onRetry: (item: LibraryItem) => void;
-  onShowContext: (item: LibraryItem) => void;
-  onAiProcess?: (item: LibraryItem) => void;
-  onOpenActivity?: (item: LibraryItem) => void;
   onRemoveItem: (item: LibraryItem) => void;
   onRemoveSource: (id: string) => void;
   onRecoveryExport: () => void;
@@ -156,7 +173,10 @@ export function LibraryDrawer(props: DrawerProps) {
   const [height, setHeight] = useState(600);
   const [sourceMenu, setSourceMenu] = useState<"local" | "cloud">();
   const [itemMenu, setItemMenu] = useState<string>();
-  const activityAvailable = props.activityAvailable !== false;
+  const [lyricPreviews, setLyricPreviews] = useState<Record<string, { key: string; text: string }>>({});
+  const lyricRequests = useRef(new Set<string>());
+  const itemsRef = useRef(props.items);
+  itemsRef.current = props.items;
   useEffect(() => {
     if (viewport.current) viewport.current.scrollTop = 0;
     setScrollTop(0);
@@ -198,11 +218,20 @@ export function LibraryDrawer(props: DrawerProps) {
   }, [sourceMenu]);
   useEffect(() => {
     if (!itemMenu) return;
+    document.querySelector<HTMLButtonElement>(".row-menu [role=menuitem]")?.focus();
     const closeMenu = (event: PointerEvent | KeyboardEvent) => {
       if (event.type === "keydown" && (event as KeyboardEvent).key !== "Escape") return;
-      if (event.type === "keydown") event.preventDefault();
+      if (event.type === "keydown") {
+        event.preventDefault();
+        event.stopPropagation();
+      }
       if (event.type === "pointerdown" && (event.target as HTMLElement | null)?.closest(".row-actions")) return;
       setItemMenu(undefined);
+      if (event.type === "keydown") {
+        [...document.querySelectorAll<HTMLButtonElement>(".row-action-trigger")]
+          .find((button) => button.dataset.libraryItemId === itemMenu)
+          ?.focus();
+      }
     };
     document.addEventListener("pointerdown", closeMenu);
     document.addEventListener("keydown", closeMenu);
@@ -223,16 +252,47 @@ export function LibraryDrawer(props: DrawerProps) {
     event.preventDefault();
     items[next]?.focus();
   };
+  const moveItemMenuFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=menuitem]")];
+    if (!items.length) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    event.preventDefault();
+    items[next]?.focus();
+  };
   const range = visibleRange(props.items.length, scrollTop, height, ROW_HEIGHT);
   const visible = props.items.slice(range.start, range.end);
+  const requestLyricsPreview = (item: LibraryItem) => {
+    const key = lyricPreviewKey(item);
+    const requestKey = `${item.id}:${key}`;
+    if (lyricPreviews[item.id]?.key === key || lyricRequests.current.has(requestKey) || !props.onLyricsPreview) return;
+    lyricRequests.current.add(requestKey);
+    void props.onLyricsPreview(item)
+      .then((lyrics) => {
+        if (lyrics === undefined) return;
+        setLyricPreviews((current) => {
+        const latest = itemsRef.current.find((candidate) => candidate.id === item.id);
+        return latest && lyricPreviewKey(latest) === key
+          ? { ...current, [item.id]: { key, text: lyrics } }
+          : current;
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => lyricRequests.current.delete(requestKey));
+  };
   return (
     <>
       <button className={`drawer-scrim ${props.open ? "shown" : ""}`} onClick={props.onClose} aria-label="Close library" tabIndex={props.open && !props.blocked ? 0 : -1} inert={props.blocked} />
       <aside id="library-drawer" className={`library-drawer ${props.open ? "open" : ""}`} aria-hidden={!props.open || props.blocked} inert={!props.open || props.blocked}>
         <header className="drawer-header">
           <div>
-            <p className="eyebrow">Library & queue</p>
-            <strong>{props.items.length} items</strong>
+            <h2>Library</h2>
+            <span>{props.items.length} items</span>
           </div>
           <div className="drawer-tools">
             <IconButton className="drawer-tool" icon="refresh" label="Rescan library sources" onClick={props.onRescan} />
@@ -269,8 +329,12 @@ export function LibraryDrawer(props: DrawerProps) {
             <div className="virtual-space" style={{ height: props.items.length * ROW_HEIGHT }}>
               {visible.map((item, index) => {
                 const top = (range.start + index) * ROW_HEIGHT;
-                const waiting = item.status === "waiting-for-lyrics";
                 const playable = item.status === "ready" || item.status === "offline";
+                const editable = item.canProcess && item.status !== "queued" && item.status !== "processing";
+                const preview = lyricPreviews[item.id];
+                const lyrics = preview?.key === lyricPreviewKey(item)
+                  ? preview.text
+                  : item.lyricSnippet || item.firstLyricLine;
                 const task = props.tasksByItem.get(item.id);
                 const taskActive = task?.status === "queued" || task?.status === "running";
                 const taskProgress = task?.progressPercent ?? task?.stageProgressPercent;
@@ -283,34 +347,39 @@ export function LibraryDrawer(props: DrawerProps) {
                     className={`song-row ${props.selectedId === item.id ? "selected" : ""} ${props.currentId === item.id ? "current" : ""}`}
                     style={{ transform: `translateY(${top}px)` }}
                     key={item.id}
-                    onClick={() => props.onSelect(item)}
-                    onDoubleClick={() => playable && props.onPlay(item)}
                   >
-                    <Thumbnail item={item} selected={props.selectedId === item.id} lyrics={props.selectedId === item.id ? props.selectedLyrics : undefined} />
-                    <div className="song-copy">
-                      <strong>{item.title}</strong>
-                      <span>{task?.stageTitle || task?.statusMessage || item.statusMessage || item.artist || item.composer || item.firstLyricLine || "Unknown artist"}</span>
-                      {item.lyricSnippet && <em>“…{item.lyricSnippet}”</em>}
-                      <div className="row-meta">
-                        {item.sources.map((source) => <small key={source}>{sourceDisplayLabel(source)}</small>)}
-                        <small className={`status ${rowStatus}`}>{rowStatus.replace(/-/g, " ")}</small>
+                    <button
+                      type="button"
+                      className="song-row-main"
+                      aria-label={playable ? `Play ${item.title}` : `Open ${item.title}`}
+                      onClick={() => playable ? props.onPlay(item) : props.onSelect(item)}
+                      onMouseEnter={() => requestLyricsPreview(item)}
+                      onFocus={() => requestLyricsPreview(item)}
+                      onKeyDown={(event) => {
+                        if (!["Enter", " "].includes(event.key)) return;
+                        event.preventDefault();
+                        playable ? props.onPlay(item) : props.onSelect(item);
+                      }}
+                    >
+                      <Thumbnail item={item} lyrics={lyrics} />
+                      <div className="song-copy">
+                        <strong>{item.title}</strong>
+                        <span>{task?.stageTitle || task?.statusMessage || item.statusMessage || item.artist || item.composer || item.firstLyricLine || "Unknown artist"}</span>
+                        <div className="row-meta">
+                          {item.sources.map((source) => <small key={source}>{sourceDisplayLabel(source)}</small>)}
+                          <small className={`status ${rowStatus}`}>{rowStatus.replace(/-/g, " ")}</small>
+                        </div>
+                        {taskActive && (
+                          <i className={`row-progress ${taskProgress === undefined ? "indeterminate" : ""}`}><b style={taskProgress === undefined ? undefined : { width: `${taskProgress}%` }} /></i>
+                        )}
                       </div>
-                      {taskActive && (
-                        <i className={`row-progress ${taskProgress === undefined ? "indeterminate" : ""}`}><b style={taskProgress === undefined ? undefined : { width: `${taskProgress}%` }} /></i>
-                      )}
-                    </div>
+                    </button>
                     <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-                      <IconButton className="row-icon" icon="more" iconSize={17} label={`Open actions for ${item.title}`} aria-haspopup="menu" aria-expanded={itemMenu === item.id} onClick={() => setItemMenu((current) => current === item.id ? undefined : item.id)} />
-                      {itemMenu === item.id && <div className="row-menu" role="menu" aria-label={`Actions for ${item.title}`}>
-                        {playable && <button role="menuitem" onClick={() => closeItemMenu(() => props.onPlay(item))}><Icon name="play" size={16} /><span>Play</span></button>}
-                        {item.canProcess && <button role="menuitem" className="ai-menu-action" onClick={() => closeItemMenu(() => props.onAiProcess?.(item))}><Icon name="sparkles" size={16} /><span>AI process track</span></button>}
-                        {waiting && <button role="menuitem" onClick={() => closeItemMenu(() => props.onLyricsPaste(item))}><Icon name="edit" size={16} /><span>{item.canRename ? "Edit song" : "Paste lyrics"}</span></button>}
-                        {waiting && <button role="menuitem" onClick={() => closeItemMenu(() => props.onLyricsFile(item))}><Icon name="music" size={16} /><span>Load TXT lyrics</span></button>}
-                        {item.status === "failed" && item.canProcess && <button role="menuitem" onClick={() => closeItemMenu(() => props.onRetry(item))}><Icon name="refresh" size={16} /><span>Retry processing</span></button>}
-                        {activityAvailable && (task || ["queued", "processing", "failed", "setup-required"].includes(item.status)) && <button role="menuitem" onClick={() => closeItemMenu(() => props.onShowContext(item))}><Icon name={item.status === "failed" || item.status === "setup-required" ? "alert" : "activity"} size={16} /><span>{item.status === "failed" || item.status === "setup-required" ? "View issue" : "View Activity"}</span></button>}
-                        {activityAvailable && task && <button role="menuitem" onClick={() => closeItemMenu(() => props.onOpenActivity?.(item))}><Icon name="activity" size={16} /><span>Open Activity</span></button>}
-                        {playable && item.sources.includes("Disk") && <button role="menuitem" onClick={() => closeItemMenu(() => props.onEditLyrics(item))}><Icon name="edit" size={16} /><span>Edit lyrics</span></button>}
-                        {item.canDelete && <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}><Icon name="close" size={16} /><span>Remove from library</span></button>}
+                      <IconButton className="row-icon row-action-trigger" icon="more-vertical" iconSize={18} label={`Open actions for ${item.title}`} aria-haspopup="menu" aria-expanded={itemMenu === item.id} data-library-item-id={item.id} onClick={() => setItemMenu((current) => current === item.id ? undefined : item.id)} />
+                      {itemMenu === item.id && <div className="row-menu" role="menu" aria-label={`Actions for ${item.title}`} onKeyDown={moveItemMenuFocus}>
+                        {editable && <button role="menuitem" onClick={() => closeItemMenu(() => props.onEditVideo(item))}><Icon name="edit" size={16} /><span>Edit video</span></button>}
+                        {item.canDelete && <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}><Icon name="trash" size={16} /><span>Delete</span></button>}
+                        {!editable && !item.canDelete && <span className="row-menu-empty">No actions available</span>}
                       </div>}
                     </div>
                   </article>
@@ -501,10 +570,7 @@ export function ActivityCenter({
       <button className={`issues-scrim ${open ? "shown" : ""}`} onClick={onClose} aria-label="Close activity" tabIndex={open && !blocked ? 0 : -1} inert={blocked} />
       <aside ref={drawerRef} id="system-issues" className={`issues-drawer activity-drawer ${open ? "open" : ""}`} aria-hidden={!open || blocked} inert={!open || blocked}>
         <header className="issues-header">
-          <div>
-            <p className="eyebrow">Tasks & system health</p>
-            <h2 ref={headingRef} tabIndex={-1}>Activity</h2>
-          </div>
+          <h2 ref={headingRef} tabIndex={-1}>Activity</h2>
           <IconButton icon="close" label="Close activity" onClick={onClose} />
         </header>
         <nav className="activity-tabs" aria-label="Activity views" role="tablist" onKeyDown={moveTabFocus}>
@@ -633,13 +699,9 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [preferences, setPreferences] = useState<PreferencesSnapshot>();
   const [preferencesDraft, setPreferencesDraft] = useState<PreferencesDraft>({ libraryPath: "", cachePath: "" });
-  const [selectedLyrics, setSelectedLyrics] = useState("");
   const [confirmIssue, setConfirmIssue] = useState<SystemIssue>();
   const [licenseConfirmed, setLicenseConfirmed] = useState(false);
   const [seenIssueNotice, setSeenIssueNotice] = useState<string>();
-  const [lyricDialog, setLyricDialog] = useState<{ item: LibraryItem; mode: "add" | "edit" }>();
-  const [lyricDraft, setLyricDraft] = useState("");
-  const [lyricTitle, setLyricTitle] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<LibraryItem>();
   const [clipDialogOpen, setClipDialogOpen] = useState(false);
   const [clipPreview, setClipPreview] = useState<LocalClipPreview>();
@@ -648,8 +710,14 @@ function App() {
   const [clipPreparing, setClipPreparing] = useState(false);
   const [clipPreparationError, setClipPreparationError] = useState("");
   const [clipAiMessage, setClipAiMessage] = useState("");
+  const [libraryVideoEdit, setLibraryVideoEdit] = useState<LibraryVideoEdit>();
+  const [libraryVideoPreparing, setLibraryVideoPreparing] = useState(false);
+  const [libraryVideoBusy, setLibraryVideoBusy] = useState(false);
+  const [libraryVideoError, setLibraryVideoError] = useState("");
+  const [libraryVideoOpenError, setLibraryVideoOpenError] = useState<LibraryVideoOpenError>();
   const clipRequest = useRef<{ id: string; cancelled: boolean; compatible: boolean } | undefined>(undefined);
   const clipSource = useRef<string | undefined>(undefined);
+  const libraryVideoRequest = useRef<{ id: string; cancelled: boolean; compatible: boolean } | undefined>(undefined);
   const clipPreparingRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -659,13 +727,12 @@ function App() {
   const menuRef = useRef<HTMLDivElement>(null);
   const setupDialogRef = useRef<HTMLDivElement>(null);
   const aboutDialogRef = useRef<HTMLDivElement>(null);
-  const lyricDialogRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const clipDialogRef = useRef<HTMLDivElement>(null);
-  const lyricInputRef = useRef<HTMLTextAreaElement>(null);
-  const lyricRestoreRef = useRef<HTMLElement>(null);
+  const libraryVideoPreparingRef = useRef<HTMLDivElement>(null);
   const deleteRestoreRef = useRef<HTMLElement>(null);
   const clipRestoreRef = useRef<HTMLElement>(null);
+  const libraryVideoRestoreRef = useRef<HTMLElement>(null);
   const activityRestoreRef = useRef<HTMLElement>(null);
   const activityTriggerRef = useRef<HTMLButtonElement>(null);
   const lastAudibleVolumeRef = useRef(1);
@@ -729,7 +796,7 @@ function App() {
     () => activeProcessingTasksByItem(taskState.tasks),
     [taskState.tasks],
   );
-  const systemModalOpen = Boolean(confirmIssue) || aboutOpen || settingsOpen || Boolean(lyricDialog) || Boolean(deleteCandidate) || clipDialogOpen;
+  const systemModalOpen = Boolean(confirmIssue) || aboutOpen || settingsOpen || Boolean(deleteCandidate) || clipDialogOpen || Boolean(libraryVideoEdit) || libraryVideoPreparing || Boolean(libraryVideoOpenError);
   const anyModalOpen = systemModalOpen || menuOpen;
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   const [headerActive, setHeaderActive] = useState(true);
@@ -774,10 +841,11 @@ function App() {
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
   useFocusContainment(menuOpen, menuRef, undefined, menuTriggerRef);
   useFocusContainment(aboutOpen, aboutDialogRef, undefined, menuTriggerRef);
-  useFocusContainment(Boolean(lyricDialog), lyricDialogRef, lyricInputRef, lyricRestoreRef);
   useFocusContainment(Boolean(deleteCandidate), deleteDialogRef, undefined, deleteRestoreRef);
   useFocusContainment(clipDialogOpen && !clipPreparing, clipDialogRef, undefined, clipRestoreRef);
   useFocusContainment(clipDialogOpen && clipPreparing, clipPreparingRef, undefined, clipRestoreRef);
+  useFocusContainment(libraryVideoPreparing, libraryVideoPreparingRef, undefined, libraryVideoRestoreRef);
+  useFocusContainment(Boolean(libraryVideoOpenError), libraryVideoPreparingRef, undefined, libraryVideoRestoreRef);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -808,7 +876,7 @@ function App() {
 
   const contextFocusTarget = () => {
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return active?.closest(".row-actions")?.querySelector<HTMLElement>('[aria-label^="Open actions for"]') ?? active;
+    return active?.closest(".row-actions")?.querySelector<HTMLElement>("button") ?? active;
   };
 
   const replayTaskOutput = useCallback((taskId: string) => {
@@ -941,22 +1009,6 @@ function App() {
   }, [taskState.tasks]);
 
   useEffect(() => {
-    if (!selectedItem) {
-      setSelectedLyrics("");
-      return;
-    }
-    if (!native) {
-      setSelectedLyrics(selectedItem.firstLyricLine || selectedItem.lyricSnippet || "");
-      return;
-    }
-    let disposed = false;
-    invoke<string>("item_lyrics", { itemId: selectedItem.id })
-      .then((text) => { if (!disposed) setSelectedLyrics(text); })
-      .catch(() => { if (!disposed) setSelectedLyrics(selectedItem.firstLyricLine || ""); });
-    return () => { disposed = true; };
-  }, [native, selectedItem]);
-
-  useEffect(() => {
     selectedTaskIdRef.current = issuesOpen ? selectedTaskId : undefined;
     if (!issuesOpen || !selectedTaskId || !native) return;
     replayTaskOutput(selectedTaskId);
@@ -1014,8 +1066,10 @@ function App() {
           setLicenseConfirmed(false);
         }
         else if (aboutOpen) setAboutOpen(false);
-        else if (lyricDialog) setLyricDialog(undefined);
         else if (deleteCandidate) setDeleteCandidate(undefined);
+        else if (libraryVideoPreparing) cancelLibraryVideoPreparation();
+        else if (libraryVideoOpenError) dismissLibraryVideoOpenError();
+        else if (libraryVideoEdit) closeLibraryVideoEditor();
         else if (clipDialogOpen) {
           if (clipRequest.current) { cancelClipPreparation(); return; }
           if (clipBusy) return;
@@ -1033,7 +1087,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, drawerOpen, issuesOpen, licenseConfirmed, lyricDialog, menuOpen, native, opened, stopPlayback]);
+  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, drawerOpen, issuesOpen, libraryVideoEdit, libraryVideoOpenError, libraryVideoPreparing, licenseConfirmed, menuOpen, native, opened, stopPlayback]);
 
   useEffect(() => {
     if (issuesOpen) {
@@ -1175,6 +1229,144 @@ function App() {
     } finally {
       if (clipRequest.current === request) { clipRequest.current = undefined; setClipPreparing(false); setClipBusy(false); }
     }
+  };
+
+  const cancelLibraryVideoPreparation = () => {
+    const request = libraryVideoRequest.current;
+    if (request) {
+      request.cancelled = true;
+      void invoke("cancel_clip_preparation", { requestId: request.id }).catch((reason) => reportError("tasks", "Could not cancel video preview", reason, undefined, undefined, "clip-preparation"));
+    }
+    if (request?.compatible && libraryVideoEdit) {
+      setLibraryVideoError("Preparation cancelled. Your edits are kept; you can retry.");
+      setLibraryVideoPreparing(false);
+      setLibraryVideoBusy(false);
+    } else {
+      setLibraryVideoPreparing(false);
+      setLibraryVideoEdit(undefined);
+      setLibraryVideoOpenError(undefined);
+      setLibraryVideoError("");
+    }
+  };
+
+  const prepareLibraryVideo = async (item: LibraryItem, compatible = false) => {
+    const request = { id: crypto.randomUUID(), cancelled: false, compatible };
+    libraryVideoRequest.current = request;
+    setLibraryVideoError("");
+    setLibraryVideoPreparing(true);
+    setLibraryVideoBusy(true);
+    const current = libraryVideoEdit;
+    let preview: LocalClipPreview | null = null;
+    try {
+      preview = await invoke<LocalClipPreview | null>("prepare_library_item", {
+        itemId: item.id,
+        requestId: request.id,
+        compatible,
+        replaceClipId: compatible ? current?.preview.clipId : undefined,
+      });
+      if (!preview) throw new Error("Video preview is no longer available");
+      const lyrics = compatible && current
+        ? current.value.lyrics || ""
+        : await invoke<string>("item_lyrics", { itemId: item.id });
+      if (request.cancelled || libraryVideoRequest.current !== request) {
+        if (preview) void invoke("cancel_local_clip", { clipId: preview.clipId }).catch(() => undefined);
+        return;
+      }
+      const range = compatible && current
+        ? current.range
+        : {
+            startMillis: Math.min(item.trimStartMillis ?? 0, preview.durationMillis),
+            endMillis: Math.min(item.trimEndMillis ?? preview.durationMillis, preview.durationMillis),
+          };
+      if (range.endMillis <= range.startMillis) {
+        range.startMillis = 0;
+        range.endMillis = preview.durationMillis;
+      }
+      setLibraryVideoEdit({
+        item,
+        preview,
+        range,
+        value: compatible && current
+          ? current.value
+          : { title: item.title, artist: item.artist, composer: item.composer, lyrics },
+      });
+    } catch (reason) {
+      if (preview) void invoke("cancel_local_clip", { clipId: preview.clipId }).catch(() => undefined);
+      if (!request.cancelled) {
+        const message = libraryVideoOpenMessage(item);
+        if (compatible && current) setLibraryVideoError(message);
+        else setLibraryVideoOpenError({ item, message });
+        reportError("library", "Edit video unavailable", reason, message, undefined, item.id);
+      }
+    } finally {
+      if (libraryVideoRequest.current === request) {
+        libraryVideoRequest.current = undefined;
+        setLibraryVideoPreparing(false);
+        setLibraryVideoBusy(false);
+      }
+    }
+  };
+
+  const openLibraryVideo = (item: LibraryItem) => {
+    if (!native || !item.canProcess) return;
+    libraryVideoRestoreRef.current = contextFocusTarget();
+    setLibraryVideoOpenError(undefined);
+    void prepareLibraryVideo(item);
+  };
+
+  const dismissLibraryVideoOpenError = () => {
+    setLibraryVideoOpenError(undefined);
+    const restore = libraryVideoRestoreRef.current;
+    libraryVideoRestoreRef.current = null;
+    if (restore && document.contains(restore)) restore.focus();
+  };
+
+  const closeLibraryVideoEditor = () => {
+    if (libraryVideoPreparing) {
+      cancelLibraryVideoPreparation();
+      return;
+    }
+    if (libraryVideoBusy) return;
+    const clipId = libraryVideoEdit?.preview.clipId;
+    setLibraryVideoEdit(undefined);
+    setLibraryVideoOpenError(undefined);
+    setLibraryVideoError("");
+    if (native && clipId) void invoke("cancel_local_clip", { clipId }).catch(() => undefined);
+    const restore = libraryVideoRestoreRef.current;
+    libraryVideoRestoreRef.current = null;
+    if (restore && document.contains(restore)) restore.focus();
+  };
+
+  const saveLibraryVideo = (value: VideoMetadata) => {
+    const edit = libraryVideoEdit;
+    if (!native || !edit || libraryVideoBusy) return;
+    setLibraryVideoBusy(true);
+    setLibraryVideoError("");
+    void invoke<CatalogSnapshot>("update_library_item", {
+      update: {
+        itemId: edit.item.id,
+        clipId: edit.preview.clipId,
+        startMillis: edit.range.startMillis,
+        endMillis: edit.range.endMillis,
+        title: value.title,
+        artist: value.artist,
+        composer: value.composer,
+        lyrics: value.lyrics || "",
+      },
+    }).then((snapshot) => {
+      if (currentId === edit.item.id) stopPlayback();
+      setCatalog(snapshot);
+      setShownItems(snapshot.items);
+      setSelectedId(edit.item.id);
+      setLibraryVideoEdit(undefined);
+      const restore = libraryVideoRestoreRef.current;
+      libraryVideoRestoreRef.current = null;
+      if (restore && document.contains(restore)) restore.focus();
+    }).catch((reason) => {
+      const message = "Video changes could not be saved. Your draft and preview are still open; check the source/task state, then try Save again.";
+      setLibraryVideoError(message);
+      reportError("library", "Video changes could not be saved", reason, message, undefined, edit.item.id);
+    }).finally(() => setLibraryVideoBusy(false));
   };
 
   const addFiles = () => {
@@ -1383,47 +1575,6 @@ function App() {
     }, 0);
   };
 
-  const chooseLyrics = (item: LibraryItem) => runBusy(async () => {
-    const selected = await open({ multiple: false, directory: false, filters: [{ name: "UTF-8 lyrics", extensions: ["txt"] }] });
-    if (typeof selected === "string") await invoke("provide_lyrics_file", { itemId: item.id, path: selected });
-  }, "lyrics", "Lyric file could not be added");
-
-  const processLibraryItem = (item: LibraryItem) => {
-    setSelectedId(item.id);
-    if (item.status === "waiting-for-lyrics") {
-      showLyricDialog(item, "add").catch((reason) => reportError("lyrics", "Lyric editor could not open", reason));
-      return;
-    }
-    const activeTask = taskState.tasks.find((task) => task.id === item.id && (task.status === "queued" || task.status === "running" || task.status === "paused"));
-    if (activeTask) {
-      showActivityTask(activeTask);
-      return;
-    }
-    void runBusy(
-      () => invoke("retry_processing_item", { itemId: item.id }),
-      "processing",
-      `AI processing could not start for ${item.title}`,
-      item.id,
-    );
-  };
-
-  const showLyricDialog = async (item: LibraryItem, mode: "add" | "edit") => {
-    lyricRestoreRef.current = contextFocusTarget();
-    setLyricDraft(mode === "edit" && native ? await invoke<string>("item_lyrics", { itemId: item.id }) : "");
-    setLyricTitle(item.title);
-    setLyricDialog({ item, mode });
-    showLibrary();
-  };
-
-  const submitLyrics = () => lyricDialog && runBusy(async () => {
-    if (lyricDialog.item.canRename && lyricTitle !== lyricDialog.item.title) {
-      await invoke("rename_waiting_section", { itemId: lyricDialog.item.id, title: lyricTitle });
-    }
-    const command = lyricDialog.mode === "edit" ? "revise_item_lyrics" : "provide_lyrics_text";
-    await invoke(command, { itemId: lyricDialog.item.id, text: lyricDraft });
-    setLyricDialog(undefined);
-  }, "lyrics", "Lyrics could not be saved");
-
   const exportRecovery = () => runBusy(async () => {
     const output = await save({ defaultPath: "library.lrail-recovery", filters: [{ name: "LyricRail recovery", extensions: ["lrail-recovery"] }] });
     if (output) await invoke("launch_recovery_export", { output });
@@ -1600,16 +1751,6 @@ function App() {
     openTaskOutput(task);
   };
 
-  const showActivityTask = (task: TaskRecord) => {
-    if (opened) return;
-    if (task.status !== "queued" && task.status !== "running" && task.status !== "paused") return;
-    setSelectedIssueId(undefined);
-    setActivityTab("tasks");
-    showActivity();
-    openTaskOutput(task);
-    setPendingTaskFocusId(task.id);
-  };
-
   const completeTaskFocus = useCallback((taskId: string) => {
     setPendingTaskFocusId((current) => current === taskId ? undefined : current);
   }, []);
@@ -1651,26 +1792,6 @@ function App() {
       setSelectedIssueId(issue.id);
     }
     else reportError("tasks", "Linked task output is no longer available", "The bounded task record has expired. Issue details and actions are still available.", undefined, undefined, taskId);
-  };
-
-  const showItemContext = async (item: LibraryItem) => {
-    const relatedIssue = issueForLibraryItem(item, systemIssues);
-    if ((item.status === "failed" || item.status === "setup-required") && relatedIssue) {
-      showIssue(relatedIssue);
-      return;
-    }
-    let task = taskState.tasks.find((candidate) => candidate.id === item.id);
-    if (!task && native) {
-      try {
-        const nativeTask = await invoke<TaskRecord | null>("task_record", { taskId: item.id });
-        task = nativeTask ? normalizeTaskRecord(nativeTask) : undefined;
-      } catch (reason) {
-        reportError("tasks", "Task details could not be opened", reason, undefined, undefined, item.id);
-      }
-    }
-    if (task && (task.status === "queued" || task.status === "running" || task.status === "paused")) showActivityTask(task);
-    else if (relatedIssue) showIssue(relatedIssue);
-    else reportError("activity", "Related activity is no longer available", "No active task or matching Issue is available for this item.");
   };
 
   const cancelActivityTask = (task: TaskRecord) => {
@@ -1853,7 +1974,7 @@ function App() {
                     aria-label={`Play ${item.title}`}
                   >
                     <div className="stage-video-thumb-wrap">
-                      <Thumbnail item={item} selected={false} />
+                      <Thumbnail item={item} showLyrics={false} />
                     </div>
                     <div className="stage-video-meta">
                       <strong className="stage-video-title">{item.title}</strong>
@@ -1939,27 +2060,22 @@ function App() {
         catalog={catalog}
         tasksByItem={processingTasksByItem}
         selectedId={selectedId}
-        selectedLyrics={selectedLyrics}
         currentId={currentId}
         query={query}
         busy={busy || !native}
         blocked={systemModalOpen}
-        activityAvailable={!opened}
         onClose={() => setDrawerOpen(false)}
         onRescan={rescanLibrary}
         onQuery={setQuery}
         onSelect={(item) => setSelectedId(item.id)}
         onPlay={openItem}
+        onEditVideo={openLibraryVideo}
+        onLyricsPreview={(item) => native
+          ? invoke<string>("item_lyrics", { itemId: item.id }).catch(() => undefined)
+          : Promise.resolve(undefined)}
         onAddFiles={addFiles}
         onAddFolder={addFolder}
         onDrive={connectDrive}
-        onLyricsFile={chooseLyrics}
-        onLyricsPaste={(item) => showLyricDialog(item, "add").catch((reason) => reportError("lyrics", "Lyric editor could not open", reason))}
-        onEditLyrics={(item) => showLyricDialog(item, "edit").catch((reason) => reportError("lyrics", "Lyric editor could not open", reason))}
-        onRetry={(item) => runBusy(() => invoke("retry_processing_item", { itemId: item.id }), "processing", `Retry failed for ${item.title}`, item.id)}
-        onShowContext={showItemContext}
-        onAiProcess={processLibraryItem}
-        onOpenActivity={showItemContext}
         onRemoveItem={requestRemove}
         onRemoveSource={(id) => runBusy(() => invoke("remove_library_source", { sourceId: id }), "library", "Library source could not be removed")}
         onRecoveryExport={exportRecovery}
@@ -1999,27 +2115,6 @@ function App() {
         />
       )}
 
-      {lyricDialog && (
-        <div
-          className="modal-layer"
-          role="dialog"
-          aria-modal="true"
-          onClick={(event) => {
-            if (event.target === event.currentTarget && !busy) {
-              setLyricDialog(undefined);
-            }
-          }}
-        >
-          <div ref={lyricDialogRef} className="lyric-dialog panel">
-            <header><div><p className="eyebrow">{lyricDialog.mode === "edit" ? "Confirmed revision" : "Authoritative lyrics"}</p><h2>{lyricDialog.item.title}</h2></div><IconButton className="dialog-close" icon="close" label="Close lyric editor" onClick={() => setLyricDialog(undefined)} /></header>
-            <p>{lyricDialog.mode === "edit" ? "Nothing changes until you confirm. The original package remains valid until its revision authenticates." : "Paste exact UTF-8 lyrics, one semantic phrase per line."}</p>
-            {lyricDialog.item.canRename && <label className="clip-field"><span>Song title</span><input value={lyricTitle} maxLength={200} onChange={(event) => setLyricTitle(event.target.value)} /><button disabled={busy || !lyricTitle.trim()} onClick={() => runBusy(async () => { await invoke("rename_waiting_section", { itemId: lyricDialog.item.id, title: lyricTitle }); setLyricDialog({ ...lyricDialog, item: { ...lyricDialog.item, title: lyricTitle } }); }, "library", "Song title could not be saved")}>Save title</button></label>}
-            <textarea ref={lyricInputRef} value={lyricDraft} onChange={(event) => setLyricDraft(event.target.value)} spellCheck />
-            <footer><button onClick={() => setLyricDialog(undefined)}>Cancel</button><button className="primary" onClick={submitLyrics} disabled={busy || !lyricDraft.trim()}>{lyricDialog.mode === "edit" ? "Create revision" : "Add to queue"}</button></footer>
-          </div>
-        </div>
-      )}
-
       {deleteCandidate && (
         <div
           className="modal-layer"
@@ -2056,6 +2151,43 @@ function App() {
         <div className="modal-layer" style={{ display: clipPreparing ? "none" : undefined }} role="dialog" aria-modal="true" aria-labelledby="clip-editor-title">
             <ClipEditor preparationError={clipPreparationError} aiMessage={clipAiMessage} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onAiProcess={startClipAiProcess} onOpenActivity={opened ? undefined : showActivity} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed", "clip-preparation"); }} />
         </div>
+      )}
+
+      {libraryVideoPreparing && (
+        <div className="modal-layer" style={{ zIndex: 120 }} role="dialog" aria-modal="true" aria-labelledby="library-video-preparing-title">
+          <div ref={libraryVideoPreparingRef} className="setup-dialog panel" tabIndex={-1}>
+            <h2 id="library-video-preparing-title">Opening video editor</h2>
+            <p role="status">Reading the local source. Your original media stays unchanged.</p>
+            <button onClick={cancelLibraryVideoPreparation}>Cancel and close</button>
+          </div>
+        </div>
+      )}
+
+      {libraryVideoOpenError && (
+        <div className="modal-layer" style={{ zIndex: 121 }} role="dialog" aria-modal="true" aria-labelledby="library-video-error-title">
+          <div ref={libraryVideoPreparingRef} className="setup-dialog panel" tabIndex={-1}>
+            <h2 id="library-video-error-title">Edit video unavailable</h2>
+            <p role="alert">{libraryVideoOpenError.message}</p>
+            <footer>
+              <button onClick={dismissLibraryVideoOpenError}>Close</button>
+              <button className="primary" onClick={() => { const item = libraryVideoOpenError.item; setLibraryVideoOpenError(undefined); void prepareLibraryVideo(item); }}>Try again</button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {libraryVideoEdit && !libraryVideoPreparing && (
+        <VideoEditor
+          preview={libraryVideoEdit.preview}
+          range={libraryVideoEdit.range}
+          value={libraryVideoEdit.value}
+          busy={libraryVideoBusy}
+          onClose={closeLibraryVideoEditor}
+          onSave={saveLibraryVideo}
+          onPlay={pauseElements}
+          preparationError={libraryVideoError}
+          onCompatible={() => void prepareLibraryVideo(libraryVideoEdit.item, true)}
+        />
       )}
 
       <SettingsDialog

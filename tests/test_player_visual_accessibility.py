@@ -167,6 +167,47 @@ def test_player_drawers_keep_exact_viewport_geometry_across_layout_modes() -> No
     assert ".issues-scrim { inset: 0; }" in narrow
 
 
+def test_library_rows_keep_video_actions_and_clean_lyric_preview_separate() -> None:
+    settings = (ROOT / "apps" / "player" / "src" / "SettingsDialog.tsx").read_text(
+        encoding="utf-8"
+    )
+    native = (ROOT / "apps" / "player" / "src-tauri" / "src" / "lib.rs").read_text(
+        encoding="utf-8"
+    )
+    catalog = (ROOT / "apps" / "player" / "src-tauri" / "src" / "catalog.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "Tasks & system health" not in APP
+    assert "Application</p>" not in settings
+    assert '<h2 id="settings-title">Settings</h2>' in settings
+    assert '<h2 ref={headingRef} tabIndex={-1}>Activity</h2>' in APP
+    assert "song-thumbnail-wrap" in APP and "thumbnail-lyric" in APP
+    assert 'className="song-row-main"' in APP
+    assert 'aria-label={playable ? `Play ${item.title}` : `Open ${item.title}`}' in APP
+    assert 'item.status !== "queued" && item.status !== "processing"' in APP
+    assert 'onClick={() => playable ? props.onPlay(item) : props.onSelect(item)}' in APP
+    assert 'icon="more-vertical"' in APP and 'name="trash"' in APP
+    assert "Lyrics preview" not in APP
+    assert ".row-menu" in APP and ".row-menu" in CSS
+    assert 'role="menu"' in APP and 'role="menuitem"' in APP
+    assert "const ROW_HEIGHT = 88" in APP
+    assert ".song-row { position: absolute;" in CSS and "height: 80px;" in CSS
+    assert "Edit video unavailable" in APP and "Try again" in APP
+    assert "draft and preview are still open" in APP
+    assert "artwork/thumbnail-base.webp" in native
+    assert 'read_asset(asset_name)' in native
+    assert 'ItemStatus::Queued | ItemStatus::Processing' in native
+    assert "locations.retain(|location| !location.is_local_package());" in catalog
+    assert "Package identity does not match the Library authority" in native
+    assert "let _ = local_clip::cancel(&app, &clip_id);" in native
+    assert "owned_lyrics_path" in native and "fs::remove_file(path)" in native
+    local_clip = (ROOT / "apps" / "player" / "src-tauri" / "src" / "local_clip.rs").read_text(
+        encoding="utf-8"
+    )
+    assert 'owner_matches(session.owner_item_id.as_deref(), Some(item_id))' in local_clip
+    assert 'require_owner(app, clip_id, None)' in local_clip
+
+
 def test_fullscreen_icon_label_and_action_follow_live_state() -> None:
     playback = (ROOT / "apps" / "player" / "src" / "playback.ts").read_text(
         encoding="utf-8"

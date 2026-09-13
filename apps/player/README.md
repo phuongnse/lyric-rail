@@ -5,10 +5,9 @@ Player and hideable library/queue drawer. All filesystem, processing, package,
 credential, recovery, catalog and Google Drive operations remain in the native Rust
 backend.
 
-The repository-styled top bar contains only Library, Activity and, outside macOS, a compact About utility.
-Source, row and playback actions remain in their contextual homes instead of being
-duplicated in a visible native menu. macOS alone keeps About in its minimal system
-application menu for platform conventions.
+The Player frame owns the Library, Activity and About actions behind its in-frame
+application menu. Source, row and playback actions remain in their contextual homes;
+macOS alone keeps About in its minimal system application menu for platform conventions.
 
 Activity overlays the Player and has Tasks and Issues tabs. Tasks contains queued/running
 work only; Issues owns failures and setup requirements across subsystems and can expand
@@ -27,8 +26,8 @@ resolver, license confirmation, bounded progress/cancellation, final provenance 
 and automatic retry. Signed runtime contents are never mutated by this resolver.
 
 Processing task IDs equal catalog item IDs, so an active row provides only its compact
-summary and opens that exact Tasks record; failed/setup-required rows route to the
-applicable Issue. Processing Cancel exists only in Activity.
+summary; detailed task output and processing controls live in Activity. Processing
+Cancel exists only in Activity.
 Authenticated catalog task evidence is authoritative
 for restored status/stage/progress/timestamps. Clear durable manifests and bounded log
 tails are attached only after their fixed job ID and authoritative lyric hash match that
@@ -52,10 +51,14 @@ use the explicit cancellable compatible preview, with anonymous PCM/H264 handles
 PTS normalization to preserve source timing. Preview, cancel and commit leave source
 bytes unchanged. Packages and multi-file selections still enter the library directly.
 
-Library rows expose **Remove from library** only for confirmed, unfinished local media
-that is not actively processing. The action removes that one row, leaves its source
-file and lyric sidecar untouched, and never directly deletes `.lrail` packages or
-cloud items. Sections sharing one source remain independent rows.
+Playable Library rows start playback on click. Each row has one consistent action
+trigger; its menu contains only **Edit video** for available local-backed media and
+the policy-limited **Delete** action. Edit opens the shared bounded metadata/preview
+dialog and requeues the local source without changing source bytes. Delete remains
+available only for confirmed unfinished local media; it leaves the source file and
+lyric sidecar untouched and never directly deletes `.lrail` packages or cloud items.
+Hovering or focusing a row reveals an exact lyric preview without putting lyrics into
+the thumbnail image itself; the thumbnail remains a clean representative video frame.
 
 Selecting a block and pressing **Edit video** opens a separate shared metadata
 dialog over the paused timeline. Its zero-based seek and clock are bounded to the
@@ -63,8 +66,8 @@ selected interval. It edits only Video name, Artist, Composer and exact lyrics;
 Save returns metadata without changing boundaries, and Cancel discards the draft.
 All section trimming, frame stepping and management actions stay on the timeline.
 `VideoEditor` accepts media, a playback range and metadata independently of clipping,
-so a future Library action can use the same component. Only the final Add N songs
-to queue action publishes sections. See the [editor guide](../../docs/CLIP_EDITOR.md).
+so the Library Edit action and Clip Editor share the same modal. Only the final Add N
+songs to queue action publishes new sections. See the [editor guide](../../docs/CLIP_EDITOR.md).
 
 The Player imports the canonical mark from `assets/brand/lyricrail-mark.svg`. Bundle
 icons are generated from that same source with `npm run brand:icons`; do not substitute

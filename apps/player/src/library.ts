@@ -17,6 +17,7 @@ export type LibraryItem = {
   artist?: string;
   composer?: string;
   firstLyricLine?: string;
+  lyricSha256?: string;
   status: ItemStatus;
   progressPercent: number;
   statusMessage?: string;
@@ -24,6 +25,8 @@ export type LibraryItem = {
   canProcess: boolean;
   canRename?: boolean;
   canDelete?: boolean;
+  trimStartMillis?: number;
+  trimEndMillis?: number;
   sources: string[];
   lyricSnippet?: string;
 };

@@ -439,7 +439,7 @@ def test_activity_is_the_only_detailed_task_output_home() -> None:
         "Auto-scroll</label>",
         '"progress", "stdout", "stderr", "system"',
         "visibleTasks(taskState.tasks, nowMillis)",
-        "onShowContext={showItemContext}",
+        "onEditVideo={openLibraryVideo}",
         "onOpenIssueTask={(issue)",
     ):
         assert token in app
@@ -473,7 +473,7 @@ def test_scan_progress_precedes_expensive_work_and_rows_project_shared_tasks() -
     assert "onCancel={(item)" not in app
     assert 'invoke("cancel_task"' in app
     assert 'invoke<TaskRecord | null>("task_record"' in app
-    assert '["queued", "processing", "failed", "setup-required"].includes(item.status)' in app
+    assert 'const taskActive = task?.status === "queued" || task?.status === "running"' in app
     assert "fn task_record(" in player
     assert '"library-item-progress"' not in processing
 

@@ -53,6 +53,7 @@ struct LocalClipInner {
 #[derive(Clone)]
 struct LocalClipSession {
     clip_id: String,
+    owner_item_id: Option<String>,
     path: PathBuf,
     source_file: Arc<fs::File>,
     source_identity: SourceIdentity,
@@ -211,6 +212,20 @@ fn validate_lyrics(value: Option<&str>) -> Result<(), String> {
         return Err("Lyrics must contain a non-empty line".into());
     }
     Ok(())
+}
+
+pub(crate) fn validate_video_metadata(
+    title: &str,
+    artist: Option<&str>,
+    composer: Option<&str>,
+    lyrics: &str,
+) -> Result<(String, Option<String>, Option<String>), String> {
+    validate_lyrics(Some(lyrics))?;
+    Ok((
+        validate_title(title)?,
+        validate_metadata(artist, "Artist")?,
+        validate_metadata(composer, "Composer")?,
+    ))
 }
 
 fn validate_local_source(path: &Path) -> Result<(PathBuf, u64), String> {
@@ -1183,6 +1198,7 @@ pub async fn prepare(
     request_id: String,
     compatible: bool,
     replace_clip_id: Option<String>,
+    owner_item_id: Option<String>,
 ) -> Result<Option<LocalClipPreview>, String> {
     validate_clip_id(&request_id)?;
     if let Some(id) = &replace_clip_id {
@@ -1201,7 +1217,12 @@ pub async fn prepare(
         if inner.cancelled_requests.contains(&request_id) {
             return Ok(None);
         }
-        let previous = replacement_session(&inner, compatible, replace_clip_id.as_deref())?;
+        let previous = replacement_session(
+            &inner,
+            compatible,
+            replace_clip_id.as_deref(),
+            owner_item_id.as_deref(),
+        )?;
         if inner.preparing {
             return Err("Finish or cancel the current clip first".into());
         }
@@ -1365,6 +1386,7 @@ pub async fn prepare(
     };
     inner.preview = Some(LocalClipSession {
         clip_id,
+        owner_item_id,
         path: prepared.path,
         source_file: prepared.source_file,
         source_identity: prepared.source_identity,
@@ -1385,14 +1407,86 @@ pub async fn prepare(
     Ok(Some(preview))
 }
 
+pub fn verify_existing_item(
+    app: &AppHandle,
+    clip_id: &str,
+    item_id: &str,
+    start_millis: u64,
+    end_millis: u64,
+) -> Result<(PathBuf, u64), String> {
+    validate_clip_id(clip_id)?;
+    let (path, source_file, source_identity, duration_millis) = {
+        let state = app.state::<LocalClipState>();
+        let inner = state
+            .inner
+            .lock()
+            .map_err(|_| "Local clip state lock is poisoned".to_string())?;
+        let session = inner
+            .preview
+            .as_ref()
+            .filter(|session| {
+                session.clip_id == clip_id
+                    && owner_matches(session.owner_item_id.as_deref(), Some(item_id))
+            })
+            .ok_or_else(|| "Clip preview is no longer available".to_string())?;
+        (
+            session.path.clone(),
+            session.source_file.clone(),
+            session.source_identity.clone(),
+            session.duration_millis,
+        )
+    };
+    if end_millis <= start_millis || end_millis > duration_millis {
+        return Err("Video interval is outside the source duration".into());
+    }
+    verify_source_unchanged(&source_file, &path, &source_identity)?;
+    let item = app
+        .state::<crate::CatalogState>()
+        .0
+        .lock()
+        .map_err(|_| "Catalog lock is poisoned".to_string())?
+        .item(item_id)
+        .cloned()
+        .ok_or_else(|| "Library item no longer exists".to_string())?;
+    if matches!(
+        &item.status,
+        crate::catalog::ItemStatus::Queued | crate::catalog::ItemStatus::Processing
+    ) {
+        return Err("Finish the active processing task before editing this video".into());
+    }
+    let item_path = item
+        .locations
+        .iter()
+        .find_map(|location| match location {
+            crate::catalog::ItemLocation::LocalMedia {
+                path,
+                available: true,
+                ..
+            } => Some(path.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| "Library item has no available local media source".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("Unable to open Library media: {error}"))?;
+    if item_path != path {
+        return Err("Preview does not match the selected Library item".into());
+    }
+    Ok((path, duration_millis))
+}
+
 fn replacement_session(
     inner: &LocalClipInner,
     compatible: bool,
     replace_clip_id: Option<&str>,
+    owner_item_id: Option<&str>,
 ) -> Result<Option<LocalClipSession>, String> {
     match (&inner.preview, replace_clip_id) {
         (None, None) => Ok(None),
-        (Some(session), Some(id)) if compatible && session.clip_id == id => {
+        (Some(session), Some(id))
+            if compatible
+                && session.clip_id == id
+                && owner_matches(session.owner_item_id.as_deref(), owner_item_id) =>
+        {
             Ok(Some(session.clone()))
         }
         _ => Err("Finish or cancel the current clip first".into()),
@@ -1463,6 +1557,32 @@ fn cancel_inner(inner: &mut LocalClipInner, clip_id: &str) -> bool {
     }
 }
 
+fn require_owner(
+    app: &AppHandle,
+    clip_id: &str,
+    owner_item_id: Option<&str>,
+) -> Result<(), String> {
+    validate_clip_id(clip_id)?;
+    let state = app.state::<LocalClipState>();
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Local clip state lock is poisoned".to_string())?;
+    let session = inner
+        .preview
+        .as_ref()
+        .filter(|session| session.clip_id == clip_id)
+        .ok_or_else(|| "Clip preview is no longer available".to_string())?;
+    if !owner_matches(session.owner_item_id.as_deref(), owner_item_id) {
+        return Err("Clip preview belongs to another workflow".into());
+    }
+    Ok(())
+}
+
+fn owner_matches(session_owner: Option<&str>, expected_owner: Option<&str>) -> bool {
+    session_owner == expected_owner
+}
+
 pub fn commit(
     app: &AppHandle,
     clip_id: &str,
@@ -1470,7 +1590,7 @@ pub fn commit(
     end_millis: u64,
     title: &str,
 ) -> Result<CatalogItem, String> {
-    validate_clip_id(clip_id)?;
+    require_owner(app, clip_id, None)?;
     let title = validate_title(title)?;
     let state = app.state::<LocalClipState>();
     let (path, source_file, source_identity, duration_millis) = {
@@ -1585,7 +1705,7 @@ pub fn commit_sections(
     clip_id: &str,
     sections: &[ClipSection],
 ) -> Result<(crate::catalog::CatalogSnapshot, Vec<CatalogItem>), String> {
-    validate_clip_id(clip_id)?;
+    require_owner(app, clip_id, None)?;
     let state = app.state::<LocalClipState>();
     let mut inner = state
         .inner
@@ -2071,6 +2191,7 @@ mod tests {
                 timeline_origin: 0.0,
                 video: None,
                 clip_id: "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b".into(),
+                owner_item_id: Some("item-a".into()),
                 path: canonical,
                 source_file,
                 source_identity,
@@ -2082,10 +2203,11 @@ mod tests {
         // Starting a compatible replacement borrows the authenticated session;
         // a worker error or cancelled attempt cannot consume the existing preview.
         let id = "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b";
-        assert!(super::replacement_session(&inner, false, Some(id)).is_err());
-        assert!(super::replacement_session(&inner, true, Some("wrong")).is_err());
-        assert!(super::replacement_session(&inner, true, None).is_err());
-        let previous = super::replacement_session(&inner, true, Some(id))
+        assert!(super::replacement_session(&inner, false, Some(id), None).is_err());
+        assert!(super::replacement_session(&inner, true, Some("wrong"), None).is_err());
+        assert!(super::replacement_session(&inner, true, None, None).is_err());
+        assert!(super::replacement_session(&inner, true, Some(id), Some("item-b")).is_err());
+        let previous = super::replacement_session(&inner, true, Some(id), Some("item-a"))
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -2101,6 +2223,16 @@ mod tests {
             "4ca99e8b-ce8f-4d68-b6ab-c7566025cd7b"
         ));
         assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn generic_clip_commit_boundary_rejects_library_owned_preview() {
+        assert!(!super::owner_matches(Some("library-item"), None));
+        assert!(super::owner_matches(None, None));
+        assert!(super::owner_matches(
+            Some("library-item"),
+            Some("library-item")
+        ));
     }
 
     #[test]
@@ -2123,6 +2255,7 @@ mod tests {
             preview_size_bytes: 44,
             video: Some((Arc::new(tempfile::tempfile().unwrap()), 100)),
             duration_millis: 1000,
+            owner_item_id: None,
         };
         let section = super::ClipSection {
             start_millis: 10,
