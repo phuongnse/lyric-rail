@@ -102,6 +102,24 @@ Apply the existing blocking rules to demonstrated violations even when tests pas
 preference for a pattern, shorter code, or a different valid structure is insufficient.
 Do not retrofit new design criteria into the frozen contract.
 
+Assess relevant project knowledge against implementation and accepted requirements:
+can the intended reader find the authoritative current source, understand sufficient
+explanations in a logical order, and use meaningful connections where helpful? A
+finding names a concrete error, necessary missing explanation, confusing organization,
+or missing/misleading connection and its consequence for the work. A different folder,
+heading, or style preference is insufficient. Consumer checks can prove properties
+such as valid links, runnable examples, parseable structure, or rendering; presence,
+length, formatting, and resolving links do not establish semantic usefulness or truth.
+
+Assess whether material test expectations follow the accepted contract, important
+claimed risks are actually exercised, and the execution boundary could detect the
+claimed failure. Reject assertions overfitted to implementation details when they do
+not protect observable behavior. Findings identify an accepted behavior or applicable
+contract and a concrete consequence; tests must not introduce new product behavior.
+Test counts, coverage percentages, or green profiles alone do not establish adequacy.
+No newly added test is required when existing evidence protects the behavior or an
+automated behavioral check is not meaningful; preserve consumer-mandated policies.
+
 Read **production-engineering** and independently reassess every canonical invariant.
 Use the report's `productionEngineering` entries to record `satisfied`,
 `not-applicable`, or `violated`; cite concrete snapshot evidence for each satisfied

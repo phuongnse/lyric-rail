@@ -18,6 +18,21 @@ maintenance change, accounting for indirection and coupling. Bind needed design 
 to existing work-item outcomes. Keep reasoning proportional; retaining a clear
 existing structure is a valid choice.
 
+Identify project knowledge this change would make misleading, incomplete, or obsolete,
+and concrete information gaps obstructing the accepted work. Plan only the necessary
+updates or additions in consumer-owned sources. Any proposed cleanup names the
+obstacle, smallest useful repair, and expected benefit; unrelated gaps remain
+non-blocking proposals.
+
+Explain a material or non-obvious evidence strategy in the existing `approach`, tied
+to accepted behavior, contract boundaries, and concrete risks. Derive expectations
+for new deterministic behavior from acceptance criteria and important cases; preserve
+behavioral evidence for refactors, and select an integration boundary capable of
+observing the relevant contract or failure. Documentation, configuration, visual, or
+exploratory work may use suitable checks or contextual review. These are defaults;
+preserve consumer-mandated testing policies. An obvious existing verification path
+needs no repeated rationale or additional record.
+
 Read **production-engineering** and add one `productionEngineering` assessment for
 each canonical invariant in its defined order. Decide applicability from the stated
 trigger, give a concrete rationale, and bind every applicable invariant to the work

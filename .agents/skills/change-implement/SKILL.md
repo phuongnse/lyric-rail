@@ -13,8 +13,24 @@ Every delegated actor/context that may mutate the candidate must run the same co
 before its first edit. During an active cycle the command appends that participant
 without starting another cycle; review checks all registered participants.
 
-Implement only the current plan. Add focused regression coverage for deterministic
-defects and keep consumer-owned policy in the consumer. If review requested changes,
+Implement only the current plan and keep consumer-owned policy in the consumer.
+For a deterministic defect, add focused regression evidence that distinguishes the
+reported faulty behavior from the correction. When a known-faulty state is safely
+available, demonstrate that distinction; no proof of test-authoring or execution
+order is required. Each added or materially changed test or check must protect accepted
+behavior, a contract boundary, or a concrete risk, rather than merely execute changed
+code or mirror its structure. Retain consumer-mandated checks; do not manufacture a
+new automated test when existing evidence suffices or other evidence better fits the
+change. Focused checks support diagnosis and implementation; required full profiles
+still run on the final unchanged candidate.
+
+Update, supplement, or create only the project information needed for the planned
+knowledge repairs, using inspected behavior, accepted requirements, and recorded
+decisions. Replaced material is updated, removed, or visibly marked historical or
+superseded when retaining it is useful. Explain enough for the intended reader and
+accepted work, in a logical order, with references that clarify relevant relationships.
+
+If review requested changes,
 resolve every blocking finding in the next cycle without renaming or dropping it.
 Follow every applicable **production-engineering** assessment and make its named work
 items produce the planned objective evidence. If implementation proves an

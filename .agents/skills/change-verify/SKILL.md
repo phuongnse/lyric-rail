@@ -5,8 +5,14 @@ description: Run the project-owned verification profiles on one unchanged reposi
 
 # Verify a change
 
-Read the registered acceptance criteria and .process/project.json. Run every required
-profile through the lifecycle:
+Read the registered acceptance criteria and .process/project.json. When publication
+is required, commit the complete candidate on a valid publication branch before final
+verification. The lifecycle rejects uncommitted candidate changes or an invalid or
+empty pinned-base-to-HEAD range before running a profile, and rechecks before review.
+Lifecycle run/receipt files remain local. A later commit, even with identical source
+content, changes the checkpoint and requires fresh verification and review.
+
+Run every required profile through the lifecycle:
 
     processctl change verify --change-id ID --profile PROFILE
 
