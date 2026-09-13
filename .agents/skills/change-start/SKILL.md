@@ -10,6 +10,13 @@ behavior. Write a change contract containing the source request, comparison base
 risk, affected projects, observable acceptance criteria, and required verification
 profiles. Do not decide unresolved product behavior silently.
 
+Use a clear consumer-owned reading entry point to locate the project knowledge needed
+for this work. Reuse coherent existing sources; consumers choose their organization
+and document types, without placeholders for irrelevant material. Where sources could
+conflict, establish which is authoritative and which is current or superseded. A
+missing entry point or necessary explanation calls for a focused repair, not a broad
+documentation migration.
+
 When the work produces an issue record, PR description, release notes or an automation name, inspect the consumer's
 selected artifact standard and existing publication checks. The consumer may override
 the packaged defaults. Keep document-format choices separate from lifecycle approval.
