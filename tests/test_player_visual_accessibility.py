@@ -192,7 +192,8 @@ def test_library_rows_keep_video_actions_and_clean_lyric_preview_separate() -> N
     assert 'role="menu"' in APP and 'role="menuitem"' in APP
     assert 'onClick={() => closeItemMenu(() => props.onRemoveItem(item))}' in APP
     assert 'delete_library_item' in APP and 'Delete permanently' in APP
-    assert "justify-content: center; padding: 10px 8px;" in CSS
+    assert "justify-content: center; padding: 8px;" in CSS
+    assert ".thumbnail-lyric p" in CSS and "line-height: 1.2;" in CSS and "text-align: left;" in CSS
     assert "margin: 0;" in CSS
     assert "const ROW_HEIGHT = 88" in APP
     assert ".song-row { position: absolute;" in CSS and "height: 80px;" in CSS
