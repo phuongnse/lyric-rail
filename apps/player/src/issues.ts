@@ -1,4 +1,5 @@
 import { projectDiagnostic } from "./diagnostics";
+import { clientIssueCode } from "./issueCodes";
 
 export type IssueSeverity = "warning" | "error" | "blocking";
 export type IssueState = "open" | "resolving";
@@ -31,15 +32,6 @@ export type SystemIssue = {
 };
 
 
-function issueKind(title: string): string {
-  return title
-    .normalize("NFKD")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 64) || "action-failed";
-}
-
 export function safeIssueDetail(error: unknown): string {
   return projectDiagnostic(error instanceof Error ? error.message : String(error));
 }
@@ -53,7 +45,7 @@ export function clientIssue(
   relatedTaskId?: string,
 ): SystemIssue {
   const now = Date.now();
-  const code = `${scope}.${issueKind(title)}`;
+  const code = clientIssueCode(scope, title);
   return {
     id: `${code}:${scope}:client`,
     code,

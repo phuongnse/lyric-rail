@@ -9,6 +9,7 @@ import {
   selectDiagnosticTasks,
 } from "./diagnostics";
 import { clientIssue } from "./issues";
+import { PRODUCER_ISSUE_CODES, clientIssueCode } from "./issueCodes";
 import { latestModelTransferProgress } from "./modelProgress";
 import type { SystemIssue } from "./issues";
 import type { TaskOutputLine, TaskRecord } from "./tasks";
@@ -147,6 +148,23 @@ describe("closed diagnostic contract", () => {
     for (const kind of ["install-models", "retry-item", "reconnect-drive"] as const) {
       expect(formatIssueDetail({ ...issue, detail: undefined, actions: [{ kind, label: "Action", requiresConfirmation: false }] }))
         .toContain(`Available actions: ${kind}`);
+    }
+    expect(PRODUCER_ISSUE_CODES).toContain(clientIssueCode("system", "Action could not be completed"));
+  });
+
+  it("accepts every producer-owned opaque reference form", () => {
+    const uuid = "123e4567-e89b-12d3-a456-426614174000";
+    for (const reference of [
+      "clip-preparation",
+      uuid,
+      `local-${"a".repeat(64)}`,
+      `drive-download-${"b".repeat(64)}`,
+      `local-scan-${uuid}`,
+      `folder-scan-${uuid}`,
+      `drive-connect-${uuid}`,
+      `drive-rescan-${uuid}`,
+    ]) {
+      expect(formatIssueDetail({ ...issue, detail: undefined, relatedTaskId: reference })).toContain(`Related task: ${reference}`);
     }
   });
 

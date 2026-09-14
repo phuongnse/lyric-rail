@@ -1,7 +1,7 @@
 export const PRODUCER_ISSUE_CODES = [
   "processing.models-missing", "processing.runtime-repair-required", "processing.runtime-startup", "processing.job-failed",
   "drive.unavailable", "runtime.invalid", "remote.invalid",
-  "tasks.task-output-could-not-be-replayed", "system.lyricrail-could-not-refresh", "system.action-failed",
+  "tasks.task-output-could-not-be-replayed", "system.lyricrail-could-not-refresh", "system.action-failed", "system.action-could-not-be-completed",
   "library.package-import-failed", "library.startup-package-import-failed", "library.local-source-scan-failed", "library.library-search-failed",
   "library.library-item-could-not-be-deleted", "library.edit-video-unavailable", "library.video-changes-could-not-be-saved", "library.library-source-could-not-be-removed", "library.compatible-preview-failed", "library.files-could-not-be-added", "library.folder-could-not-be-added", "library.library-sources-could-not-be-rescanned",
   "recovery.library-refresh-after-recovery-failed", "recovery.recovery-bundle-could-not-be-exported", "recovery.recovery-bundle-could-not-be-restored",
@@ -16,3 +16,13 @@ export const PRODUCER_ISSUE_CODES = [
 export const PRODUCER_ISSUE_SCOPES = ["system", "tasks", "library", "recovery", "drive", "view", "lyrics", "clip", "playback", "processing", "settings", "issues", "player"] as const;
 
 export const SAFE_ISSUE_ACTION_KINDS = ["install-models", "retry-item", "reconnect-drive"] as const;
+
+export function clientIssueCode(scope: string, title: string): string {
+  const kind = title
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 64) || "action-failed";
+  return `${scope}.${kind}`;
+}

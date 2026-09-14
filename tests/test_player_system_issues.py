@@ -5,8 +5,10 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import types
+import unicodedata
 
 import pytest
 
@@ -28,6 +30,7 @@ PYTHON = (ROOT / "src/lyricrail/__main__.py").read_text(encoding="utf-8")
 MODEL_SCRIPT = (ROOT / "scripts/install_models.py").read_text(encoding="utf-8")
 APP = (ROOT / "apps/player/src/App.tsx").read_text(encoding="utf-8")
 DIAGNOSTICS = (ROOT / "apps/player/src/diagnostics.ts").read_text(encoding="utf-8")
+ISSUE_CODES = (ROOT / "apps/player/src/issueCodes.ts").read_text(encoding="utf-8")
 DIAGNOSTIC_CONTRACT = (ROOT / "src/lyricrail/diagnostic_contract.json").read_text(encoding="utf-8")
 MODEL_PROVENANCE = (ROOT / "src/lyricrail/model_provenance.py").read_text(encoding="utf-8")
 MODEL_CACHE_POLICY = (ROOT / "src/lyricrail/model_cache_policy.json").read_text(encoding="utf-8")
@@ -425,6 +428,26 @@ def test_copy_diagnostics_exports_bounded_context_from_the_shared_policy() -> No
     assert "issue.detail &&" not in APP
     assert "relatedTaskId?: string" in (ROOT / "apps/player/src/issues.ts").read_text(encoding="utf-8")
     assert "relatedTaskId);" in APP
+
+
+def test_issue_code_registry_covers_frontend_and_native_producers() -> None:
+    all_scopes = "system|tasks|library|recovery|drive|view|lyrics|clip|playback|processing|settings|issues|player|runtime|remote"
+    code_pattern = re.compile(rf'"(({all_scopes})\.[a-z0-9-]+)"')
+    registered = {match.group(1) for match in code_pattern.finditer(ISSUE_CODES)}
+    native_pattern = re.compile(r'"((?:processing|drive|runtime|remote)\.[a-z0-9-]+)"')
+    native = {match.group(1) for match in native_pattern.finditer(ISSUES + PROCESSING)}
+
+    def client_code(scope: str, title: str) -> str:
+        kind = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", title).lower()).strip("-")[:64]
+        return f"{scope}.{kind or 'action-failed'}"
+
+    frontend = {
+        client_code(scope, title)
+        for scope, title in re.findall(r'reportError\("([^"]+)", "([^"]+)"', APP)
+    }
+    frontend.add(client_code("system", "Action could not be completed"))
+    assert frontend <= registered
+    assert native <= registered
 
 
 def test_model_cache_containment_consumers_use_one_policy_and_fixture_set() -> None:
