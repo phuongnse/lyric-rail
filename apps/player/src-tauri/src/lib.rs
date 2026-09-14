@@ -8,6 +8,7 @@ mod local_clip;
 mod local_source;
 mod lyric_revision;
 mod model_installer;
+mod preferences;
 mod processing;
 mod range_cache;
 mod recovery_ui;
@@ -20,21 +21,22 @@ use std::{
     ffi::OsString,
     fs,
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use catalog::{
-    Catalog, CatalogItem, CatalogSnapshot, DriveRoot, ItemLocation, ItemStatus, SearchResult,
+    Catalog, CatalogItem, CatalogSnapshot, DriveRoot, ItemLocation, ItemStatus, LocalMediaUpdate,
+    SearchResult,
 };
 use google_drive::{
     DriveFile, GoogleConfig, GoogleDriveTransport, GoogleTokenProvider, authorize_and_pick,
     expand_drive_root, resolve_selection_roots,
 };
-use local_source::{read_authoritative_lyrics, scan_files, scan_root};
+use local_source::{ScanResult, read_authoritative_lyrics, scan_files, scan_root};
 use lrail_format::{LockedSecret, PackageReader, load_vault_master};
-use processing::{ProcessingState, enqueue_item};
+use processing::{ProcessingState, enqueue_item, fence_item};
 use range_cache::{CachedRandomAccessSource, RangeCache, RangeTransport, RemoteObject};
 use scheduler::{IoPriority, PriorityScheduler};
 use semver::Version;
@@ -45,6 +47,7 @@ use tauri::{
     Emitter, Manager,
     http::{Method, Request, Response, StatusCode, header},
 };
+use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 const MAX_PROTOCOL_RANGE: u64 = 2 * 1024 * 1024;
@@ -54,6 +57,7 @@ const MAX_THUMBNAIL_BYTES: u64 = 1024 * 1024;
 const MAX_PASTED_LYRIC_BYTES: usize = 1_000_000;
 
 pub struct CatalogState(pub Mutex<Catalog>);
+pub struct CatalogMutationState(pub Mutex<()>);
 
 #[derive(Clone)]
 struct PlaybackAsset {
@@ -69,6 +73,19 @@ struct LoadedPackage {
 
 type RemoteDownload = (Arc<RangeCache>, RemoteObject);
 type ItemReader = (PackageReader, Option<RemoteDownload>);
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LibraryVideoUpdate {
+    item_id: String,
+    clip_id: String,
+    start_millis: u64,
+    end_millis: u64,
+    title: String,
+    artist: Option<String>,
+    composer: Option<String>,
+    lyrics: String,
+}
 
 #[derive(Default)]
 struct PlayerState {
@@ -565,11 +582,12 @@ fn catalog_item_from_reader(
     let artist = metadata_string(&reader.manifest.metadata, "referenceArtist")
         .or_else(|| metadata_string(&reader.manifest.metadata, "artist"));
     let composer = metadata_string(&reader.manifest.metadata, "composer");
-    let has_thumbnail = reader
-        .manifest
-        .assets
-        .iter()
-        .any(|asset| asset.logical_name == "artwork/thumbnail.webp");
+    let has_thumbnail = reader.manifest.assets.iter().any(|asset| {
+        matches!(
+            asset.logical_name.as_str(),
+            "artwork/thumbnail.webp" | "artwork/thumbnail-base.webp"
+        )
+    });
     let authoritative_is_bounded = reader
         .manifest
         .assets
@@ -786,12 +804,7 @@ fn drive_cache(
 }
 
 fn drive_cache_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let root = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| error.to_string())?
-        .join("drive-ciphertext");
-    Ok(root)
+    Ok(preferences::cache_directory(app)?.join("drive-ciphertext"))
 }
 
 struct OfflineRangeTransport;
@@ -878,7 +891,16 @@ fn reader_for_item(
             ItemLocation::LocalMedia { .. } => unreachable!(),
         };
         match result {
-            Ok(reader) => return Ok(reader),
+            Ok((reader, remote)) => {
+                if item
+                    .package_id
+                    .as_deref()
+                    .is_none_or(|expected| reader.manifest.package_id.to_string() == expected)
+                {
+                    return Ok((reader, remote));
+                }
+                errors.push("Package identity does not match the Library authority".into());
+            }
             Err(error) => errors.push(error),
         }
     }
@@ -899,6 +921,103 @@ fn save_and_emit(app: &tauri::AppHandle) -> Result<CatalogSnapshot, String> {
     let snapshot = catalog.snapshot();
     let _ = app.emit("library-changed", snapshot.clone());
     Ok(snapshot)
+}
+
+fn apply_local_scan(catalog: &mut Catalog, scan: ScanResult) -> Result<Vec<CatalogItem>, String> {
+    let ScanResult {
+        root,
+        mut items,
+        truncated,
+        ..
+    } = scan;
+    let live_paths = items
+        .iter()
+        .flat_map(|item| item.locations.iter())
+        .filter_map(|location| match location {
+            ItemLocation::LocalPackage { path, .. } | ItemLocation::LocalMedia { path, .. } => {
+                Some(path.clone())
+            }
+            ItemLocation::GoogleDrive { .. } => None,
+        })
+        .collect::<HashSet<_>>();
+    catalog.validate_upserts(items.iter())?;
+    let source_id = catalog.add_local_source(root);
+    if !truncated {
+        catalog.reconcile_local_source(&source_id, &live_paths);
+    }
+    let ids = items
+        .iter_mut()
+        .map(|item| {
+            for location in &mut item.locations {
+                match location {
+                    ItemLocation::LocalPackage {
+                        source_id: current,
+                        available,
+                        ..
+                    }
+                    | ItemLocation::LocalMedia {
+                        source_id: current,
+                        available,
+                        ..
+                    } => {
+                        *current = Some(source_id.clone());
+                        *available = true;
+                    }
+                    ItemLocation::GoogleDrive { .. } => {}
+                }
+            }
+            catalog.upsert(item.clone())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids
+        .into_iter()
+        .filter_map(|id| catalog.item(&id).cloned())
+        .collect())
+}
+
+fn restore_catalog_item(
+    app: &tauri::AppHandle,
+    item_id: &str,
+    expected: &CatalogItem,
+    previous: &CatalogItem,
+) -> Result<(), String> {
+    let snapshot = {
+        let state = app.state::<CatalogState>();
+        let mut catalog = state
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?;
+        catalog.restore_local_media_if_unchanged(item_id, expected, previous.clone())?;
+        catalog.save()?;
+        catalog.snapshot()
+    };
+    let _ = app.emit("library-changed", snapshot);
+    Ok(())
+}
+
+fn cleanup_owned_lyrics(path: &Option<PathBuf>) {
+    if let Some(path) = path {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn rollback_library_update(
+    app: &tauri::AppHandle,
+    item_id: &str,
+    expected: &CatalogItem,
+    previous: &CatalogItem,
+    owned_lyrics_path: &Option<PathBuf>,
+    error: String,
+) -> String {
+    let rollback = fence_item(app, item_id, false)
+        .and_then(|_| restore_catalog_item(app, item_id, expected, previous));
+    if rollback.is_ok() {
+        cleanup_owned_lyrics(owned_lyrics_path);
+    }
+    match rollback {
+        Ok(()) => error,
+        Err(rollback_error) => format!("{error}; Library rollback failed: {rollback_error}"),
+    }
 }
 
 fn enqueue_ready(app: &tauri::AppHandle, items: Vec<CatalogItem>) {
@@ -976,6 +1095,20 @@ fn catalog_snapshot(state: tauri::State<'_, CatalogState>) -> Result<CatalogSnap
 }
 }
 
+#[tauri::command]
+fn preferences_snapshot(app: tauri::AppHandle) -> Result<preferences::PreferencesSnapshot, String> {
+    preferences::snapshot(&app)
+}
+
+#[tauri::command]
+fn save_preferences(
+    app: tauri::AppHandle,
+    library_path: Option<String>,
+    cache_path: Option<String>,
+) -> Result<preferences::PreferencesSnapshot, String> {
+    preferences::save(&app, library_path, cache_path)
+}
+
 ipc_command! {
 fn search_library(
     state: tauri::State<'_, CatalogState>,
@@ -1045,6 +1178,37 @@ fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<bool, String> {
         _ => Err("This task cannot be cancelled".into()),
     }
 }
+}
+
+#[tauri::command]
+fn pause_task(app: tauri::AppHandle, task_id: String) -> Result<bool, String> {
+    let task = tasks::task(&app, &task_id).ok_or_else(|| "Task no longer exists".to_string())?;
+    if !task.pausable || task.status != tasks::TaskStatus::Running {
+        return Err("This task cannot be paused at a safe boundary".into());
+    }
+    match task.kind {
+        tasks::TaskKind::Processing => {
+            let item_id = task.related_item_id.as_deref().unwrap_or(&task.id);
+            processing::pause_item(&app, item_id)?;
+            Ok(true)
+        }
+        _ => Err("This task cannot be paused at a safe boundary".into()),
+    }
+}
+
+#[tauri::command]
+fn resume_task(app: tauri::AppHandle, task_id: String) -> Result<CatalogSnapshot, String> {
+    let task = tasks::task(&app, &task_id).ok_or_else(|| "Task no longer exists".to_string())?;
+    if !task.resumable || task.status != tasks::TaskStatus::Paused {
+        return Err("This task cannot be resumed from its current state".into());
+    }
+    match task.kind {
+        tasks::TaskKind::Processing => {
+            let item_id = task.related_item_id.as_deref().unwrap_or(&task.id);
+            retry_processing_item(app, item_id.to_owned())
+        }
+        _ => Err("Resume this job from its source context".into()),
+    }
 }
 
 fn start_runtime_task(
@@ -1221,13 +1385,18 @@ async fn add_local_folder(app: tauri::AppHandle, path: PathBuf) -> Result<Catalo
             ..Default::default()
         },
     );
-    let result: Result<CatalogSnapshot, String> = async {
-        let scan = tauri::async_runtime::spawn_blocking(move || scan_root(&path))
-            .await
-            .map_err(|error| format!("Local scan task failed: {error}"))??;
+    let task_app = app.clone();
+    let task_key = task_id.clone();
+    let result: Result<CatalogSnapshot, String> = tauri::async_runtime::spawn_blocking(move || {
+        let mutation = task_app.state::<CatalogMutationState>();
+        let _mutation = mutation
+            .0
+            .lock()
+            .map_err(|_| "Library mutation lock is poisoned".to_string())?;
+        let scan = scan_root(&path)?;
         tasks::progress(
-            &app,
-            &task_id,
+            &task_app,
+            &task_key,
             tasks::TaskProgress {
                 stage_key: Some("catalog".into()),
                 stage_title: Some("Update Library catalog".into()),
@@ -1239,59 +1408,21 @@ async fn add_local_folder(app: tauri::AppHandle, path: PathBuf) -> Result<Catalo
                 ..Default::default()
             },
         );
-        let mut items = scan.items;
-        let live_paths = items
-            .iter()
-            .flat_map(|item| item.locations.iter())
-            .filter_map(|location| match location {
-                ItemLocation::LocalPackage { path, .. } | ItemLocation::LocalMedia { path, .. } => {
-                    Some(path.clone())
-                }
-                ItemLocation::GoogleDrive { .. } => None,
-            })
-            .collect::<std::collections::HashSet<_>>();
         let queued_items = {
-            let state = app.state::<CatalogState>();
+            let state = task_app.state::<CatalogState>();
             let mut catalog = state
                 .0
                 .lock()
                 .map_err(|_| "Catalog lock is poisoned".to_string())?;
-            catalog.validate_upserts(items.iter())?;
-            let source_id = catalog.add_local_source(scan.root);
-            if !scan.truncated {
-                catalog.reconcile_local_source(&source_id, &live_paths);
-            }
-            let mut ids = Vec::new();
-            for item in &mut items {
-                for location in &mut item.locations {
-                    match location {
-                        ItemLocation::LocalPackage {
-                            source_id: current,
-                            available,
-                            ..
-                        }
-                        | ItemLocation::LocalMedia {
-                            source_id: current,
-                            available,
-                            ..
-                        } => {
-                            *current = Some(source_id.clone());
-                            *available = true;
-                        }
-                        ItemLocation::GoogleDrive { .. } => {}
-                    }
-                }
-                ids.push(catalog.upsert(item.clone())?);
-            }
-            ids.into_iter()
-                .filter_map(|id| catalog.item(&id).cloned())
-                .collect::<Vec<_>>()
+            apply_local_scan(&mut catalog, scan)?
         };
-        let snapshot = save_and_emit(&app)?;
-        enqueue_ready(&app, queued_items);
+        let snapshot = save_and_emit(&task_app)?;
+        enqueue_ready(&task_app, queued_items);
         Ok(snapshot)
-    }
-    .await;
+    })
+    .await
+    .map_err(|error| format!("Local scan task failed: {error}"))
+    .and_then(|result| result);
     finish_runtime_task(&app, &task_id, &result, "Folder scan completed");
     result
 }
@@ -1306,7 +1437,171 @@ async fn prepare_local_clip(
     replace_clip_id: Option<String>,
 ) -> Result<Option<local_clip::LocalClipPreview>, String> {
     let scheduler = app.state::<CloudState>().scheduler.clone();
-    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false), replace_clip_id).await
+    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false), replace_clip_id, None).await
+}
+}
+
+fn local_media_path(app: &tauri::AppHandle, item_id: &str) -> Result<PathBuf, String> {
+    let item = app
+        .state::<CatalogState>()
+        .0
+        .lock()
+        .map_err(|_| "Catalog lock is poisoned".to_string())?
+        .item(item_id)
+        .cloned()
+        .ok_or_else(|| "Library item no longer exists".to_string())?;
+    if matches!(&item.status, ItemStatus::Queued | ItemStatus::Processing) {
+        return Err("Finish the active processing task before editing this video".into());
+    }
+    item.locations
+        .into_iter()
+        .find_map(|location| match location {
+            ItemLocation::LocalMedia {
+                path,
+                available: true,
+                ..
+            } => Some(path),
+            _ => None,
+        })
+        .ok_or_else(|| "Only videos with an available local source can be edited".into())
+}
+
+ipc_command! {
+async fn prepare_library_item(
+    app: tauri::AppHandle,
+    item_id: String,
+    request_id: String,
+    compatible: Option<bool>,
+    replace_clip_id: Option<String>,
+) -> Result<Option<local_clip::LocalClipPreview>, String> {
+    let path = local_media_path(&app, &item_id)?;
+    let scheduler = app.state::<CloudState>().scheduler.clone();
+    local_clip::prepare(app, scheduler, path, request_id, compatible.unwrap_or(false), replace_clip_id, Some(item_id)).await
+}
+}
+
+ipc_command! {
+fn update_library_item(
+    app: tauri::AppHandle,
+    update: LibraryVideoUpdate,
+) -> Result<CatalogSnapshot, String> {
+    let LibraryVideoUpdate {
+        item_id,
+        clip_id,
+        start_millis,
+        end_millis,
+        title,
+        artist,
+        composer,
+        lyrics,
+    } = update;
+    let (source_path, duration_millis) = local_clip::verify_existing_item(
+        &app,
+        &clip_id,
+        &item_id,
+        start_millis,
+        end_millis,
+    )?;
+    let (title, artist, composer) = local_clip::validate_video_metadata(
+        &title,
+        artist.as_deref(),
+        composer.as_deref(),
+        &lyrics,
+    )?;
+    let (existing_lyrics, existing_path, previous_item) = {
+        let state = app.state::<CatalogState>();
+        let catalog = state
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?;
+        let item = catalog
+            .item(&item_id)
+            .ok_or_else(|| "Library item no longer exists".to_string())?;
+        let path = item.locations.iter().find_map(|location| match location {
+            ItemLocation::LocalMedia { lyrics_path, .. } => lyrics_path.clone(),
+            _ => None,
+        });
+        (item.lyric_text.clone(), path, item.clone())
+    };
+    let (lyrics_path, owned_lyrics_path) = if lyrics.trim().is_empty() {
+        (None, None)
+    } else if existing_lyrics == lyrics {
+        if let Some(path) = existing_path.filter(|path| fs::symlink_metadata(path).is_ok()) {
+            verify_lyrics_snapshot(&path, &lyrics)?;
+            (Some(path), None)
+        } else {
+            let candidate = pasted_lyrics_path(&app, &item_id, &lyrics)?;
+            let existed = fs::symlink_metadata(&candidate).is_ok();
+            let path = write_pasted_lyrics(&app, &item_id, &lyrics)?;
+            (Some(path.clone()), (!existed).then_some(path))
+        }
+    } else {
+        let candidate = pasted_lyrics_path(&app, &item_id, &lyrics)?;
+        let existed = fs::symlink_metadata(&candidate).is_ok();
+        let path = write_pasted_lyrics(&app, &item_id, &lyrics)?;
+        let owned = (!existed).then_some(path.clone());
+        (Some(path), owned)
+    };
+    let item_result = app
+        .state::<CatalogState>()
+        .0
+        .lock()
+        .map_err(|_| "Catalog lock is poisoned".to_string())
+        .and_then(|mut catalog| {
+            catalog.update_local_media(
+                &item_id,
+                LocalMediaUpdate {
+                title,
+                artist,
+                composer,
+                source_path,
+                lyrics_path,
+                    lyrics,
+                    start_millis,
+                    end_millis,
+                    duration_millis,
+                },
+            )
+        });
+    let item = match item_result {
+        Ok(item) => item,
+        Err(error) => {
+            cleanup_owned_lyrics(&owned_lyrics_path);
+            return Err(error);
+        }
+    };
+    let expected_item = item.clone();
+    let enqueue_result = if item.status == ItemStatus::Queued {
+        enqueue_item(&app, item, None)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = enqueue_result {
+        return Err(rollback_library_update(
+            &app,
+            &item_id,
+            &expected_item,
+            &previous_item,
+            &owned_lyrics_path,
+            error,
+        ));
+    }
+    let snapshot = save_and_emit(&app);
+    let snapshot = match snapshot {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return Err(rollback_library_update(
+                &app,
+                &item_id,
+                &expected_item,
+                &previous_item,
+                &owned_lyrics_path,
+                error,
+            ));
+        }
+    };
+    let _ = local_clip::cancel(&app, &clip_id);
+    Ok(snapshot)
 }
 }
 
@@ -1381,24 +1676,88 @@ fn rename_waiting_section(app: tauri::AppHandle, item_id: String, title: String)
 
 ipc_command! {
 async fn rescan_local_sources(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
-    let sources = app
-        .state::<CatalogState>()
-        .0
-        .lock()
-        .map_err(|_| "Catalog lock is poisoned".to_string())?
-        .local_sources()
-        .to_vec();
-    for source in sources {
-        if add_local_folder(app.clone(), source.path).await.is_err() {
-            let state = app.state::<CatalogState>();
-            let mut catalog = state
-                .0
-                .lock()
-                .map_err(|_| "Catalog lock is poisoned".to_string())?;
-            catalog.reconcile_local_source(&source.id, &HashSet::new());
+    let task_id = start_runtime_task(
+        &app,
+        "local-rescan",
+        tasks::TaskKind::LocalScan,
+        "Rescan local sources",
+        tasks::ProgressMode::Indeterminate,
+    )?;
+    tasks::append_output(
+        &app,
+        &task_id,
+        tasks::OutputStream::System,
+        Some("scan"),
+        "Refreshing connected local sources under the catalog mutation boundary",
+    );
+    let task_app = app.clone();
+    let task_key = task_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mutation = task_app.state::<CatalogMutationState>();
+        let _mutation = mutation
+            .0
+            .lock()
+            .map_err(|_| "Library mutation lock is poisoned".to_string())?;
+        let sources = task_app
+            .state::<CatalogState>()
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?
+            .local_sources()
+            .to_vec();
+        let mut queued_items = Vec::new();
+        for (index, source) in sources.iter().enumerate() {
+            tasks::progress(
+                &task_app,
+                &task_key,
+                tasks::TaskProgress {
+                    stage_key: Some("scan".into()),
+                    stage_title: Some("Scan local sources".into()),
+                    stage_progress_percent: Some(if sources.is_empty() {
+                        100.0
+                    } else {
+                        index as f32 / sources.len() as f32 * 100.0
+                    }),
+                    completed_units: Some(index as u64),
+                    total_units: Some(sources.len() as u64),
+                    unit_label: Some("sources".into()),
+                    message: Some(format!("Scanning local source {} of {}", index + 1, sources.len())),
+                    ..Default::default()
+                },
+            );
+            let scan = scan_root(&source.path);
+            let result = match scan {
+                Ok(scan) => {
+                    let state = task_app.state::<CatalogState>();
+                    let mut catalog = state
+                        .0
+                        .lock()
+                        .map_err(|_| "Catalog lock is poisoned".to_string())?;
+                    apply_local_scan(&mut catalog, scan)
+                }
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(mut items) => queued_items.append(&mut items),
+                Err(_) => {
+                    let state = task_app.state::<CatalogState>();
+                    let mut catalog = state
+                        .0
+                        .lock()
+                        .map_err(|_| "Catalog lock is poisoned".to_string())?;
+                    catalog.reconcile_local_source(&source.id, &HashSet::new());
+                }
+            }
         }
-    }
-    save_and_emit(&app)
+        let snapshot = save_and_emit(&task_app)?;
+        enqueue_ready(&task_app, queued_items);
+        Ok(snapshot)
+    })
+    .await
+    .map_err(|error| format!("Local rescan task failed: {error}"))
+    .and_then(|result| result);
+    finish_runtime_task(&app, &task_id, &result, "Local sources rescanned");
+    result
 }
 }
 
@@ -1407,6 +1766,11 @@ fn remove_library_source(
     app: tauri::AppHandle,
     source_id: String,
 ) -> Result<CatalogSnapshot, String> {
+    let mutation = app.state::<CatalogMutationState>();
+    let _mutation = mutation
+        .0
+        .lock()
+        .map_err(|_| "Library mutation lock is poisoned".to_string())?;
     {
         let state = app.state::<CatalogState>();
         let mut catalog = state
@@ -1419,72 +1783,106 @@ fn remove_library_source(
 }
 }
 
+fn require_local_delete(item: &CatalogItem) -> Result<(), String> {
+    item.can_delete_unfinished_local_media()
+        .then_some(())
+        .ok_or_else(|| "Only unfinished local media can be removed from Library".into())
+}
+
 ipc_command! {
-fn remove_unprocessed_local_item(
+fn delete_library_item(
     app: tauri::AppHandle,
     item_id: String,
 ) -> Result<CatalogSnapshot, String> {
-    let reservation = match processing::prepare_item_removal(&app, &item_id)? {
-        processing::RemovalPreparation::Active => {
-            return Err(
-                "This item is already processing; stop processing before removing it from the Library".into(),
-            );
-        }
-        processing::RemovalPreparation::Ready(reservation) => *reservation,
+    let mutation = app.state::<CatalogMutationState>();
+    let _mutation = mutation
+        .0
+        .lock()
+        .map_err(|_| "Library mutation lock is poisoned".to_string())?;
+    let initial = {
+        let state = app.state::<CatalogState>();
+        state
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?
+            .item(&item_id)
+            .cloned()
+            .ok_or_else(|| "Library item no longer exists".to_string())?
     };
-    let state = app.state::<CatalogState>();
-    let mut catalog = match state.0.lock() {
-        Ok(catalog) => catalog,
-        Err(_) => {
-            let error = "Catalog lock is poisoned".to_string();
-            if let Err(rollback) = processing::rollback_item_removal(&app, reservation) {
-                return Err(format!("{error}; unable to restore queued processing: {rollback}"));
+    require_local_delete(&initial)?;
+    let transient_lyrics = processing::fence_item_for_delete(&app, &item_id)?;
+    let deletion = {
+        let state = app.state::<CatalogState>();
+        let mut catalog = state
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?;
+        let previous = catalog
+            .item(&item_id)
+            .cloned()
+            .ok_or_else(|| "Library item no longer exists".to_string())?;
+        if let Err(error) = require_local_delete(&previous) {
+            Err((previous, error))
+        } else {
+            match processing::cleanup_fenced_lyrics(transient_lyrics.as_deref()) {
+                Ok(()) => match catalog.remove_item_candidate(&item_id, |candidate| candidate.save()) {
+                    Ok(candidate) => {
+                        *catalog = candidate;
+                        Ok((catalog.snapshot(), previous))
+                    }
+                    Err(error) => Err((previous, error)),
+                },
+                Err(error) => Err((previous, error)),
             }
-            return Err(error);
         }
     };
-    let previous_catalog = catalog.clone();
-    let candidate = catalog.remove_unprocessed_item_candidate(&item_id, |candidate| candidate.save());
-    let candidate = match candidate {
-        Ok(candidate) => candidate,
-        Err(error) => {
-            drop(catalog);
-            if let Err(rollback) = processing::rollback_item_removal(&app, reservation) {
-                return Err(format!("{error}; unable to restore queued processing: {rollback}"));
-            }
-            return Err(error);
+    let snapshot = match deletion {
+        Ok((snapshot, _)) => snapshot,
+        Err((previous, error)) => {
+            return Err(restore_processing_after_delete_failure(
+                &app,
+                &previous,
+                transient_lyrics,
+                error,
+            ));
         }
     };
-    *catalog = candidate;
-    let snapshot = catalog.snapshot();
-    drop(catalog);
-    if let Err(error) = processing::commit_item_removal(&app, &reservation) {
-        let restore = (|| {
-            let state = app.state::<CatalogState>();
-            let mut catalog = state
-                .0
-                .lock()
-                .map_err(|_| "Catalog lock is poisoned".to_string())?;
-            *catalog = previous_catalog;
-            catalog.save()?;
-            Ok::<CatalogSnapshot, String>(catalog.snapshot())
-        })();
-        if let Ok(snapshot) = &restore {
-            let _ = app.emit("library-changed", snapshot.clone());
-        }
-        let rollback = processing::rollback_item_removal(&app, reservation);
-        return Err(match (restore, rollback) {
-            (Ok(_), Ok(())) => format!("{error}; the unfinished item was restored"),
-            (Err(restore), Ok(())) => format!("{error}; unable to restore the Library catalog: {restore}"),
-            (Ok(_), Err(rollback)) => format!("{error}; unable to restore processing state: {rollback}"),
-            (Err(restore), Err(rollback)) => format!(
-                "{error}; unable to restore the Library catalog: {restore}; unable to restore processing state: {rollback}"
-            ),
-        });
-    }
     let _ = app.emit("library-changed", snapshot.clone());
     Ok(snapshot)
 }
+}
+
+fn restore_processing_after_delete_failure(
+    app: &tauri::AppHandle,
+    item: &CatalogItem,
+    transient_lyrics: Option<PathBuf>,
+    error: String,
+) -> String {
+    if matches!(item.status, ItemStatus::Queued | ItemStatus::Processing) {
+        let transient_lyrics = match transient_lyrics {
+            Some(path) if path.is_file() => Some(path),
+            Some(_) => match write_pasted_lyrics(app, &item.id, &item.lyric_text) {
+                Ok(path) => Some(path),
+                Err(recreate) => {
+                    return format!(
+                        "{error}; Library item was kept but lyric recovery failed: {recreate}"
+                    );
+                }
+            },
+            None => None,
+        };
+        if let Err(restart) = enqueue_item(app, item.clone(), transient_lyrics) {
+            return format!(
+                "{error}; Library item was kept but processing restart failed: {restart}"
+            );
+        }
+        if let Err(save) = save_and_emit(app) {
+            return format!(
+                "{error}; Library item was kept but recovery could not be saved: {save}"
+            );
+        }
+    }
+    format!("{error}; Library item was kept")
 }
 
 ipc_command! {
@@ -1514,7 +1912,7 @@ fn provide_lyrics_file(
 }
 }
 
-fn write_pasted_lyrics(
+fn pasted_lyrics_path(
     app: &tauri::AppHandle,
     item_id: &str,
     text: &str,
@@ -1539,21 +1937,61 @@ fn write_pasted_lyrics(
     digest.update(item_id.as_bytes());
     digest.update([0]);
     digest.update(text.as_bytes());
-    let path = root.join(format!("{}.txt", hex::encode(digest.finalize())));
-    if !path.exists() {
-        let temporary = path.with_extension("txt.partial");
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| format!("Unable to create lyric snapshot: {error}"))?;
-        file.write_all(text.as_bytes())
-            .and_then(|()| file.sync_all())
-            .map_err(|error| format!("Unable to write lyric snapshot: {error}"))?;
-        fs::rename(&temporary, &path)
-            .map_err(|error| format!("Unable to publish lyric snapshot: {error}"))?;
+    Ok(root.join(format!("{}.txt", hex::encode(digest.finalize()))))
+}
+
+fn write_pasted_lyrics(
+    app: &tauri::AppHandle,
+    item_id: &str,
+    text: &str,
+) -> Result<PathBuf, String> {
+    let path = pasted_lyrics_path(app, item_id, text)?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => verify_lyrics_snapshot(&path, text)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .ok_or_else(|| "Lyric snapshot directory is unavailable".to_string())?;
+            let mut temporary = NamedTempFile::new_in(parent)
+                .map_err(|error| format!("Unable to create lyric snapshot: {error}"))?;
+            temporary
+                .write_all(text.as_bytes())
+                .and_then(|()| temporary.as_file_mut().sync_all())
+                .map_err(|error| format!("Unable to write lyric snapshot: {error}"))?;
+            let published = match temporary.persist_noclobber(&path) {
+                Ok(_) => true,
+                Err(error) if fs::symlink_metadata(&path).is_ok() => {
+                    drop(error);
+                    false
+                }
+                Err(error) => {
+                    return Err(format!("Unable to publish lyric snapshot: {}", error.error));
+                }
+            };
+            if !published {
+                verify_lyrics_snapshot(&path, text)?;
+            }
+        }
+        Err(error) => return Err(format!("Unable to inspect lyric snapshot: {error}")),
     }
     Ok(path)
+}
+
+fn verify_lyrics_snapshot(path: &Path, text: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "Existing lyric snapshot is unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Existing lyric snapshot is not a regular file".into());
+    }
+    if metadata.len() > MAX_PASTED_LYRIC_BYTES as u64 {
+        return Err("Existing lyric snapshot exceeds its size limit".into());
+    }
+    let existing =
+        fs::read(path).map_err(|_| "Existing lyric snapshot could not be read".to_string())?;
+    if existing != text.as_bytes() {
+        return Err("Existing lyric snapshot does not match the supplied lyrics".into());
+    }
+    Ok(())
 }
 
 ipc_command! {
@@ -1613,12 +2051,15 @@ fn retry_processing_item(
         ItemLocation::LocalMedia { lyrics_path, .. } => lyrics_path.clone(),
         _ => None,
     });
-    let (lyrics_path, transient) = if let Some(path) = existing_lyrics.filter(|path| path.is_file())
-    {
-        (path, None)
-    } else {
-        let path = write_pasted_lyrics(&app, &item_id, &item.lyric_text)?;
-        (path.clone(), Some(path))
+    let (lyrics_path, transient) = match existing_lyrics {
+        Some(path) if fs::symlink_metadata(&path).is_ok() => {
+            verify_lyrics_snapshot(&path, &item.lyric_text)?;
+            (path, None)
+        }
+        _ => {
+            let path = write_pasted_lyrics(&app, &item_id, &item.lyric_text)?;
+            (path.clone(), Some(path))
+        }
     };
     let queued = bind_retry_lyrics_path(item, lyrics_path)?;
     enqueue_item(&app, queued, transient)?;
@@ -1894,23 +2335,6 @@ async fn connect_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, 
 
 ipc_command! {
 async fn rescan_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
-    let sources = {
-        let state = app.state::<CatalogState>();
-        let catalog = state
-            .0
-            .lock()
-            .map_err(|_| "Catalog lock is poisoned".to_string())?;
-        let mut sources = catalog.drive_sources().to_vec();
-        for source in &mut sources {
-            if source.roots.is_empty() {
-                source.roots = legacy_drive_roots(&catalog, &source.id);
-            }
-        }
-        sources
-    };
-    if sources.is_empty() {
-        return catalog_snapshot(app.state::<CatalogState>());
-    }
     let task_id = start_runtime_task(
         &app,
         "drive-rescan",
@@ -1921,6 +2345,33 @@ async fn rescan_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, S
     let task_app = app.clone();
     let task_key = task_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let mutation = task_app.state::<CatalogMutationState>();
+        let _mutation = mutation
+            .0
+            .lock()
+            .map_err(|_| "Library mutation lock is poisoned".to_string())?;
+        let sources = {
+            let state = task_app.state::<CatalogState>();
+            let catalog = state
+                .0
+                .lock()
+                .map_err(|_| "Catalog lock is poisoned".to_string())?;
+            let mut sources = catalog.drive_sources().to_vec();
+            for source in &mut sources {
+                if source.roots.is_empty() {
+                    source.roots = legacy_drive_roots(&catalog, &source.id);
+                }
+            }
+            sources
+        };
+        if sources.is_empty() {
+            return task_app
+                .state::<CatalogState>()
+                .0
+                .lock()
+                .map(|catalog| catalog.snapshot())
+                .map_err(|_| "Catalog lock is poisoned".to_string());
+        }
         tasks::progress(
             &task_app,
             &task_key,
@@ -2090,6 +2541,11 @@ async fn rescan_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, S
 
 ipc_command! {
 fn disconnect_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
+    let mutation = app.state::<CatalogMutationState>();
+    let _mutation = mutation
+        .0
+        .lock()
+        .map_err(|_| "Library mutation lock is poisoned".to_string())?;
     if let Ok(provider) = drive_provider(&app) {
         provider.disconnect()?;
     }
@@ -2252,17 +2708,20 @@ fn load_item_thumbnail(app: tauri::AppHandle, item_id: String) -> Result<Option<
         return Ok(None);
     }
     let (mut reader, _) = reader_for_item(&app, &item, IoPriority::AlternateTrack)?;
-    let asset = reader
+    let asset_name = "artwork/thumbnail-base.webp";
+    let Some(asset) = reader
         .manifest
         .assets
         .iter()
-        .find(|asset| asset.logical_name == "artwork/thumbnail.webp")
-        .ok_or_else(|| "Package thumbnail is missing".to_string())?;
+        .find(|asset| asset.logical_name == asset_name)
+    else {
+        return Ok(None);
+    };
     if asset.plaintext_length == 0 || asset.plaintext_length > MAX_THUMBNAIL_BYTES {
         return Err("Package thumbnail exceeds the display bound".into());
     }
     let bytes = reader
-        .read_asset("artwork/thumbnail.webp")
+        .read_asset(asset_name)
         .map_err(|error| error.to_string())?;
     Ok(Some(format!(
         "data:image/webp;base64,{}",
@@ -2386,6 +2845,7 @@ pub fn run() {
     builder
         .manage(PlayerState::default())
         .manage(CloudState::default())
+        .manage(CatalogMutationState(Mutex::new(())))
         .manage(ProcessingState::default())
         .manage(issues::IssueStateStore::default())
         .manage(model_installer::ModelInstallerState::default())
@@ -2427,6 +2887,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             player_status,
             catalog_snapshot,
+            preferences_snapshot,
+            save_preferences,
             search_library,
             item_lyrics,
             system_issues,
@@ -2434,12 +2896,16 @@ pub fn run() {
             task_output_snapshot,
             task_record,
             cancel_task,
+            pause_task,
+            resume_task,
             dismiss_system_issue,
             install_processing_models,
             cancel_model_install,
             add_local_files,
             add_local_folder,
             prepare_local_clip,
+            prepare_library_item,
+            update_library_item,
             cancel_clip_preparation,
             local_clip_frames,
             cancel_clip_frames,
@@ -2449,7 +2915,7 @@ pub fn run() {
             rename_waiting_section,
             rescan_local_sources,
             remove_library_source,
-            remove_unprocessed_local_item,
+            delete_library_item,
             provide_lyrics_file,
             provide_lyrics_text,
             retry_processing_item,
@@ -2497,14 +2963,82 @@ mod tests {
     }
     use super::{
         bind_retry_lyrics_path, drive_download_task_id, is_supported_original_reference,
-        parse_karaoke_presentation, parse_single_range, validate_presentation_asset_contract,
+        parse_karaoke_presentation, parse_single_range, require_local_delete,
+        validate_presentation_asset_contract, verify_lyrics_snapshot,
     };
     use crate::catalog::{
         CatalogItem, ItemLocation, ItemStatus, MediaOrigin, ProcessingEvidenceStatus,
         ProcessingTaskEvidence,
     };
     use crate::range_cache::RemoteObject;
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
+
+    #[test]
+    fn cloud_delete_gate_rejects_before_any_library_side_effect() {
+        let item = CatalogItem {
+            section_id: None,
+            id: "cloud-item".into(),
+            package_id: Some("cloud-package".into()),
+            title: "Cloud song".into(),
+            artist: None,
+            composer: None,
+            first_lyric_line: None,
+            lyric_text: String::new(),
+            status: ItemStatus::Offline,
+            progress_percent: 0.0,
+            status_message: None,
+            processing_job_id: None,
+            processing_task_evidence: None,
+            has_thumbnail: false,
+            locations: vec![ItemLocation::GoogleDrive {
+                source_id: "drive".into(),
+                root_id: "root".into(),
+                file_id: "file".into(),
+                name: "cloud.lrail".into(),
+                size: 1,
+                version: "v1".into(),
+                modified_time: None,
+                md5_checksum: None,
+                available: true,
+            }],
+        };
+        assert!(!item.has_local_location());
+        assert_eq!(
+            require_local_delete(&item).unwrap_err(),
+            "Only unfinished local media can be removed from Library"
+        );
+
+        let mut packaged = item.clone();
+        packaged.id = "packaged-item".into();
+        packaged.package_id = Some("package".into());
+        packaged.status = ItemStatus::Ready;
+        packaged.locations = vec![ItemLocation::LocalMedia {
+            source_id: None,
+            path: PathBuf::from("song.mp4"),
+            lyrics_path: None,
+            origin: MediaOrigin::Disk,
+            trim_start_millis: None,
+            trim_end_millis: None,
+            available: true,
+        }];
+        assert_eq!(
+            require_local_delete(&packaged).unwrap_err(),
+            "Only unfinished local media can be removed from Library"
+        );
+    }
+
+    #[test]
+    fn lyric_snapshot_verification_rejects_tampered_bytes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("lyrics.txt");
+        fs::write(&path, "different exact text").unwrap();
+        assert_eq!(
+            verify_lyrics_snapshot(&path, "supplied exact text").unwrap_err(),
+            "Existing lyric snapshot does not match the supplied lyrics"
+        );
+        fs::write(&path, "supplied exact text").unwrap();
+        assert!(verify_lyrics_snapshot(&path, "supplied exact text").is_ok());
+    }
 
     #[test]
     fn authenticated_empty_original_is_rejected_and_zero_routes_cannot_underflow() {

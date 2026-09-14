@@ -17,6 +17,8 @@ const runningTask: TaskRecord = {
   stageProgressPercent: 40,
   progressPercent: 30,
   cancellable: true,
+  pausable: true,
+  resumable: true,
   relatedItemId: "catalog-item",
   startedAtMillis: 1_000,
   updatedAtMillis: 2_000,
@@ -50,6 +52,8 @@ function Harness({
   initialFocusTaskId,
   initialFocusIssueId,
   onOpenIssueTask,
+  onPauseTask,
+  onResumeTask,
 }: {
   tasks?: TaskRecord[];
   issues?: SystemIssue[];
@@ -60,6 +64,8 @@ function Harness({
   initialFocusTaskId?: string;
   initialFocusIssueId?: string;
   onOpenIssueTask?: (issue: SystemIssue) => void;
+  onPauseTask?: (task: TaskRecord) => void;
+  onResumeTask?: (task: TaskRecord) => void;
 }) {
   const [open, setOpen] = useState(true);
   const [tab, setTab] = useState<"tasks" | "issues">(initialTab);
@@ -106,6 +112,8 @@ function Harness({
         onTaskFocusComplete={(taskId) => setFocusTaskId((current) => current === taskId ? undefined : current)}
         onIssueFocusComplete={(issueId) => setFocusIssueId((current) => current === issueId ? undefined : current)}
         onCancelTask={() => undefined}
+        onPauseTask={onPauseTask}
+        onResumeTask={onResumeTask}
         onCopyTaskOutput={() => undefined}
         onDismiss={() => undefined}
         onResolve={() => undefined}
@@ -230,6 +238,18 @@ describe("Activity Center", () => {
     expect(host.querySelector('[aria-label$="succeeded task"]')).toBeNull();
   });
 
+  it("keeps safe task controls in Activity and exposes resume for paused work", () => {
+    const onPauseTask = vi.fn();
+    const onResumeTask = vi.fn();
+    const paused = { ...runningTask, status: "paused" as const, cancellable: false, pausable: false, resumable: true };
+    act(() => root.render(<Harness tasks={[runningTask]} onPauseTask={onPauseTask} onResumeTask={onResumeTask} />));
+    act(() => [...host.querySelectorAll<HTMLButtonElement>(".task-card button")].find((button) => button.textContent === "Pause")!.click());
+    expect(onPauseTask).toHaveBeenCalledWith(runningTask);
+    act(() => root.render(<Harness tasks={[paused]} onPauseTask={onPauseTask} onResumeTask={onResumeTask} />));
+    act(() => [...host.querySelectorAll<HTMLButtonElement>(".task-card button")].find((button) => button.textContent === "Resume")!.click());
+    expect(onResumeTask).toHaveBeenCalledWith(paused);
+  });
+
   it("renders a newly started model task with null optional fields and truthful indeterminate progress", () => {
     const modelTask: TaskRecord = {
       id: "model-install",
@@ -327,6 +347,19 @@ describe("Activity Center", () => {
     expect(issueCard.querySelector(".task-output")?.getAttribute("aria-live")).toBe("off");
     expect(host.querySelector('[role="tab"]')?.textContent).toContain("Tasks");
     expect(host.querySelectorAll('[role="tab"]')[1].getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("shows safe technical context when an Issue has no raw detail", () => {
+    const missingDetail = {
+      ...issue("missing-detail"),
+      code: "system.lyricrail-could-not-refresh",
+      detail: undefined,
+    };
+    act(() => root.render(<Harness tasks={[]} issues={[missingDetail]} initialTab="issues" />));
+    const card = host.querySelector<HTMLElement>('[aria-label="Issue missing-detail, issue"]')!;
+    expect(card.querySelector("summary")?.textContent).toBe("Technical details");
+    expect(card.querySelector("pre")?.textContent).toContain("Issue code: system.lyricrail-could-not-refresh");
+    expect(card.querySelector("pre")?.textContent).toContain("Raw technical text was withheld for privacy.");
   });
 
   it("expands output under only the selected Issue when task IDs are shared", () => {

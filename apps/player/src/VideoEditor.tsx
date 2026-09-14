@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useFocusContainment } from "./focus";
-import { IconButton } from "./Icon";
+import { Icon, IconButton } from "./Icon";
 import { formatTimecodeMillis } from "./clipSelection";
 import { useClipPlayback, type ClipPlaybackRange, type LocalClipPreview } from "./useClipPlayback";
 import { cleanVideoMetadata, validVideoMetadata, MAX_VIDEO_TEXT_CHARS, MAX_LYRICS_BYTES, type VideoMetadata } from "./videoMetadata";
@@ -14,19 +14,35 @@ export function VideoEditor({ preview, range, value, busy, onClose, onSave, onPl
   onClose: () => void; onSave: (value: VideoMetadata) => void; onPlay: () => void; onCompatible?: () => void; preparationError?: string;
 }) {
   const [draft, setDraft] = useState(() => ({ title: value.title, artist: value.artist ?? '', composer: value.composer ?? '', lyrics: value.lyrics ?? '' }));
+  const [aiNotice, setAiNotice] = useState("");
   const dialog = useRef<HTMLDivElement>(null), title = useRef<HTMLInputElement>(null);
   useFocusContainment(true, dialog, title);
   const { audio, video, position, playing, error, mediaError, fail, seek, stop, play, ended } = useClipPlayback(preview, range, false, busy, onPlay, true);
   const duration = range.endMillis - range.startMillis;
   const elapsed = Math.max(0, Math.min(duration, position - range.startMillis));
   const valid = validVideoMetadata(draft);
+  const suggest = (field: "title" | "artist" | "composer" | "lyrics") => {
+    if (field === "title") {
+      setDraft((current) => ({ ...current, title: preview.suggestedTitle }));
+      setAiNotice("Suggested from the selected track name. Review before saving.");
+      return;
+    }
+    if (field === "lyrics") {
+      setAiNotice("Lyrics stay exact. AI can align supplied words after processing, but it never invents or rewrites them.");
+      return;
+    }
+    setAiNotice("Metadata suggestions will use verified track information when the model/runtime provides it.");
+  };
+  const aiAction = (field: "title" | "artist" | "composer" | "lyrics", label: string) => (
+    <IconButton className="ai-field-button" icon="sparkles" iconSize={15} label={label} onClick={() => suggest(field)} disabled={busy} />
+  );
   const seekClip = (time: number) => seek(range.startMillis + Math.max(0, Math.min(duration, time)));
   return createPortal(<div className="modal-layer clip-video-modal" role="dialog" aria-modal="true" aria-labelledby="video-editor-title"
     onKeyDown={(event) => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!busy) onClose(); }
     }}>
     <div className="clip-dialog clip-workbench clip-video-dialog panel" ref={dialog} tabIndex={-1}>
-      <header><h2 id="video-editor-title">Edit video</h2><IconButton label="Close video editor" icon="close" onClick={onClose} disabled={busy} /></header>
+      <header><div><h2 id="video-editor-title">Edit video</h2><p>Edit metadata and exact lyrics. Saving reprocesses the unchanged local source.</p></div><IconButton label="Close video editor" icon="close" onClick={onClose} disabled={busy} /></header>
       <div className="clip-video-content">
         <section aria-label="Video preview">
           <div className="clip-screen">
@@ -41,12 +57,13 @@ export function VideoEditor({ preview, range, value, busy, onClose, onSave, onPl
           <input className="clip-video-seek" type="range" aria-label="Seek video" aria-valuetext={formatTimecodeMillis(elapsed)} min={0} max={duration} step={1} value={elapsed} disabled={busy || preview.requiresCompatibility} onChange={(event) => seekClip(Number(event.target.value))} />
         </section>
         <section className="clip-video-fields" aria-label="Video information">
-          <label>Video name<input ref={title} aria-label="Video name" value={draft.title} maxLength={MAX_VIDEO_TEXT_CHARS} disabled={busy} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
+          <label><span className="clip-label-row"><span>Video name</span>{aiAction("title", "Suggest video name with AI")}</span><input ref={title} aria-label="Video name" value={draft.title} maxLength={MAX_VIDEO_TEXT_CHARS} disabled={busy} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
           <div className="clip-metadata-fields">
-            <label>Artist<input aria-label="Artist" value={draft.artist} maxLength={MAX_VIDEO_TEXT_CHARS} disabled={busy} onChange={(event) => setDraft({ ...draft, artist: event.target.value })} /></label>
-            <label>Composer<input aria-label="Composer" value={draft.composer} maxLength={MAX_VIDEO_TEXT_CHARS} disabled={busy} onChange={(event) => setDraft({ ...draft, composer: event.target.value })} /></label>
+            <label><span className="clip-label-row"><span>Artist</span>{aiAction("artist", "Suggest artist with AI")}</span><input aria-label="Artist" value={draft.artist} maxLength={MAX_VIDEO_TEXT_CHARS} disabled={busy} onChange={(event) => setDraft({ ...draft, artist: event.target.value })} /></label>
+            <label><span className="clip-label-row"><span>Composer</span>{aiAction("composer", "Suggest composer with AI")}</span><input aria-label="Composer" value={draft.composer} maxLength={MAX_VIDEO_TEXT_CHARS} disabled={busy} onChange={(event) => setDraft({ ...draft, composer: event.target.value })} /></label>
           </div>
-          <label>Lyrics<textarea aria-label="Lyrics" value={draft.lyrics} maxLength={MAX_LYRICS_BYTES} disabled={busy} onChange={(event) => setDraft({ ...draft, lyrics: event.target.value })} placeholder="Paste lyrics" spellCheck={false} /></label>
+          <label><span className="clip-label-row"><span>Lyrics</span>{aiAction("lyrics", "Explain AI lyric assistance")}</span><textarea aria-label="Lyrics" value={draft.lyrics} maxLength={MAX_LYRICS_BYTES} disabled={busy} onChange={(event) => setDraft({ ...draft, lyrics: event.target.value })} placeholder="Paste exact lyrics" spellCheck={false} /></label>
+          {aiNotice && <p className="ai-field-note" role="status"><Icon name="sparkles" size={15} />{aiNotice}</p>}
         </section>
       </div>
       {(preview.requiresCompatibility || mediaError) && onCompatible && <button disabled={busy} onClick={() => { stop(); onCompatible(); }}>Prepare compatible preview</button>}

@@ -3,7 +3,7 @@
 import { act, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useFocusContainment } from "./focus";
+import { consumeFocusRestoration, markFocusRestoration, useFocusContainment } from "./focus";
 
 function Harness({ open }: { open: boolean }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -31,6 +31,13 @@ describe("focus containment", () => {
   });
 
   afterEach(() => host.remove());
+
+  it("consumes a focus-restoration marker once per exact element", () => {
+    const target = document.createElement("button");
+    markFocusRestoration(target);
+    expect(consumeFocusRestoration(target)).toBe(true);
+    expect(consumeFocusRestoration(target)).toBe(false);
+  });
 
   it("contains forward and reverse Tab then restores the trigger", () => {
     const root = createRoot(host);

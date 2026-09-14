@@ -13,7 +13,9 @@ const item: LibraryItem = {
   status: "ready",
   progressPercent: 100,
   hasThumbnail: false,
-  canProcess: false,
+  canProcess: true,
+  canDelete: true,
+  firstLyricLine: "First lyric line",
   sources: ["Disk", "Drive"],
 };
 
@@ -108,14 +110,10 @@ describe("Library source groups", () => {
         onQuery={() => undefined}
         onSelect={() => undefined}
         onPlay={() => undefined}
+        onEditVideo={() => undefined}
         onAddFiles={addFiles}
         onAddFolder={addFolder}
         onDrive={connectDrive}
-        onLyricsFile={() => undefined}
-        onLyricsPaste={() => undefined}
-        onEditLyrics={() => undefined}
-        onRetry={() => undefined}
-        onShowContext={() => undefined}
         onRemoveItem={() => undefined}
         onRemoveSource={() => undefined}
         onRecoveryExport={() => undefined}
@@ -172,14 +170,10 @@ describe("Library source groups", () => {
         onQuery={() => undefined}
         onSelect={() => undefined}
         onPlay={() => undefined}
+        onEditVideo={() => undefined}
         onAddFiles={() => undefined}
         onAddFolder={() => undefined}
         onDrive={() => undefined}
-        onLyricsFile={() => undefined}
-        onLyricsPaste={() => undefined}
-        onEditLyrics={() => undefined}
-        onRetry={() => undefined}
-        onShowContext={() => undefined}
         onRemoveItem={() => undefined}
         onRemoveSource={() => undefined}
         onRecoveryExport={() => undefined}
@@ -202,7 +196,7 @@ describe("Library source groups", () => {
     window.removeEventListener("keydown", escapedToWindow);
   });
 
-  it("shows Remove from library only for a native-eligible unfinished local item", () => {
+  it("routes Delete for a queued local item", () => {
     const onRemoveItem = vi.fn();
     act(() => root.render(
       <LibraryDrawer
@@ -218,14 +212,10 @@ describe("Library source groups", () => {
         onQuery={() => undefined}
         onSelect={() => undefined}
         onPlay={() => undefined}
+        onEditVideo={() => undefined}
         onAddFiles={() => undefined}
         onAddFolder={() => undefined}
         onDrive={() => undefined}
-        onLyricsFile={() => undefined}
-        onLyricsPaste={() => undefined}
-        onEditLyrics={() => undefined}
-        onRetry={() => undefined}
-        onShowContext={() => undefined}
         onRemoveItem={onRemoveItem}
         onRemoveSource={() => undefined}
         onRecoveryExport={() => undefined}
@@ -233,10 +223,156 @@ describe("Library source groups", () => {
       />,
     ));
 
-    const deletes = [...host.querySelectorAll<HTMLButtonElement>("button")]
-      .filter((button) => button.textContent === "Remove from library");
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Unfinished song"]')!;
+    act(() => trigger.click());
+    const deletes = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .filter((button) => button.textContent === "Delete");
     expect(deletes).toHaveLength(1);
-    act(() => deletes[0].click());
+    expect(host.querySelector('[aria-label="Edit video for Unfinished song"]')).toBeNull();
+    act(() => deletes[0]!.click());
     expect(onRemoveItem).toHaveBeenCalledWith(unfinishedLocalItem);
+  });
+
+  it("plays on row click, shows exact lyrics on hover and keeps only Edit/Delete actions", async () => {
+    const onPlay = vi.fn();
+    const onEditVideo = vi.fn();
+    const onLyricsPreview = vi.fn(async () => "Exact full lyric text");
+    act(() => root.render(
+      <LibraryDrawer
+        open
+        items={[{ ...item, title: "Editable song", lyricSnippet: "Matched lyric" }]}
+        catalog={{ ...catalog, items: [{ ...item, title: "Editable song", lyricSnippet: "Matched lyric" }] }}
+        tasksByItem={new Map()}
+        selectedId={undefined}
+        currentId={undefined}
+        query=""
+        busy={false}
+        blocked={false}
+        onClose={() => undefined}
+        onRescan={() => undefined}
+        onQuery={() => undefined}
+        onSelect={() => undefined}
+        onPlay={onPlay}
+        onEditVideo={onEditVideo}
+        onLyricsPreview={onLyricsPreview}
+        onAddFiles={() => undefined}
+        onAddFolder={() => undefined}
+        onDrive={() => undefined}
+        onRemoveItem={() => undefined}
+        onRemoveSource={() => undefined}
+        onRecoveryExport={() => undefined}
+        onRecoveryRestore={() => undefined}
+      />,
+    ));
+    const row = host.querySelector<HTMLButtonElement>('[aria-label="Play Editable song"]')!;
+    const article = row.closest<HTMLElement>(".song-row")!;
+    expect(row.querySelector(".lyric-thumbnail")).toBeNull();
+    expect(row.querySelector(".thumbnail-fallback")).not.toBeNull();
+    expect(row.querySelector(".thumbnail-lyric")?.textContent).toContain("Matched lyric");
+    act(() => { row.focus(); row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(onLyricsPreview).toHaveBeenCalledWith(expect.objectContaining({ title: "Editable song" }));
+    expect(row.querySelector(".thumbnail-lyric")?.textContent).toContain("Exact full lyric text");
+    act(() => row.focus());
+    act(() => row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(onPlay).toHaveBeenCalledTimes(1);
+    act(() => row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true })));
+    expect(onPlay).toHaveBeenCalledTimes(2);
+    act(() => row.click());
+    expect(onPlay).toHaveBeenCalledTimes(3);
+    expect(host.querySelector('[role="menu"]')).toBeNull();
+    const trigger = article.querySelector<HTMLButtonElement>('[aria-label="Open actions for Editable song"]')!;
+    act(() => trigger.click());
+    expect(onPlay).toHaveBeenCalledTimes(3);
+    const menu = article.querySelector<HTMLElement>('[role="menu"]')!;
+    const menuItems = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(menuItems).toHaveLength(2);
+    act(() => menuItems.find((button) => button.textContent === "Edit video")!.click());
+    expect(onEditVideo).toHaveBeenCalledWith(expect.objectContaining({ title: "Editable song" }));
+    act(() => trigger.click());
+    expect([...article.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].some((button) => button.textContent === "Delete")).toBe(true);
+  });
+
+  it("refetches the lyric preview after a Library package or lyric revision", async () => {
+    const onLyricsPreview = vi.fn()
+      .mockResolvedValueOnce("Old exact lyric")
+      .mockResolvedValueOnce("New exact lyric");
+    const render = (next: LibraryItem) => root.render(
+      <LibraryDrawer
+        open
+        items={[next]}
+        catalog={{ ...catalog, items: [next] }}
+        tasksByItem={new Map()}
+        query=""
+        busy={false}
+        blocked={false}
+        onClose={() => undefined}
+        onRescan={() => undefined}
+        onQuery={() => undefined}
+        onSelect={() => undefined}
+        onPlay={() => undefined}
+        onEditVideo={() => undefined}
+        onLyricsPreview={onLyricsPreview}
+        onAddFiles={() => undefined}
+        onAddFolder={() => undefined}
+        onDrive={() => undefined}
+        onRemoveItem={() => undefined}
+        onRemoveSource={() => undefined}
+        onRecoveryExport={() => undefined}
+        onRecoveryRestore={() => undefined}
+      />,
+    );
+    const first = { ...item, packageId: "package", lyricSha256: "hash-old", firstLyricLine: "Same line" };
+    await act(async () => render(first));
+    let row = host.querySelector<HTMLButtonElement>(".song-row-main")!;
+    act(() => row.focus());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(row.querySelector(".thumbnail-lyric")?.textContent).toContain("Old exact lyric");
+
+    const next = { ...first, packageId: "package", lyricSha256: "hash-new", firstLyricLine: "Same line" };
+    await act(async () => render(next));
+    row = host.querySelector<HTMLButtonElement>(".song-row-main")!;
+    act(() => { row.blur(); row.focus(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(onLyricsPreview).toHaveBeenCalledTimes(2);
+    expect(row.querySelector(".thumbnail-lyric")?.textContent).toContain("New exact lyric");
+  });
+
+  it("keeps cloud-only rows read-only and preserves local actions", () => {
+    const onRemoveItem = vi.fn();
+    const onPlay = vi.fn();
+    const rows = [
+      { ...item, id: "cloud", title: "Cloud offline", status: "offline" as const, canProcess: false, canDelete: false, sources: ["Drive"] },
+      { ...item, id: "local", title: "Local ready" },
+      { ...item, id: "queued", title: "Queued local", status: "queued" as const },
+    ];
+    act(() => root.render(
+      <LibraryDrawer
+        open items={rows} catalog={{ ...catalog, items: rows }} tasksByItem={new Map()} query="" busy={false} blocked={false}
+        onClose={() => undefined} onRescan={() => undefined} onQuery={() => undefined} onSelect={() => undefined}
+        onPlay={onPlay} onEditVideo={() => undefined} onAddFiles={() => undefined} onAddFolder={() => undefined}
+        onDrive={() => undefined} onRemoveItem={onRemoveItem} onRemoveSource={() => undefined}
+        onRecoveryExport={() => undefined} onRecoveryRestore={() => undefined}
+      />,
+    ));
+    for (const [title, count] of [["Local ready", 2], ["Queued local", 1]] as const) {
+      const row = [...host.querySelectorAll<HTMLElement>(".song-row")]
+        .find((candidate) => candidate.textContent?.includes(title))!;
+      const trigger = row.querySelector<HTMLButtonElement>('[aria-label^="Open actions for"]')!;
+      act(() => trigger.click());
+      expect(row.querySelector('[role="menu"]')).not.toBeNull();
+      expect(row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).toHaveLength(count);
+      expect(document.activeElement).toBe(row.querySelector('[role="menuitem"]'));
+      expect([...row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].some((button) => button.textContent === "Delete")).toBe(true);
+      act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+      expect(document.activeElement).toBe(trigger);
+    }
+    const cloud = [...host.querySelectorAll<HTMLElement>(".song-row")]
+      .find((candidate) => candidate.textContent?.includes("Cloud offline"))!;
+    expect(cloud.querySelector('[aria-label^="Open actions for"]')).toBeNull();
+    expect(cloud.querySelector('[role="menu"]')).toBeNull();
+    act(() => cloud.querySelector<HTMLButtonElement>('[aria-label="Play Cloud offline"]')!.click());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ title: "Cloud offline" }));
+    expect(onRemoveItem).not.toHaveBeenCalled();
   });
 });

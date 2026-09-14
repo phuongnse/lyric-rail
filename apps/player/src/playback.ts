@@ -46,7 +46,7 @@ export function toggleMutedVolume(
   lastAudibleVolume: number,
 ): { volume: number; lastAudibleVolume: number } {
   const current = clampVolume(volume);
-  const fallback = clampVolume(lastAudibleVolume) || 0.9;
+  const fallback = clampVolume(lastAudibleVolume) || 1;
   if (current > 0.001) {
     return { volume: 0, lastAudibleVolume: current };
   }

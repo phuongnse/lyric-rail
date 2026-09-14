@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { consumeFocusRestoration } from "./focus";
 
 export const ICON_NAMES = [
   "refresh",
@@ -16,6 +17,7 @@ export const ICON_NAMES = [
   "search",
   "play",
   "pause",
+  "stop",
   "previous",
   "next",
   "shuffle",
@@ -25,10 +27,18 @@ export const ICON_NAMES = [
   "fullscreen-exit",
   "music",
   "edit",
+  "trash",
   "plus",
   "alert",
   "activity",
+  "info",
+  "settings",
+  "sparkles",
+  "menu",
   "more",
+  "more-vertical",
+  "mic",
+  "mic-off",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -45,6 +55,8 @@ function glyph(name: IconName): ReactNode {
       return <path d="M8 5.7v12.6a1 1 0 0 0 1.55.83l8.4-6.3a1 1 0 0 0 0-1.66l-8.4-6.3A1 1 0 0 0 8 5.7Z" fill="currentColor" stroke="none"/>;
     case "pause":
       return <><path d="M9 6v12"/><path d="M15 6v12"/></>;
+    case "stop":
+      return <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none"/>;
     case "previous":
       return <><path d="M6.5 5v14"/><path d="m17.5 6-8 6 8 6Z" fill="currentColor" stroke="none"/></>;
     case "next":
@@ -63,14 +75,30 @@ function glyph(name: IconName): ReactNode {
       return <><path d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18.5" r="2.5" fill="currentColor" stroke="none"/><circle cx="16.5" cy="16.5" r="2.5" fill="currentColor" stroke="none"/></>;
     case "edit":
       return <><path d="m14.5 5.5 4 4"/><path d="M5 19l1-4L16.5 4.5a1.4 1.4 0 0 1 2 0l1 1a1.4 1.4 0 0 1 0 2L9 18l-4 1Z"/><path d="M13.5 7.5l4 4"/></>;
+    case "trash":
+      return <><path d="M4 7h16"/><path d="m9 7 .7-2h4.6L15 7"/><path d="M6.5 7l1 14h9l1-14"/><path d="M10 11v6"/><path d="M14 11v6"/></>;
     case "plus":
       return <><path d="M12 5v14"/><path d="M5 12h14"/></>;
     case "alert":
       return <><path d="M12 3 2.8 19a1.2 1.2 0 0 0 1 1.8h16.4a1.2 1.2 0 0 0 1-1.8L12 3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></>;
     case "activity":
       return <><circle cx="12" cy="12" r="8.5"/><path d="M6.5 12h3l1.6-3.4 2.2 7 1.5-3.6h2.7"/></>;
+    case "info":
+      return <><circle cx="12" cy="12" r="8.5"/><path d="M12 10.8v5.4"/><path d="M12 7.8h.01"/></>;
+    case "settings":
+      return <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></>;
+    case "sparkles":
+      return <><path d="m12 3 1.2 4.2L17 9l-3.8 1.8L12 15l-1.2-4.2L7 9l3.8-1.8L12 3Z"/><path d="m19 14 .7 2.3L22 17l-2.3.7L19 20l-.7-2.3L16 17l2.3-.7L19 14Z"/><path d="m5 14 .6 1.9L7.5 16l-1.9.6L5 18.5l-.6-1.9-1.9-.6 1.9-.6L5 14Z"/></>;
+    case "menu":
+      return <><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/></>;
     case "more":
       return <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></>;
+    case "more-vertical":
+      return <><circle cx="12" cy="5" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.2" fill="currentColor" stroke="none"/></>;
+    case "mic":
+      return <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></>;
+    case "mic-off":
+      return <><path d="m2 2 20 20"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><path d="M12 19v3"/></>;
   }
   const exhaustive: never = name;
   return exhaustive;
@@ -109,6 +137,7 @@ type IconButtonProps = Omit<
   label: string;
   icon: IconName;
   iconSize?: number;
+  visibleLabel?: string;
 };
 
 export function placeTooltip(
@@ -143,8 +172,10 @@ export function IconButton({
   label,
   icon,
   iconSize = 20,
+  visibleLabel,
   className = "",
   type = "button",
+  onClick,
   onMouseEnter,
   onMouseLeave,
   onFocus,
@@ -191,11 +222,20 @@ export function IconButton({
 
   useEffect(() => {
     if (!tooltip || typeof window === "undefined") return;
+    const dismissTooltip = () => setTooltip(undefined);
     window.addEventListener("resize", prepareTooltip);
     window.addEventListener("scroll", updateTooltip, true);
+    document.addEventListener("pointerdown", dismissTooltip, true);
+    document.addEventListener("mousedown", dismissTooltip, true);
+    document.addEventListener("click", dismissTooltip, true);
+    document.addEventListener("keydown", dismissTooltip, true);
     return () => {
       window.removeEventListener("resize", prepareTooltip);
       window.removeEventListener("scroll", updateTooltip, true);
+      document.removeEventListener("pointerdown", dismissTooltip, true);
+      document.removeEventListener("mousedown", dismissTooltip, true);
+      document.removeEventListener("click", dismissTooltip, true);
+      document.removeEventListener("keydown", dismissTooltip, true);
     };
   }, [prepareTooltip, tooltip, updateTooltip]);
 
@@ -208,12 +248,17 @@ export function IconButton({
         className={`icon-control ${className}`.trim()}
         aria-label={label}
         aria-describedby={tooltip?.measured ? tooltipId : undefined}
+        onClick={(event) => { setTooltip(undefined); onClick?.(event); }}
         onMouseEnter={(event) => { prepareTooltip(); onMouseEnter?.(event); }}
         onMouseLeave={(event) => { setTooltip(undefined); onMouseLeave?.(event); }}
-        onFocus={(event) => { prepareTooltip(); onFocus?.(event); }}
+        onFocus={(event) => {
+          if (!consumeFocusRestoration(buttonRef.current!)) prepareTooltip();
+          onFocus?.(event);
+        }}
         onBlur={(event) => { setTooltip(undefined); onBlur?.(event); }}
       >
         <Icon name={icon} size={iconSize} />
+        {visibleLabel && <span className="icon-control-label">{visibleLabel}</span>}
       </button>
       {tooltip && typeof document !== "undefined" && createPortal(
         <span

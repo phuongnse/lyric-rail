@@ -12,6 +12,7 @@ MEDIA_CONTROLS = (ROOT / "apps" / "player" / "src" / "mediaControls.css").read_t
     encoding="utf-8"
 )
 ICONS = (ROOT / "apps" / "player" / "src" / "Icon.tsx").read_text(encoding="utf-8")
+FOCUS = (ROOT / "apps" / "player" / "src" / "focus.ts").read_text(encoding="utf-8")
 LYRICS = (ROOT / "apps" / "player" / "src" / "LyricOverlay.tsx").read_text(
     encoding="utf-8"
 )
@@ -27,9 +28,47 @@ def test_player_uses_repository_owned_svg_icons_without_placeholder_glyphs() -> 
         token in APP for token in ("⌕", "↻", "▶", "Ⅱ", "‹", "›", "⤨", "⛶", "✎", "＋")
     )
     assert not any("icon" in dependency.lower() for dependency in package["dependencies"])
+    assert 'className="topbar"' not in APP
+    assert ".topbar" not in CSS
+    assert "player-context" in APP
+    assert 'icon="menu"' in APP
+    assert 'id="player-application-menu"' in APP
+    assert 'className="empty-stage"' in APP
+    assert ".empty-stage" in CSS
+    assert "Your karaoke, one click away." not in APP
+    assert "Ready to sing" not in APP
+    assert ".empty-stage button" in CSS
+    assert ".player-context { position: absolute; z-index: 24; inset: 14px 14px auto; display: flex; width: calc(100% - 28px); align-items: center;" in CSS
+    assert ".player-context.is-visible { opacity: 1; pointer-events: auto; transform: translateY(0); }" in CSS
+    assert ".now-playing { display: inline-flex; align-items: center; height: 44px; box-sizing: border-box; width: fit-content;" in CSS
+    assert ".player-menu-toggle { width: 44px; height: 44px;" in CSS
+    assert 'visibleLabel="Application"' in APP
+    assert "onOpenActivity={opened ? undefined : showActivity}" in APP
+    shared_header_rule = CSS.split(".player-menu-toggle.player-application-toggle", 1)[1].split("}", 1)[0]
+    assert all(token in shared_header_rule for token in (
+        ".player-menu-toggle.player-library-toggle, .player-menu-toggle.player-activity-toggle",
+        "display: inline-flex",
+        "gap: 8px",
+        "height: 44px",
+        "padding: 0 14px",
+        "border: 1px solid rgba(255,255,255,.14)",
+        "border-radius: 12px",
+    ))
+    assert shared_header_rule.count("border:") == 1
+    assert all(token in CSS.split(".player-menu-toggle {", 1)[1].split("}", 1)[0] for token in (
+        "background: rgba(10,14,20,.22)",
+        "backdrop-filter: blur(10px)",
+        "-webkit-backdrop-filter: blur(10px)",
+    ))
+    assert ".player-menu-toggle.player-activity-toggle.has-running b" in CSS
+    assert ".player-menu-toggle.player-activity-toggle.has-issues b" in CSS
+    assert ".player-menu-toggle.player-activity-toggle.has-issues:hover" not in CSS
+    assert ".video-stage { position: relative; min-height: 0; overflow: hidden; border: 0; border-radius: 0;" in CSS
+    assert "box-shadow: none; background: #030407;" in CSS
+    assert ".player-area {\n  display: grid;\n  min-height: 0;\n  grid-template-rows: minmax(0, 1fr);\n}" in CSS
     assert 'className="media-control-overlay player-controls"' in APP
     assert 'icon={volume <= 0.001 ? "volume-muted" : "volume-high"}' in APP
-    assert 'icon="music"' in APP
+    assert 'icon={hasToggle ? (isVocalActive ? "mic" : "mic-off") : "mic"}' in APP
     player_controls = APP.split('className="media-control-overlay player-controls"', 1)[1].split(
         "</section>", 1
     )[0]
@@ -48,6 +87,13 @@ def test_every_icon_only_button_gets_matching_aria_and_tooltip_help() -> None:
     assert "tooltipSide" not in ICONS
     assert "createPortal" in ICONS
     assert 'role="tooltip"' in ICONS
+    assert 'document.addEventListener("mousedown", dismissTooltip, true)' in ICONS
+    assert 'document.addEventListener("click", dismissTooltip, true)' in ICONS
+    assert 'document.addEventListener("keydown", dismissTooltip, true)' in ICONS
+    assert "consumeFocusRestoration" in ICONS
+    assert "const focusRestorationTargets = new WeakSet<HTMLElement>()" in FOCUS
+    assert "markFocusRestoration(restore)" in FOCUS
+    assert "focusRestorationTargets.delete(target)" in FOCUS
     assert "onMouseEnter" in ICONS and "onFocus" in ICONS
     assert "useLayoutEffect" in ICONS
     assert "tooltipElement.getBoundingClientRect().width" in ICONS
@@ -98,6 +144,88 @@ def test_type_and_transport_scale_stays_above_the_compact_floor() -> None:
     assert 'iconSize={22}' in APP
     assert 'iconSize={21}' in APP
     assert 'aria-label="Volume"' in APP
+    assert ".player-menu { position: absolute" in CSS
+    assert ".player-menu-action:focus-visible" in CSS
+    assert "inset: 0" in CSS
+
+
+def test_player_drawers_keep_exact_viewport_geometry_across_layout_modes() -> None:
+    assert re.search(r"\.drawer-scrim \{[^}]*position: fixed;[^}]*inset: 0;", CSS)
+    assert re.search(r"\.library-drawer \{[^}]*position: fixed;[^}]*top: 0;[^}]*bottom: 0;", CSS)
+    assert re.search(r"\.issues-drawer \{[^}]*position: fixed;[^}]*top: 0;[^}]*bottom: 0;", CSS)
+    assert "--drawer-width: clamp(360px, 42vw, 560px);" in CSS
+    assert ".library-drawer { position: fixed;" in CSS and "width: var(--drawer-width);" in CSS
+    assert ".issues-drawer { position: fixed;" in CSS and "width: var(--drawer-width);" in CSS
+    assert ".library-drawer, .issues-drawer { top: auto; left: 0; width: 100%; height: min(80vh, 720px);" in CSS
+    assert ".app-shell:fullscreen .library-drawer { top: 0; }" in CSS
+    assert ".app-shell:fullscreen .drawer-scrim { inset: 0; }" in CSS
+    assert ".app-shell:fullscreen .issues-drawer { top: 0; }" in CSS
+    assert ".app-shell:fullscreen .issues-scrim { inset: 0; }" in CSS
+    narrow = CSS.split("@media (max-width: 760px) {", 1)[1]
+    assert ".library-drawer, .issues-drawer { top: auto;" in narrow
+    assert ".drawer-scrim { inset: 0; }" in narrow
+    assert ".issues-scrim { inset: 0; }" in narrow
+
+
+def test_library_rows_keep_video_actions_and_clean_lyric_preview_separate() -> None:
+    settings = (ROOT / "apps" / "player" / "src" / "SettingsDialog.tsx").read_text(
+        encoding="utf-8"
+    )
+    native = (ROOT / "apps" / "player" / "src-tauri" / "src" / "lib.rs").read_text(
+        encoding="utf-8"
+    )
+    catalog = (ROOT / "apps" / "player" / "src-tauri" / "src" / "catalog.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "Tasks & system health" not in APP
+    assert "Application</p>" not in settings
+    assert '<h2 id="settings-title">Settings</h2>' in settings
+    assert '<h2 ref={headingRef} tabIndex={-1}>Activity</h2>' in APP
+    assert "song-thumbnail-wrap" in APP and "thumbnail-lyric" in APP
+    assert 'className="song-row-main"' in APP
+    assert 'aria-label={playable ? `Play ${item.title}` : `Open ${item.title}`}' in APP
+    assert 'item.status !== "queued" && item.status !== "processing"' in APP
+    assert 'onClick={() => playable ? props.onPlay(item) : props.onSelect(item)}' in APP
+    assert 'icon="more-vertical"' in APP and 'name="trash"' in APP
+    assert "Lyrics preview" not in APP
+    assert ".row-menu" in APP and ".row-menu" in CSS
+    assert 'role="menu"' in APP and 'role="menuitem"' in APP
+    assert 'onClick={() => closeItemMenu(() => props.onRemoveItem(item))}' in APP
+    assert "const canManage = item.canDelete;" in APP
+    assert "{canManage && <div className=\"row-actions\"" in APP
+    assert 'delete_library_item' in APP and 'Delete permanently' in APP
+    assert "justify-content: center; padding: 8px;" in CSS
+    assert ".thumbnail-lyric p" in CSS and "line-height: 1.2;" in CSS and "text-align: left;" in CSS
+    assert "margin: 0;" in CSS
+    assert "const ROW_HEIGHT = 88" in APP
+    assert ".song-row { position: absolute;" in CSS and "height: 80px;" in CSS
+    assert "Edit video unavailable" in APP and "Try again" in APP
+    assert "draft and preview are still open" in APP
+    assert "artwork/thumbnail-base.webp" in native
+    assert 'read_asset(asset_name)' in native
+    assert 'ItemStatus::Queued | ItemStatus::Processing' in native
+    assert "locations.retain(|location| !location.is_local_package());" in catalog
+    assert "Package identity does not match the Library authority" in native
+    assert "let _ = local_clip::cancel(&app, &clip_id);" in native
+    assert "owned_lyrics_path" in native and "fs::remove_file(path)" in native
+    assert "processing::fence_item_for_delete(&app" in native
+    assert "processing::cleanup_fenced_lyrics" in native
+    assert "catalog.remove_item_candidate" in native
+    assert "restore_processing_after_delete_failure" in native
+    assert "remove_item_candidate" in catalog
+    assert "can_delete: item.can_delete_unfinished_local_media()" in catalog
+    assert "Only unfinished local media can be removed from Library" in native
+    assert "CatalogMutationState" in native and "Library mutation lock is poisoned" in native
+    processing = (ROOT / "apps" / "player" / "src-tauri" / "src" / "processing.rs").read_text(
+        encoding="utf-8"
+    )
+    assert "keep_transient_lyrics" in processing
+    assert "WORKER_TERMINATION_GRACE" in processing and "SIGKILL" in processing
+    local_clip = (ROOT / "apps" / "player" / "src-tauri" / "src" / "local_clip.rs").read_text(
+        encoding="utf-8"
+    )
+    assert 'owner_matches(session.owner_item_id.as_deref(), Some(item_id))' in local_clip
+    assert 'require_owner(app, clip_id, None)' in local_clip
 
 
 def test_fullscreen_icon_label_and_action_follow_live_state() -> None:

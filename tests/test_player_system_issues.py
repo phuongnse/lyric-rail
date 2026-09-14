@@ -5,8 +5,10 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import types
+import unicodedata
 
 import pytest
 
@@ -28,12 +30,97 @@ PYTHON = (ROOT / "src/lyricrail/__main__.py").read_text(encoding="utf-8")
 MODEL_SCRIPT = (ROOT / "scripts/install_models.py").read_text(encoding="utf-8")
 APP = (ROOT / "apps/player/src/App.tsx").read_text(encoding="utf-8")
 DIAGNOSTICS = (ROOT / "apps/player/src/diagnostics.ts").read_text(encoding="utf-8")
+ISSUE_CODES = (ROOT / "apps/player/src/issueCodes.ts").read_text(encoding="utf-8")
+ISSUES_TS = (ROOT / "apps/player/src/issues.ts").read_text(encoding="utf-8")
 DIAGNOSTIC_CONTRACT = (ROOT / "src/lyricrail/diagnostic_contract.json").read_text(encoding="utf-8")
 MODEL_PROVENANCE = (ROOT / "src/lyricrail/model_provenance.py").read_text(encoding="utf-8")
 MODEL_CACHE_POLICY = (ROOT / "src/lyricrail/model_cache_policy.json").read_text(encoding="utf-8")
 CSS = (ROOT / "apps/player/src/App.css").read_text(encoding="utf-8")
 FOCUS = (ROOT / "apps/player/src/focus.ts").read_text(encoding="utf-8")
 FOCUS_TEST = (ROOT / "apps/player/src/focus.test.tsx").read_text(encoding="utf-8")
+
+
+def _split_call_arguments(source: str, start: int) -> list[str]:
+    arguments: list[str] = []
+    argument_start = start
+    depths = {"(": 0, "[": 0, "{": 0}
+    closing = {")": "(", "]": "[", "}": "{",
+    }
+    quote: str | None = None
+    escaped = False
+    comment: str | None = None
+    index = start
+    while index < len(source):
+        character = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if comment == "line":
+            if character == "\n":
+                comment = None
+            index += 1
+            continue
+        if comment == "block":
+            if character == "*" and following == "/":
+                comment = None
+                index += 2
+            else:
+                index += 1
+            continue
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in ('"', "'", "`"):
+            quote = character
+        elif character == "/" and following == "/":
+            comment = "line"
+            index += 2
+            continue
+        elif character == "/" and following == "*":
+            comment = "block"
+            index += 2
+            continue
+        elif character in depths:
+            depths[character] += 1
+        elif character in closing:
+            opening = closing[character]
+            if not depths[opening] and character == ")":
+                arguments.append(source[argument_start:index])
+                return arguments
+            depths[opening] -= 1
+        elif character == "," and not any(depths.values()):
+            arguments.append(source[argument_start:index])
+            argument_start = index + 1
+        index += 1
+    raise AssertionError("unterminated runBusy call")
+
+
+def _string_literal(value: str) -> str | None:
+    try:
+        parsed = json.loads(value.strip())
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, str) else None
+
+
+def _run_busy_producers(source: str) -> list[tuple[str, str]]:
+    producers: list[tuple[str, str]] = []
+    for match in re.finditer(r"\brunBusy\(", source):
+        line_start = source.rfind("\n", 0, match.start()) + 1
+        line_prefix = source[line_start : match.start()]
+        if re.search(r"\b(?:const|let|var)\s+runBusy\s*=\s*async\s*$", line_prefix):
+            continue
+        arguments = _split_call_arguments(source, match.end())
+        scope = _string_literal(arguments[1]) if len(arguments) > 1 else "system"
+        title = _string_literal(arguments[2]) if len(arguments) > 2 else "Action could not be completed"
+        assert scope is not None, f"runBusy scope must be a string literal: {arguments[1]}"
+        assert title is not None, f"runBusy title must be a string literal: {arguments[2]}"
+        producers.append((scope, title))
+    return producers
 
 
 def test_native_issue_contract_is_typed_bounded_and_deduplicated() -> None:
@@ -406,6 +493,7 @@ def test_activity_center_has_one_styled_accessible_resolution_flow() -> None:
 def test_copy_diagnostics_exports_bounded_context_from_the_shared_policy() -> None:
     for text in (
         "formatIssueDiagnostics",
+        "formatIssueDetail",
         "selectDiagnosticTasks",
         "MAX_ISSUE_DIAGNOSTIC_TASKS",
         "MAX_ISSUE_DIAGNOSTIC_OUTPUT_LINES",
@@ -415,9 +503,39 @@ def test_copy_diagnostics_exports_bounded_context_from_the_shared_policy() -> No
     ):
         assert text in DIAGNOSTICS or text in APP
     assert "Clip preview requires the verified ffprobe tool" in DIAGNOSTIC_CONTRACT
-    assert "Detail: ${safeDiagnostic(issue.detail)}" in DIAGNOSTICS
+    assert "Detail: ${issueDetail}" in DIAGNOSTICS
+    assert "Raw technical text was withheld for privacy." in DIAGNOSTICS
+    assert "safeIssueContext" in DIAGNOSTICS
+    assert "safeIssueCode" in DIAGNOSTICS
+    assert "PRODUCER_ISSUE_CODES" in ISSUE_CODES
+    assert "clientIssueCode(scope, title)" in ISSUES_TS
+    assert "<details><summary>Technical details" in APP
+    assert "issue.detail &&" not in APP
     assert "relatedTaskId?: string" in (ROOT / "apps/player/src/issues.ts").read_text(encoding="utf-8")
     assert "relatedTaskId);" in APP
+
+
+def test_issue_code_registry_covers_frontend_and_native_producers() -> None:
+    all_scopes = "system|tasks|library|recovery|drive|view|lyrics|clip|playback|processing|settings|issues|player|runtime|remote"
+    code_pattern = re.compile(rf'"(({all_scopes})\.[a-z0-9-]+)"')
+    registered = {match.group(1) for match in code_pattern.finditer(ISSUE_CODES)}
+    native_pattern = re.compile(r'"((?:processing|drive|runtime|remote)\.[a-z0-9-]+)"')
+    native = {match.group(1) for match in native_pattern.finditer(ISSUES + PROCESSING)}
+
+    def client_code(scope: str, title: str) -> str:
+        kind = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", title).lower()).strip("-")[:64]
+        return f"{scope}.{kind or 'action-failed'}"
+
+    frontend = {
+        client_code(scope, title)
+        for scope, title in re.findall(r'reportError\("([^"]+)", "([^"]+)"', APP)
+    }
+    run_busy = _run_busy_producers(APP)
+    assert run_busy
+    for scope, title in run_busy:
+        frontend.add(client_code(scope, title))
+    assert frontend <= registered
+    assert native <= registered
 
 
 def test_model_cache_containment_consumers_use_one_policy_and_fixture_set() -> None:

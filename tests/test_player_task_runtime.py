@@ -439,7 +439,7 @@ def test_activity_is_the_only_detailed_task_output_home() -> None:
         "Auto-scroll</label>",
         '"progress", "stdout", "stderr", "system"',
         "visibleTasks(taskState.tasks, nowMillis)",
-        "onShowContext={showItemContext}",
+        "onEditVideo={openLibraryVideo}",
         "onOpenIssueTask={(issue)",
     ):
         assert token in app
@@ -461,9 +461,10 @@ def test_scan_progress_precedes_expensive_work_and_rows_project_shared_tasks() -
     local_scan = player.index('stage_title: Some("Scan selected local files"')
     local_work = player.index("spawn_blocking(move || scan_files(paths))")
     folder_scan = player.index('stage_title: Some("Scan local folder"')
-    folder_work = player.index("spawn_blocking(move || scan_root(&path))")
+    folder_work = player.index("let scan = scan_root(&path)?")
     assert local_scan < local_work
     assert folder_scan < folder_work
+    assert "let _mutation = mutation" in player
     assert "let completed = index + 1" in player
     assert 'completed_units: Some(completed as u64)' in player
     connect = player.split("async fn connect_google_drive", 1)[1].split("async fn rescan_google_drive", 1)[0]
@@ -473,7 +474,7 @@ def test_scan_progress_precedes_expensive_work_and_rows_project_shared_tasks() -
     assert "onCancel={(item)" not in app
     assert 'invoke("cancel_task"' in app
     assert 'invoke<TaskRecord | null>("task_record"' in app
-    assert '["queued", "processing", "failed", "setup-required"].includes(item.status)' in app
+    assert 'const taskActive = task?.status === "queued" || task?.status === "running"' in app
     assert "fn task_record(" in player
     assert '"library-item-progress"' not in processing
 

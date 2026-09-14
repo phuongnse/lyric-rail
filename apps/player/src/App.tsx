@@ -14,7 +14,7 @@ import {
 import {
   activeProcessingTasksByItem,
   adjacentReadyItem,
-  issueForLibraryItem,
+  nextReadyItemOnEnded,
   sourceDisplayLabel,
   type CatalogSnapshot,
   type LibraryItem,
@@ -31,14 +31,14 @@ import {
   toggleMutedVolume,
 } from "./playback";
 import { dispatchCommand, type CommandHandlers } from "./commands";
-import { FOCUSABLE, useFocusContainment } from "./focus";
+import { useFocusContainment } from "./focus";
 import {
   compactFriendlyOutput,
   friendlyOutputText,
   latestModelTransferProgress,
   outputStageLabel,
 } from "./modelProgress";
-import { formatIssueDiagnostics, selectDiagnosticTasks } from "./diagnostics";
+import { formatIssueDetail, formatIssueDiagnostics, selectDiagnosticTasks } from "./diagnostics";
 import {
   EMPTY_TASK_STATE,
   applyTaskSnapshot,
@@ -68,6 +68,11 @@ import {
 } from "./issues";
 import { shouldOpenClipEditor } from "./clipSelection";
 import ClipEditor, { type ClipSection, type LocalClipPreview } from "./ClipEditor";
+import { VideoEditor } from "./VideoEditor";
+import type { ClipPlaybackRange } from "./useClipPlayback";
+import type { VideoMetadata } from "./videoMetadata";
+import SettingsDialog from "./SettingsDialog";
+import type { PreferencesDraft, PreferencesSnapshot } from "./settings";
 
 type AudioTrack = { id: string; name: string; url: string; default: boolean };
 type OpenPackage = {
@@ -83,30 +88,53 @@ type PlayerStatus = {
   vaultAvailable: boolean;
   processing: { pendingJobs: number; runtimeAvailable: boolean; runtimeError?: string };
 };
+type LibraryVideoEdit = {
+  item: LibraryItem;
+  preview: LocalClipPreview;
+  range: ClipPlaybackRange;
+  value: VideoMetadata;
+};
+type LibraryVideoOpenError = { item: LibraryItem; message: string };
 
 const EMPTY_CATALOG: CatalogSnapshot = { items: [], localSources: [], driveSources: [] };
-const ROW_HEIGHT = 104;
+const ROW_HEIGHT = 88;
 
 function hasNativeBridge(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function Thumbnail({ item }: { item: LibraryItem }) {
+function Thumbnail({ item, lyrics, showLyrics = true }: { item: LibraryItem; lyrics?: string; showLyrics?: boolean }) {
   const [source, setSource] = useState<string>();
+  const thumbnailKey = [item.id, item.packageId || "", item.status, item.firstLyricLine || "", item.hasThumbnail].join("\u001f");
   useEffect(() => {
     let disposed = false;
+    setSource(undefined);
     if (!item.hasThumbnail || !hasNativeBridge()) return;
     invoke<string | null>("load_item_thumbnail", { itemId: item.id })
       .then((value) => { if (!disposed && value) setSource(value); })
       .catch(() => undefined);
     return () => { disposed = true; };
-  }, [item.id, item.hasThumbnail]);
-  if (source) return <img className="song-thumbnail" src={source} alt="" />;
+  }, [item.hasThumbnail, item.id, thumbnailKey]);
   return (
-    <div className="song-thumbnail thumbnail-fallback" aria-hidden="true">
-      <span>{item.firstLyricLine || "No lyric preview"}</span>
+    <div className="song-thumbnail-wrap">
+      {source ? <img className="song-thumbnail" src={source} alt="" /> : (
+        <div className="song-thumbnail thumbnail-fallback" aria-hidden="true">
+          <Icon name="music" size={22} />
+        </div>
+      )}
+      {showLyrics && <div className="thumbnail-lyric" aria-label={lyrics || item.firstLyricLine ? `${item.title} lyrics` : `${item.title} has no lyrics`}>
+        <p>{lyrics || item.firstLyricLine || "No lyrics yet"}</p>
+      </div>}
     </div>
   );
+}
+
+function lyricPreviewKey(item: LibraryItem): string {
+  return [item.id, item.packageId || "", item.status, item.lyricSha256 || `${item.firstLyricLine || ""}\u001f${item.lyricSnippet || ""}`].join("\u001f");
+}
+
+function libraryVideoOpenMessage(item: LibraryItem): string {
+  return `Edit video could not open for “${item.title}”. LyricRail could not prepare a bounded preview from its local source. Check that the file still exists, then try again.`;
 }
 
 type DrawerProps = {
@@ -125,14 +153,11 @@ type DrawerProps = {
   onQuery: (value: string) => void;
   onSelect: (item: LibraryItem) => void;
   onPlay: (item: LibraryItem) => void;
+  onEditVideo: (item: LibraryItem) => void;
+  onLyricsPreview?: (item: LibraryItem) => Promise<string | undefined>;
   onAddFiles: () => void;
   onAddFolder: () => void;
   onDrive: () => void;
-  onLyricsFile: (item: LibraryItem) => void;
-  onLyricsPaste: (item: LibraryItem) => void;
-  onEditLyrics: (item: LibraryItem) => void;
-  onRetry: (item: LibraryItem) => void;
-  onShowContext: (item: LibraryItem) => void;
   onRemoveItem: (item: LibraryItem) => void;
   onRemoveSource: (id: string) => void;
   onRecoveryExport: () => void;
@@ -147,6 +172,11 @@ export function LibraryDrawer(props: DrawerProps) {
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(600);
   const [sourceMenu, setSourceMenu] = useState<"local" | "cloud">();
+  const [itemMenu, setItemMenu] = useState<string>();
+  const [lyricPreviews, setLyricPreviews] = useState<Record<string, { key: string; text: string }>>({});
+  const lyricRequests = useRef(new Set<string>());
+  const itemsRef = useRef(props.items);
+  itemsRef.current = props.items;
   useEffect(() => {
     if (viewport.current) viewport.current.scrollTop = 0;
     setScrollTop(0);
@@ -160,6 +190,9 @@ export function LibraryDrawer(props: DrawerProps) {
   }, []);
   useEffect(() => {
     if (!props.open || props.blocked) setSourceMenu(undefined);
+  }, [props.blocked, props.open]);
+  useEffect(() => {
+    if (!props.open || props.blocked) setItemMenu(undefined);
   }, [props.blocked, props.open]);
   useEffect(() => {
     if (!sourceMenu) return;
@@ -183,6 +216,30 @@ export function LibraryDrawer(props: DrawerProps) {
       document.removeEventListener("keydown", closeMenu);
     };
   }, [sourceMenu]);
+  useEffect(() => {
+    if (!itemMenu) return;
+    document.querySelector<HTMLButtonElement>(".row-menu [role=menuitem]")?.focus();
+    const closeMenu = (event: PointerEvent | KeyboardEvent) => {
+      if (event.type === "keydown" && (event as KeyboardEvent).key !== "Escape") return;
+      if (event.type === "keydown") {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      if (event.type === "pointerdown" && (event.target as HTMLElement | null)?.closest(".row-actions")) return;
+      setItemMenu(undefined);
+      if (event.type === "keydown") {
+        [...document.querySelectorAll<HTMLButtonElement>(".row-action-trigger")]
+          .find((button) => button.dataset.libraryItemId === itemMenu)
+          ?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeMenu);
+    document.addEventListener("keydown", closeMenu);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenu);
+      document.removeEventListener("keydown", closeMenu);
+    };
+  }, [itemMenu]);
   const moveSourceMenuFocus = (event: React.KeyboardEvent<HTMLElement>) => {
     if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
@@ -195,16 +252,47 @@ export function LibraryDrawer(props: DrawerProps) {
     event.preventDefault();
     items[next]?.focus();
   };
+  const moveItemMenuFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=menuitem]")];
+    if (!items.length) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    event.preventDefault();
+    items[next]?.focus();
+  };
   const range = visibleRange(props.items.length, scrollTop, height, ROW_HEIGHT);
   const visible = props.items.slice(range.start, range.end);
+  const requestLyricsPreview = (item: LibraryItem) => {
+    const key = lyricPreviewKey(item);
+    const requestKey = `${item.id}:${key}`;
+    if (lyricPreviews[item.id]?.key === key || lyricRequests.current.has(requestKey) || !props.onLyricsPreview) return;
+    lyricRequests.current.add(requestKey);
+    void props.onLyricsPreview(item)
+      .then((lyrics) => {
+        if (lyrics === undefined) return;
+        setLyricPreviews((current) => {
+        const latest = itemsRef.current.find((candidate) => candidate.id === item.id);
+        return latest && lyricPreviewKey(latest) === key
+          ? { ...current, [item.id]: { key, text: lyrics } }
+          : current;
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => lyricRequests.current.delete(requestKey));
+  };
   return (
     <>
       <button className={`drawer-scrim ${props.open ? "shown" : ""}`} onClick={props.onClose} aria-label="Close library" tabIndex={props.open && !props.blocked ? 0 : -1} inert={props.blocked} />
       <aside id="library-drawer" className={`library-drawer ${props.open ? "open" : ""}`} aria-hidden={!props.open || props.blocked} inert={!props.open || props.blocked}>
         <header className="drawer-header">
           <div>
-            <p className="eyebrow">Library & queue</p>
-            <strong>{props.items.length} items</strong>
+            <h2>Library</h2>
+            <span>{props.items.length} items</span>
           </div>
           <div className="drawer-tools">
             <IconButton className="drawer-tool" icon="refresh" label="Rescan library sources" onClick={props.onRescan} />
@@ -241,44 +329,59 @@ export function LibraryDrawer(props: DrawerProps) {
             <div className="virtual-space" style={{ height: props.items.length * ROW_HEIGHT }}>
               {visible.map((item, index) => {
                 const top = (range.start + index) * ROW_HEIGHT;
-                const waiting = item.status === "waiting-for-lyrics";
                 const playable = item.status === "ready" || item.status === "offline";
+                const canManage = item.canDelete;
+                const editable = canManage && item.canProcess && item.status !== "queued" && item.status !== "processing";
+                const preview = lyricPreviews[item.id];
+                const lyrics = preview?.key === lyricPreviewKey(item)
+                  ? preview.text
+                  : item.lyricSnippet || item.firstLyricLine;
                 const task = props.tasksByItem.get(item.id);
                 const taskActive = task?.status === "queued" || task?.status === "running";
                 const taskProgress = task?.progressPercent ?? task?.stageProgressPercent;
-                const rowStatus = task && (taskActive || task.status === "failed" || task.status === "cancelled")
+                const rowStatus = task && (taskActive || task.status === "paused" || task.status === "failed" || task.status === "cancelled")
                   ? task.status
                   : item.status;
+                const closeItemMenu = (action: () => void) => { setItemMenu(undefined); action(); };
                 return (
                   <article
                     className={`song-row ${props.selectedId === item.id ? "selected" : ""} ${props.currentId === item.id ? "current" : ""}`}
                     style={{ transform: `translateY(${top}px)` }}
                     key={item.id}
-                    onClick={() => props.onSelect(item)}
-                    onDoubleClick={() => playable && props.onPlay(item)}
                   >
-                    <Thumbnail item={item} />
-                    <div className="song-copy">
-                      <strong>{item.title}</strong>
-                      <span>{task?.stageTitle || task?.statusMessage || item.statusMessage || item.artist || item.composer || item.firstLyricLine || "Unknown artist"}</span>
-                      {item.lyricSnippet && <em>“…{item.lyricSnippet}”</em>}
-                      <div className="row-meta">
-                        {item.sources.map((source) => <small key={source}>{sourceDisplayLabel(source)}</small>)}
-                        <small className={`status ${rowStatus}`}>{rowStatus.replace(/-/g, " ")}</small>
+                    <button
+                      type="button"
+                      className="song-row-main"
+                      aria-label={playable ? `Play ${item.title}` : `Open ${item.title}`}
+                      onClick={() => playable ? props.onPlay(item) : props.onSelect(item)}
+                      onMouseEnter={() => requestLyricsPreview(item)}
+                      onFocus={() => requestLyricsPreview(item)}
+                      onKeyDown={(event) => {
+                        if (!["Enter", " "].includes(event.key)) return;
+                        event.preventDefault();
+                        playable ? props.onPlay(item) : props.onSelect(item);
+                      }}
+                    >
+                      <Thumbnail item={item} lyrics={lyrics} />
+                      <div className="song-copy">
+                        <strong>{item.title}</strong>
+                        <span>{task?.stageTitle || task?.statusMessage || item.statusMessage || item.artist || item.composer || item.firstLyricLine || "Unknown artist"}</span>
+                        <div className="row-meta">
+                          {item.sources.map((source) => <small key={source}>{sourceDisplayLabel(source)}</small>)}
+                          <small className={`status ${rowStatus}`}>{rowStatus.replace(/-/g, " ")}</small>
+                        </div>
+                        {taskActive && (
+                          <i className={`row-progress ${taskProgress === undefined ? "indeterminate" : ""}`}><b style={taskProgress === undefined ? undefined : { width: `${taskProgress}%` }} /></i>
+                        )}
                       </div>
-                      {taskActive && (
-                        <i className={`row-progress ${taskProgress === undefined ? "indeterminate" : ""}`}><b style={taskProgress === undefined ? undefined : { width: `${taskProgress}%` }} /></i>
-                      )}
-                    </div>
-                    <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-                      {playable && <IconButton className="row-icon" icon="play" iconSize={17} label={`Play ${item.title}`} onClick={() => props.onPlay(item)} />}
-                      {waiting && <button onClick={() => props.onLyricsPaste(item)}>{item.canRename ? "Edit song" : "Paste"}</button>}
-                      {waiting && <button onClick={() => props.onLyricsFile(item)}>TXT</button>}
-                      {item.status === "failed" && item.canProcess && <button onClick={() => props.onRetry(item)}>Retry</button>}
-                      {(task || ["queued", "processing", "failed", "setup-required"].includes(item.status)) && <button onClick={() => props.onShowContext(item)}>{item.status === "failed" || item.status === "setup-required" ? "View issue" : "View task"}</button>}
-                      {item.canDelete && <button className="danger" onClick={() => props.onRemoveItem(item)}>Remove from library</button>}
-                      {playable && item.sources.includes("Disk") && <IconButton className="row-icon" icon="edit" iconSize={16} label={`Edit lyrics for ${item.title}`} onClick={() => props.onEditLyrics(item)} />}
-                    </div>
+                    </button>
+                    {canManage && <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                      <IconButton className="row-icon row-action-trigger" icon="more-vertical" iconSize={18} label={`Open actions for ${item.title}`} aria-haspopup="menu" aria-expanded={itemMenu === item.id} data-library-item-id={item.id} onClick={() => setItemMenu((current) => current === item.id ? undefined : item.id)} />
+                      {itemMenu === item.id && <div className="row-menu" role="menu" aria-label={`Actions for ${item.title}`} onKeyDown={moveItemMenuFocus}>
+                        {editable && <button role="menuitem" onClick={() => closeItemMenu(() => props.onEditVideo(item))}><Icon name="edit" size={16} /><span>Edit video</span></button>}
+                        <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}><Icon name="trash" size={16} /><span>Delete</span></button>
+                      </div>}
+                    </div>}
                   </article>
                 );
               })}
@@ -286,7 +389,7 @@ export function LibraryDrawer(props: DrawerProps) {
           )}
         </div>
         <footer className="drawer-footer">
-          <p className="processing-note">Remove from library is available only for unfinished local media after confirmation. The source file, lyric sidecar, and .lrail packages are protected.</p>
+          <p className="processing-note">Delete permanently removes the item from Library after confirmation. Original local media, lyric sidecars, .lrail packages, and external cloud files stay protected.</p>
           <div className="source-pills">
             {props.catalog.localSources.map((source) => (
               <span key={source.id}>Local <IconButton className="source-remove" icon="close" iconSize={13} label={`Remove local source ${source.path}`} onClick={() => props.onRemoveSource(source.id)} /></span>
@@ -390,6 +493,8 @@ export function ActivityCenter({
   onTaskFocusComplete,
   onIssueFocusComplete,
   onCancelTask,
+  onPauseTask = () => undefined,
+  onResumeTask = () => undefined,
   onCopyTaskOutput,
   onDismiss,
   onResolve,
@@ -417,6 +522,8 @@ export function ActivityCenter({
   onTaskFocusComplete: (taskId: string) => void;
   onIssueFocusComplete: (issueId: string) => void;
   onCancelTask: (task: TaskRecord) => void;
+  onPauseTask?: (task: TaskRecord) => void;
+  onResumeTask?: (task: TaskRecord) => void;
   onCopyTaskOutput: () => void;
   onDismiss: (issue: SystemIssue) => void;
   onResolve: (issue: SystemIssue, action: IssueAction) => void;
@@ -428,7 +535,7 @@ export function ActivityCenter({
   const focusTaskRef = useRef<HTMLElement>(null);
   const focusIssueRef = useRef<HTMLElement>(null);
   useFocusContainment(open && !blocked, drawerRef, headingRef, restoreRef);
-  const activeTasks = taskRecords.filter((task) => task.status === "queued" || task.status === "running");
+  const activityTaskList = taskRecords.filter((task) => task.status === "queued" || task.status === "running" || task.status === "paused");
   useEffect(() => {
     if (!open || blocked || tab !== "tasks" || !focusTaskId) return;
     const target = focusTaskRef.current;
@@ -436,7 +543,7 @@ export function ActivityCenter({
     target.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
     target.focus({ preventScroll: true });
     onTaskFocusComplete(focusTaskId);
-  }, [activeTasks, blocked, focusTaskId, onTaskFocusComplete, open, tab]);
+  }, [activityTaskList, blocked, focusTaskId, onTaskFocusComplete, open, tab]);
   useEffect(() => {
     if (!open || blocked || tab !== "issues" || !focusIssueId) return;
     const target = focusIssueRef.current;
@@ -463,10 +570,7 @@ export function ActivityCenter({
       <button className={`issues-scrim ${open ? "shown" : ""}`} onClick={onClose} aria-label="Close activity" tabIndex={open && !blocked ? 0 : -1} inert={blocked} />
       <aside ref={drawerRef} id="system-issues" className={`issues-drawer activity-drawer ${open ? "open" : ""}`} aria-hidden={!open || blocked} inert={!open || blocked}>
         <header className="issues-header">
-          <div>
-            <p className="eyebrow">Tasks & system health</p>
-            <h2 ref={headingRef} tabIndex={-1}>Activity</h2>
-          </div>
+          <h2 ref={headingRef} tabIndex={-1}>Activity</h2>
           <IconButton icon="close" label="Close activity" onClick={onClose} />
         </header>
         <nav className="activity-tabs" aria-label="Activity views" role="tablist" onKeyDown={moveTabFocus}>
@@ -474,11 +578,11 @@ export function ActivityCenter({
           <button role="tab" aria-controls="activity-panel" tabIndex={tab === "issues" ? 0 : -1} aria-selected={tab === "issues"} className={tab === "issues" ? "active" : ""} onClick={() => onTab("issues")}>Issues <b>{issues.length}</b></button>
         </nav>
         <div id="activity-panel" className="issues-list" role="tabpanel" aria-label={`${tab} activity`} aria-live={tab === "issues" ? "polite" : "off"}>
-          {tab === "tasks" && activeTasks.length === 0 && (
+          {tab === "tasks" && activityTaskList.length === 0 && (
             <div className="issues-empty"><strong>{runningTotal > 0 ? "Queued tasks remain in Library" : "No task is running"}</strong><span>{runningTotal > 0 ? "Use View task on an item to open its exact queued work." : "New processing, scans and downloads will appear here."}</span></div>
           )}
-          {tab === "tasks" && runningTotal > activeTasks.length && <p className="activity-limited">Showing {activeTasks.length.toLocaleString()} recently active tasks. Other queued work remains available by ID from its source context.</p>}
-          {tab === "tasks" && activeTasks.map((task) => {
+          {tab === "tasks" && runningTotal > activityTaskList.length && <p className="activity-limited">Some queued work remains available from its source context.</p>}
+          {tab === "tasks" && activityTaskList.map((task) => {
             const elapsed = elapsedSeconds(task, nowMillis);
             const selected = selectedTaskId === task.id;
             const barValue = task.progressPercent ?? task.stageProgressPercent;
@@ -490,7 +594,7 @@ export function ActivityCenter({
               : undefined;
             const primaryStatus = task.kind === "model-install"
               ? task.statusMessage || task.stageTitle || "Preparing model setup"
-              : task.stageTitle || task.statusMessage || (task.status === "queued" ? "Waiting to start" : "Working");
+              : task.stageTitle || task.statusMessage || (task.status === "queued" ? "Waiting to start" : task.status === "paused" ? "Paused by you" : "Working");
             return (
               <article
                 ref={focusTaskId === task.id ? focusTaskRef : undefined}
@@ -510,7 +614,12 @@ export function ActivityCenter({
                   <div className="task-progress">{task.stageProgressPercent != null && <div><span>Current stage</span><b>{task.stageProgressPercent.toFixed(1)}%</b></div>}{task.progressPercent != null && <div><span>Overall</span><b>{Math.round(task.progressPercent)}%</b></div>}{barValue != null && <i role="progressbar" aria-label={task.progressPercent != null ? "Overall task progress" : "Current stage progress"} aria-valuemin={0} aria-valuemax={100} aria-valuenow={barValue}><b style={{ width: `${barValue}%` }} /></i>}</div>
                 ) : <i className="task-indeterminate" role="progressbar" aria-label="Task progress is being measured"><b /></i>}
                 {!modelTransfer && task.completedUnits != null && task.totalUnits != null && <span className="task-units">{task.completedUnits.toLocaleString()} / {task.totalUnits.toLocaleString()} {task.unitLabel || "units"}</span>}
-                <footer><button onClick={() => onSelectTask(task)}>{selected ? "Hide output" : "Show output"}</button>{task.cancellable && <button onClick={() => onCancelTask(task)}>Cancel</button>}</footer>
+                <footer>
+                  <button onClick={() => onSelectTask(task)}>{selected ? "Hide output" : "Show output"}</button>
+                  {task.status === "running" && task.pausable && <button onClick={() => onPauseTask(task)}>Pause</button>}
+                  {task.status === "paused" && task.resumable && <button className="primary" onClick={() => onResumeTask(task)}>Resume</button>}
+                  {task.cancellable && <button onClick={() => onCancelTask(task)}>Stop</button>}
+                </footer>
                 {selected && <TaskOutputPane key={task.id} lines={taskOutput} truncated={Boolean(taskOutputTruncatedById[task.id]) || task.outputTruncated} onCopy={onCopyTaskOutput} />}
               </article>
             );
@@ -537,7 +646,7 @@ export function ActivityCenter({
               <p>{issue.summary}</p>
               {issue.occurrences > 1 && <span className="issue-occurrences">Occurred {issue.occurrences} times</span>}
               {issue.state === "resolving" && <p className="issue-resolving">{issue.progressMessage || "Resolution is running"}. Realtime output is available here when the resolution has a linked task.</p>}
-              {issue.detail && <details><summary>Technical details</summary><pre>{issue.detail}</pre></details>}
+              <details><summary>Technical details</summary><pre>{formatIssueDetail(issue)}</pre></details>
               <footer>
                 <button onClick={() => onCopyDiagnostics(issue)}>Copy diagnostics</button>
                 {issue.relatedTaskId && <button onClick={() => onOpenIssueTask(issue)}>{outputOpen ? "Hide output" : "View output"}</button>}
@@ -570,7 +679,7 @@ function App() {
   const [shuffle, setShuffle] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(0.9);
+  const [volume, setVolume] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [nativeIssues, setNativeIssues] = useState<SystemIssue[]>([]);
@@ -585,14 +694,14 @@ function App() {
   const [pendingIssueFocusId, setPendingIssueFocusId] = useState<string>();
   const [taskOutputTruncated, setTaskOutputTruncated] = useState<Record<string, boolean>>({});
   const [nowMillis, setNowMillis] = useState(() => Date.now());
-  const [utilityOpen, setUtilityOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [preferences, setPreferences] = useState<PreferencesSnapshot>();
+  const [preferencesDraft, setPreferencesDraft] = useState<PreferencesDraft>({ libraryPath: "", cachePath: "" });
   const [confirmIssue, setConfirmIssue] = useState<SystemIssue>();
   const [licenseConfirmed, setLicenseConfirmed] = useState(false);
   const [seenIssueNotice, setSeenIssueNotice] = useState<string>();
-  const [lyricDialog, setLyricDialog] = useState<{ item: LibraryItem; mode: "add" | "edit" }>();
-  const [lyricDraft, setLyricDraft] = useState("");
-  const [lyricTitle, setLyricTitle] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<LibraryItem>();
   const [clipDialogOpen, setClipDialogOpen] = useState(false);
   const [clipPreview, setClipPreview] = useState<LocalClipPreview>();
@@ -600,30 +709,72 @@ function App() {
   const [clipBusy, setClipBusy] = useState(false);
   const [clipPreparing, setClipPreparing] = useState(false);
   const [clipPreparationError, setClipPreparationError] = useState("");
+  const [clipAiMessage, setClipAiMessage] = useState("");
+  const [libraryVideoEdit, setLibraryVideoEdit] = useState<LibraryVideoEdit>();
+  const [libraryVideoPreparing, setLibraryVideoPreparing] = useState(false);
+  const [libraryVideoBusy, setLibraryVideoBusy] = useState(false);
+  const [libraryVideoError, setLibraryVideoError] = useState("");
+  const [libraryVideoOpenError, setLibraryVideoOpenError] = useState<LibraryVideoOpenError>();
   const clipRequest = useRef<{ id: string; cancelled: boolean; compatible: boolean } | undefined>(undefined);
   const clipSource = useRef<string | undefined>(undefined);
+  const libraryVideoRequest = useRef<{ id: string; cancelled: boolean; compatible: boolean } | undefined>(undefined);
   const clipPreparingRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const issuesHeadingRef = useRef<HTMLHeadingElement>(null);
-  const issuesToggleRef = useRef<HTMLButtonElement>(null);
-  const utilityToggleRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const setupDialogRef = useRef<HTMLDivElement>(null);
   const aboutDialogRef = useRef<HTMLDivElement>(null);
-  const lyricDialogRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const clipDialogRef = useRef<HTMLDivElement>(null);
-  const lyricInputRef = useRef<HTMLTextAreaElement>(null);
-  const lyricRestoreRef = useRef<HTMLElement>(null);
+  const libraryVideoPreparingRef = useRef<HTMLDivElement>(null);
   const deleteRestoreRef = useRef<HTMLElement>(null);
   const clipRestoreRef = useRef<HTMLElement>(null);
-  const lastAudibleVolumeRef = useRef(0.9);
+  const libraryVideoRestoreRef = useRef<HTMLElement>(null);
+  const activityRestoreRef = useRef<HTMLElement>(null);
+  const activityTriggerRef = useRef<HTMLButtonElement>(null);
+  const lastAudibleVolumeRef = useRef(1);
   const selectedTaskIdRef = useRef<string | undefined>(undefined);
   const taskReplayRef = useRef(new Map<string, { dirty: boolean }>());
   const modelReplayTaskRef = useRef<string | undefined>(undefined);
 
   const ready = useMemo(() => catalog.items.filter((item) => item.status === "ready"), [catalog.items]);
+  const [recentIds, setRecentIds] = useState<string[]>(() => {
+    try {
+      if (typeof window !== "undefined" && window.localStorage) {
+        const stored = window.localStorage.getItem("lyricrail.recent-songs");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) return parsed.filter((id): id is string => typeof id === "string");
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return [];
+  });
+  const stageSongs = useMemo(() => {
+    const readyMap = new Map(ready.map((item) => [item.id, item]));
+    const list: LibraryItem[] = [];
+    const seen = new Set<string>();
+    for (const id of recentIds) {
+      const item = readyMap.get(id);
+      if (item && !seen.has(item.id)) {
+        seen.add(item.id);
+        list.push(item);
+      }
+    }
+    const remaining = [...ready].reverse();
+    for (const item of remaining) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id);
+        list.push(item);
+      }
+    }
+    return list;
+  }, [ready, recentIds]);
   const currentItem = catalog.items.find((item) => item.id === currentId);
   const selectedItem = catalog.items.find((item) => item.id === selectedId);
   const activeTrack = opened?.media.audioTracks.find((track) => track.id === trackId) ?? opened?.media.audioTracks[0];
@@ -645,15 +796,70 @@ function App() {
     () => activeProcessingTasksByItem(taskState.tasks),
     [taskState.tasks],
   );
-  const showUtilityMenu = !native || status?.platform === "windows" || status?.platform === "linux";
-  const systemModalOpen = Boolean(confirmIssue) || aboutOpen || Boolean(lyricDialog) || Boolean(deleteCandidate) || clipDialogOpen;
-  const anyModalOpen = systemModalOpen;
+  const systemModalOpen = Boolean(confirmIssue) || aboutOpen || settingsOpen || Boolean(deleteCandidate) || clipDialogOpen || Boolean(libraryVideoEdit) || libraryVideoPreparing || Boolean(libraryVideoOpenError);
+  const anyModalOpen = systemModalOpen || menuOpen;
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const [headerActive, setHeaderActive] = useState(true);
+  const headerIdleTimerRef = useRef<number | null>(null);
+
+  const resetHeaderActivity = useCallback(() => {
+    setHeaderActive(true);
+    if (headerIdleTimerRef.current !== null) {
+      window.clearTimeout(headerIdleTimerRef.current);
+    }
+    headerIdleTimerRef.current = window.setTimeout(() => {
+      setHeaderActive(false);
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    resetHeaderActivity();
+    const onUserActivity = () => resetHeaderActivity();
+
+    window.addEventListener("pointermove", onUserActivity, { passive: true });
+    window.addEventListener("keydown", onUserActivity, { passive: true });
+    window.addEventListener("focusin", onUserActivity, { passive: true });
+
+    return () => {
+      if (headerIdleTimerRef.current !== null) {
+        window.clearTimeout(headerIdleTimerRef.current);
+      }
+      window.removeEventListener("pointermove", onUserActivity);
+      window.removeEventListener("keydown", onUserActivity);
+      window.removeEventListener("focusin", onUserActivity);
+    };
+  }, [resetHeaderActivity]);
+
+  useEffect(() => {
+    resetHeaderActivity();
+  }, [opened?.media.videoUrl, resetHeaderActivity]);
+
+  const isInteractingWithSystem = anyModalOpen || drawerOpen || issuesOpen;
+  const isHeaderVisible = !opened || isInteractingWithSystem || headerActive;
+  const isStageIdle = Boolean(opened) && !isInteractingWithSystem && !headerActive;
+
   useFocusContainment(Boolean(confirmIssue), setupDialogRef);
-  useFocusContainment(aboutOpen, aboutDialogRef, undefined, utilityToggleRef);
-  useFocusContainment(Boolean(lyricDialog), lyricDialogRef, lyricInputRef, lyricRestoreRef);
+  useFocusContainment(menuOpen, menuRef, undefined, menuTriggerRef);
+  useFocusContainment(aboutOpen, aboutDialogRef, undefined, menuTriggerRef);
   useFocusContainment(Boolean(deleteCandidate), deleteDialogRef, undefined, deleteRestoreRef);
   useFocusContainment(clipDialogOpen && !clipPreparing, clipDialogRef, undefined, clipRestoreRef);
   useFocusContainment(clipDialogOpen && clipPreparing, clipPreparingRef, undefined, clipRestoreRef);
+  useFocusContainment(libraryVideoPreparing, libraryVideoPreparingRef, undefined, libraryVideoRestoreRef);
+  useFocusContainment(Boolean(libraryVideoOpenError), libraryVideoPreparingRef, undefined, libraryVideoRestoreRef);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (menuRef.current?.contains(target) || menuTriggerRef.current?.contains(target)) return;
+      closeMenu();
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+    };
+  }, [menuOpen, closeMenu]);
   const reportError = useCallback((
     scope: string,
     title: string,
@@ -667,6 +873,11 @@ function App() {
       clientIssue(scope, title, reason, summary, action, relatedTaskId),
     ));
   }, []);
+
+  const contextFocusTarget = () => {
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return active?.closest(".row-actions")?.querySelector<HTMLElement>("button") ?? active;
+  };
 
   const replayTaskOutput = useCallback((taskId: string) => {
     if (!native) return;
@@ -702,10 +913,15 @@ function App() {
       invoke<CatalogSnapshot>("catalog_snapshot"),
       invoke<PlayerStatus>("player_status"),
     ]);
+    const nextPreferences = await invoke<PreferencesSnapshot | null>("preferences_snapshot").catch(() => null);
     const nextIssues = await invoke<SystemIssue[]>("system_issues");
     setCatalog(nextCatalog);
     setStatus(nextStatus);
     setNativeIssues(nextIssues);
+    if (nextPreferences) {
+      setPreferences(nextPreferences);
+      setPreferencesDraft({ libraryPath: nextPreferences.libraryPath, cachePath: nextPreferences.cachePath });
+    }
   }, [native]);
 
   useEffect(() => {
@@ -825,6 +1041,23 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [catalog.items, native, query, reportError]);
 
+  const pauseElements = useCallback(() => {
+    audioRef.current?.pause();
+    videoRef.current?.pause();
+    setPlaying(false);
+    if (native) invoke("set_playback_active", { playing: false }).catch(() => undefined);
+  }, [native]);
+
+  const stopPlayback = useCallback(() => {
+    pauseElements();
+    setOpened(undefined);
+    setCurrentId(undefined);
+    setTime(0);
+    setDuration(0);
+    setPendingPlay(false);
+    if (native) invoke("set_playback_active", { playing: false }).catch(() => undefined);
+  }, [native, pauseElements]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -833,8 +1066,10 @@ function App() {
           setLicenseConfirmed(false);
         }
         else if (aboutOpen) setAboutOpen(false);
-        else if (lyricDialog) setLyricDialog(undefined);
         else if (deleteCandidate) setDeleteCandidate(undefined);
+        else if (libraryVideoPreparing) cancelLibraryVideoPreparation();
+        else if (libraryVideoOpenError) dismissLibraryVideoOpenError();
+        else if (libraryVideoEdit) closeLibraryVideoEditor();
         else if (clipDialogOpen) {
           if (clipRequest.current) { cancelClipPreparation(); return; }
           if (clipBusy) return;
@@ -844,14 +1079,15 @@ function App() {
           setClipBusy(false);
           if (native && clipId) invoke("cancel_local_clip", { clipId }).catch(() => undefined);
         }
-        else if (utilityOpen) setUtilityOpen(false);
+        else if (menuOpen) closeMenu();
         else if (issuesOpen) setIssuesOpen(false);
-        else setDrawerOpen(false);
+        else if (drawerOpen) setDrawerOpen(false);
+        else if (opened) stopPlayback();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, confirmIssue, deleteCandidate, issuesOpen, licenseConfirmed, lyricDialog, native, utilityOpen]);
+  }, [aboutOpen, clipBusy, clipDialogOpen, clipPreview?.clipId, closeMenu, confirmIssue, deleteCandidate, drawerOpen, issuesOpen, libraryVideoEdit, libraryVideoOpenError, libraryVideoPreparing, licenseConfirmed, menuOpen, native, opened, stopPlayback]);
 
   useEffect(() => {
     if (issuesOpen) {
@@ -860,13 +1096,6 @@ function App() {
       if (issue) setSeenIssueNotice(`${issue.id}:${issue.updatedAtMillis}`);
     }
   }, [activityTab, issuesOpen, systemIssues]);
-
-  useEffect(() => {
-    if (!utilityOpen) return;
-    return () => {
-      if (!aboutOpen) utilityToggleRef.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
-    };
-  }, [aboutOpen, utilityOpen]);
 
   useEffect(() => {
     if (!playing) return;
@@ -881,12 +1110,15 @@ function App() {
           setTime(audio.currentTime);
           last = now;
         }
+        if (audio.duration && (!duration || duration === 0)) {
+          setDuration(audio.duration);
+        }
       }
       frame = requestAnimationFrame(update);
     };
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
-  }, [playing]);
+  }, [duration, playing]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
@@ -937,7 +1169,7 @@ function App() {
   };
 
   const requestRemove = (item: LibraryItem) => {
-    deleteRestoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    deleteRestoreRef.current = contextFocusTarget();
     setDeleteCandidate(item);
   };
 
@@ -946,12 +1178,14 @@ function App() {
     if (!native || !item || busy) return;
     setBusy(true);
     try {
-      const snapshot = await invoke<CatalogSnapshot>("remove_unprocessed_local_item", { itemId: item.id });
+      const snapshot = await invoke<CatalogSnapshot>("delete_library_item", { itemId: item.id });
       setCatalog(snapshot);
+      setShownItems(snapshot.items);
+      if (currentId === item.id) stopPlayback();
       if (selectedId === item.id) setSelectedId(undefined);
       setDeleteCandidate(undefined);
     } catch (reason) {
-      reportError("library", "Library item could not be removed", reason, "Only unfinished local media items can be removed here; the source file is never changed.", undefined, item.id);
+      reportError("library", "Library item could not be deleted", reason, "The item was kept. Terminate processing or retry the permanent Library deletion.", undefined, item.id);
     } finally {
       setBusy(false);
     }
@@ -976,6 +1210,7 @@ function App() {
     const request = { id: crypto.randomUUID(), cancelled: false, compatible };
     clipRequest.current = request; clipSource.current = path;
     setClipPreparationError("");
+    setClipAiMessage("");
     setClipPreparing(true); setClipBusy(true); setClipDialogOpen(true);
     try {
       const preview = await invoke<LocalClipPreview | null>("prepare_local_clip", { path, requestId: request.id, compatible, replaceClipId: compatible ? clipPreview?.clipId : undefined });
@@ -998,10 +1233,148 @@ function App() {
     }
   };
 
+  const cancelLibraryVideoPreparation = () => {
+    const request = libraryVideoRequest.current;
+    if (request) {
+      request.cancelled = true;
+      void invoke("cancel_clip_preparation", { requestId: request.id }).catch((reason) => reportError("tasks", "Could not cancel video preview", reason, undefined, undefined, "clip-preparation"));
+    }
+    if (request?.compatible && libraryVideoEdit) {
+      setLibraryVideoError("Preparation cancelled. Your edits are kept; you can retry.");
+      setLibraryVideoPreparing(false);
+      setLibraryVideoBusy(false);
+    } else {
+      setLibraryVideoPreparing(false);
+      setLibraryVideoEdit(undefined);
+      setLibraryVideoOpenError(undefined);
+      setLibraryVideoError("");
+    }
+  };
+
+  const prepareLibraryVideo = async (item: LibraryItem, compatible = false) => {
+    const request = { id: crypto.randomUUID(), cancelled: false, compatible };
+    libraryVideoRequest.current = request;
+    setLibraryVideoError("");
+    setLibraryVideoPreparing(true);
+    setLibraryVideoBusy(true);
+    const current = libraryVideoEdit;
+    let preview: LocalClipPreview | null = null;
+    try {
+      preview = await invoke<LocalClipPreview | null>("prepare_library_item", {
+        itemId: item.id,
+        requestId: request.id,
+        compatible,
+        replaceClipId: compatible ? current?.preview.clipId : undefined,
+      });
+      if (!preview) throw new Error("Video preview is no longer available");
+      const lyrics = compatible && current
+        ? current.value.lyrics || ""
+        : await invoke<string>("item_lyrics", { itemId: item.id });
+      if (request.cancelled || libraryVideoRequest.current !== request) {
+        if (preview) void invoke("cancel_local_clip", { clipId: preview.clipId }).catch(() => undefined);
+        return;
+      }
+      const range = compatible && current
+        ? current.range
+        : {
+            startMillis: Math.min(item.trimStartMillis ?? 0, preview.durationMillis),
+            endMillis: Math.min(item.trimEndMillis ?? preview.durationMillis, preview.durationMillis),
+          };
+      if (range.endMillis <= range.startMillis) {
+        range.startMillis = 0;
+        range.endMillis = preview.durationMillis;
+      }
+      setLibraryVideoEdit({
+        item,
+        preview,
+        range,
+        value: compatible && current
+          ? current.value
+          : { title: item.title, artist: item.artist, composer: item.composer, lyrics },
+      });
+    } catch (reason) {
+      if (preview) void invoke("cancel_local_clip", { clipId: preview.clipId }).catch(() => undefined);
+      if (!request.cancelled) {
+        const message = libraryVideoOpenMessage(item);
+        if (compatible && current) setLibraryVideoError(message);
+        else setLibraryVideoOpenError({ item, message });
+        reportError("library", "Edit video unavailable", reason, message, undefined, item.id);
+      }
+    } finally {
+      if (libraryVideoRequest.current === request) {
+        libraryVideoRequest.current = undefined;
+        setLibraryVideoPreparing(false);
+        setLibraryVideoBusy(false);
+      }
+    }
+  };
+
+  const openLibraryVideo = (item: LibraryItem) => {
+    if (!native || !item.canProcess) return;
+    libraryVideoRestoreRef.current = contextFocusTarget();
+    setLibraryVideoOpenError(undefined);
+    void prepareLibraryVideo(item);
+  };
+
+  const dismissLibraryVideoOpenError = () => {
+    setLibraryVideoOpenError(undefined);
+    const restore = libraryVideoRestoreRef.current;
+    libraryVideoRestoreRef.current = null;
+    if (restore && document.contains(restore)) restore.focus();
+  };
+
+  const closeLibraryVideoEditor = () => {
+    if (libraryVideoPreparing) {
+      cancelLibraryVideoPreparation();
+      return;
+    }
+    if (libraryVideoBusy) return;
+    const clipId = libraryVideoEdit?.preview.clipId;
+    setLibraryVideoEdit(undefined);
+    setLibraryVideoOpenError(undefined);
+    setLibraryVideoError("");
+    if (native && clipId) void invoke("cancel_local_clip", { clipId }).catch(() => undefined);
+    const restore = libraryVideoRestoreRef.current;
+    libraryVideoRestoreRef.current = null;
+    if (restore && document.contains(restore)) restore.focus();
+  };
+
+  const saveLibraryVideo = (value: VideoMetadata) => {
+    const edit = libraryVideoEdit;
+    if (!native || !edit || libraryVideoBusy) return;
+    setLibraryVideoBusy(true);
+    setLibraryVideoError("");
+    void invoke<CatalogSnapshot>("update_library_item", {
+      update: {
+        itemId: edit.item.id,
+        clipId: edit.preview.clipId,
+        startMillis: edit.range.startMillis,
+        endMillis: edit.range.endMillis,
+        title: value.title,
+        artist: value.artist,
+        composer: value.composer,
+        lyrics: value.lyrics || "",
+      },
+    }).then((snapshot) => {
+      if (currentId === edit.item.id) stopPlayback();
+      setCatalog(snapshot);
+      setShownItems(snapshot.items);
+      setSelectedId(edit.item.id);
+      setLibraryVideoEdit(undefined);
+      const restore = libraryVideoRestoreRef.current;
+      libraryVideoRestoreRef.current = null;
+      if (restore && document.contains(restore)) restore.focus();
+    }).catch((reason) => {
+      const message = "Video changes could not be saved. Your draft and preview are still open; check the source/task state, then try Save again.";
+      setLibraryVideoError(message);
+      reportError("library", "Video changes could not be saved", reason, message, undefined, edit.item.id);
+    }).finally(() => setLibraryVideoBusy(false));
+  };
+
   const addFiles = () => {
     clipRestoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     return runBusy(async () => {
-    const selected = await open({ multiple: true, directory: false, filters: [{ name: "Music and LyricRail", extensions: ["lrail", "mp4", "mkv", "mov", "webm", "mp3", "m4a", "flac", "wav", "aac", "ogg", "opus", "avi", "wma"] }] });
+    const selected = await open({ multiple: true, directory: false, defaultPath: preferencesDraft.libraryPath || preferences?.libraryPath, filters: [{ name: "Music and LyricRail", extensions: ["lrail", "mp4", "mkv", "mov", "webm", "mp3", "m4a", "flac", "wav", "aac", "ogg", "opus", "avi", "wma"] }] });
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];
     if (!shouldOpenClipEditor(paths)) {
@@ -1014,13 +1387,18 @@ function App() {
   };
 
   const addFolder = () => runBusy(async () => {
-    const selected = await open({ multiple: false, directory: true });
+    const selected = await open({ multiple: false, directory: true, defaultPath: preferencesDraft.libraryPath || preferences?.libraryPath });
     if (typeof selected === "string") await invoke("add_local_folder", { path: selected });
   }, "library", "Folder could not be added");
 
+  const showLibrary = () => {
+    closeMenu();
+    setIssuesOpen(false);
+    setDrawerOpen(true);
+  };
   const connectDrive = () => runBusy(async () => {
     await invoke("connect_google_drive");
-    setDrawerOpen(true);
+    showLibrary();
   }, "drive", "Google Drive could not connect");
 
   const rescanLibrary = () => runBusy(() => Promise.all([
@@ -1028,9 +1406,42 @@ function App() {
     invoke("rescan_google_drive"),
   ]), "library", "Library sources could not be rescanned");
 
+  const toggleMenu = () => {
+    if (menuOpen) { closeMenu(); return; }
+    setMenuOpen(true);
+  };
   const toggleLibrary = () => {
+    closeMenu();
     setIssuesOpen(false);
     setDrawerOpen((value) => !value);
+  };
+  const toggleActivity = () => {
+    if (opened) return;
+    if (!issuesOpen) activityRestoreRef.current = menuOpen ? menuTriggerRef.current : (activityTriggerRef.current ?? contextFocusTarget());
+    closeMenu();
+    setIssuesOpen((value) => !value);
+  };
+  const showActivity = () => {
+    if (opened) return;
+    if (!issuesOpen) activityRestoreRef.current = menuOpen ? menuTriggerRef.current : (activityTriggerRef.current ?? contextFocusTarget());
+    closeMenu();
+    setIssuesOpen(true);
+  };
+  const showSettings = () => {
+    closeMenu();
+    setSettingsOpen(true);
+  };
+  const moveApplicationMenuFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    event.preventDefault();
+    items[next]?.focus();
   };
   const toggleShuffle = () => setShuffle((value) => !value);
 
@@ -1040,8 +1451,24 @@ function App() {
     const clipId = clipPreview?.clipId;
     setClipDialogOpen(false);
     setClipBusy(false);
+    setClipAiMessage("");
     setClipPreview(undefined);
     if (native && clipId) invoke("cancel_local_clip", { clipId }).catch(() => undefined);
+  };
+
+  const startClipAiProcess = () => {
+    const path = clipSource.current;
+    if (!native || !path) return;
+    void (async () => {
+      try {
+        const snapshot = await invoke<CatalogSnapshot>("add_local_files", { paths: [path] });
+        setCatalog(snapshot);
+        setShownItems(snapshot.items);
+        setClipAiMessage("AI processing started in the background.");
+      } catch (reason) {
+        reportError("processing", "AI processing could not start", reason, "Keep this editor open and review the related task in Activity.", undefined, "clip-preparation");
+      }
+    })();
   };
 
   const commitClips = async (sections: ClipSection[]) => {
@@ -1056,12 +1483,12 @@ function App() {
         try {
           snapshot = await invoke<CatalogSnapshot>("provide_lyrics_text", { itemId: item.id, text: lyrics });
         } catch (reason) {
-          reportError("lyrics", `Lyrics could not be queued for ${section.title}`, reason, undefined, undefined, item.id);
+          reportError("lyrics", "Lyrics could not be queued", reason, undefined, undefined, item.id);
         }
       }
       setCatalog(snapshot); setShownItems(snapshot.items); setQuery("");
       setQueueInsertion((value) => value + 1);
-      setClipPreview(undefined); setClipDialogOpen(false); setDrawerOpen(true);
+      setClipPreview(undefined); setClipDialogOpen(false); showLibrary();
     } catch (reason) { reportError("clip", "Songs could not be added", reason, undefined, undefined, "clip-preparation"); throw reason; }
     finally { setClipBusy(false); }
   };
@@ -1073,6 +1500,11 @@ function App() {
     const start = playbackStartTime(audio.currentTime, audio.duration, audio.ended);
     audio.currentTime = start;
     video.currentTime = start;
+    setTime(start);
+    const audioDuration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+    if (audioDuration > 0 && (!duration || duration === 0)) {
+      setDuration(audioDuration);
+    }
     const [, audioResult] = await Promise.allSettled([video.play(), audio.play()]);
     if (audioResult.status === "rejected") {
       video.pause();
@@ -1080,13 +1512,6 @@ function App() {
     }
     setPlaying(true);
     if (native) invoke("set_playback_active", { playing: true }).catch(() => undefined);
-  };
-
-  const pauseElements = () => {
-    audioRef.current?.pause();
-    videoRef.current?.pause();
-    setPlaying(false);
-    if (native) invoke("set_playback_active", { playing: false }).catch(() => undefined);
   };
 
   const openItem = async (item: LibraryItem) => {
@@ -1099,9 +1524,28 @@ function App() {
       setSelectedId(item.id);
       setTrackId(result.media.audioTracks.find((track) => track.default)?.id ?? result.media.audioTracks[0]?.id ?? "karaoke");
       setTime(0);
-      setDuration(0);
+      if (audioRef.current && Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0 && currentId === item.id) {
+        setDuration(audioRef.current.duration);
+      } else {
+        setDuration(0);
+      }
       setPendingPlay(true);
       setDrawerOpen(false);
+      setIssuesOpen(false);
+      setMenuOpen(false);
+      setRecentIds((prev) => {
+        const next = [item.id, ...prev.filter((id) => id !== item.id)].slice(0, 10);
+        try {
+          if (typeof window !== "undefined" && window.localStorage) {
+            window.localStorage.setItem("lyricrail.recent-songs", JSON.stringify(next));
+          }
+        } catch {
+          // ignore storage write errors
+        }
+        return next;
+      });
+      videoRef.current?.load();
+      audioRef.current?.load();
     } catch (reason) { reportError("playback", "Song could not be opened", reason); }
   };
 
@@ -1133,28 +1577,6 @@ function App() {
     }, 0);
   };
 
-  const chooseLyrics = (item: LibraryItem) => runBusy(async () => {
-    const selected = await open({ multiple: false, directory: false, filters: [{ name: "UTF-8 lyrics", extensions: ["txt"] }] });
-    if (typeof selected === "string") await invoke("provide_lyrics_file", { itemId: item.id, path: selected });
-  }, "lyrics", "Lyric file could not be added");
-
-  const showLyricDialog = async (item: LibraryItem, mode: "add" | "edit") => {
-    lyricRestoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setLyricDraft(mode === "edit" && native ? await invoke<string>("item_lyrics", { itemId: item.id }) : "");
-    setLyricTitle(item.title);
-    setLyricDialog({ item, mode });
-    setDrawerOpen(true);
-  };
-
-  const submitLyrics = () => lyricDialog && runBusy(async () => {
-    if (lyricDialog.item.canRename && lyricTitle !== lyricDialog.item.title) {
-      await invoke("rename_waiting_section", { itemId: lyricDialog.item.id, title: lyricTitle });
-    }
-    const command = lyricDialog.mode === "edit" ? "revise_item_lyrics" : "provide_lyrics_text";
-    await invoke(command, { itemId: lyricDialog.item.id, text: lyricDraft });
-    setLyricDialog(undefined);
-  }, "lyrics", "Lyrics could not be saved");
-
   const exportRecovery = () => runBusy(async () => {
     const output = await save({ defaultPath: "library.lrail-recovery", filters: [{ name: "LyricRail recovery", extensions: ["lrail-recovery"] }] });
     if (output) await invoke("launch_recovery_export", { output });
@@ -1170,6 +1592,47 @@ function App() {
       if (typeof library === "string") await invoke("launch_recovery_restore_local", { bundle, library });
     }
   }, "recovery", "Recovery bundle could not be restored");
+
+  const choosePreferencePath = (key: keyof PreferencesDraft) => {
+    void (async () => {
+      const current = preferencesDraft[key] || preferences?.[key] || undefined;
+      const selected = await open({ multiple: false, directory: true, defaultPath: current });
+      if (typeof selected !== "string") return;
+      setPreferencesDraft((draft) => ({ ...draft, [key]: selected }));
+    })().catch((reason) => reportError("settings", "Settings location could not be selected", reason));
+  };
+
+  const resetPreferencePath = (key: keyof PreferencesDraft) => {
+    if (!preferences) return;
+    setPreferencesDraft((draft) => ({ ...draft, [key]: preferences[key === "libraryPath" ? "defaultLibraryPath" : "defaultCachePath"] }));
+  };
+
+  const saveSettings = () => runBusy(async () => {
+    if (!native) return;
+    const next = await invoke<PreferencesSnapshot>("save_preferences", preferencesDraft);
+    setPreferences(next);
+    setPreferencesDraft({ libraryPath: next.libraryPath, cachePath: next.cachePath });
+    setSettingsOpen(false);
+  }, "settings", "Settings could not be saved");
+
+  const requestModelInstallFromSettings = () => {
+    const issue = systemIssues.find((candidate) => candidate.actions.some((action) => action.kind === "install-models")) ?? {
+      id: "processing.models-missing:processing:system",
+      code: "processing.models-missing",
+      scope: "processing",
+      severity: "warning",
+      title: "Processing models are not installed",
+      summary: "Install and verify the pinned models before starting AI processing.",
+      state: "open",
+      occurrences: 1,
+      createdAtMillis: Date.now(),
+      updatedAtMillis: Date.now(),
+      actions: [{ kind: "install-models", label: "Install models", requiresConfirmation: true }],
+    } satisfies SystemIssue;
+    setSettingsOpen(false);
+    setLicenseConfirmed(false);
+    setConfirmIssue(issue);
+  };
 
   const dismissIssue = (issue: SystemIssue) => {
     if (selectedIssueId === issue.id) {
@@ -1211,7 +1674,7 @@ function App() {
     setConfirmIssue(undefined);
     setLicenseConfirmed(false);
     setActivityTab("tasks");
-    setIssuesOpen(true);
+    showActivity();
     try {
       await invoke("install_processing_models", {
         issueId: issue.id,
@@ -1221,7 +1684,7 @@ function App() {
     } catch {
       await refresh().catch(() => undefined);
       setActivityTab("issues");
-      setIssuesOpen(true);
+      showActivity();
     }
   };
 
@@ -1290,22 +1753,14 @@ function App() {
     openTaskOutput(task);
   };
 
-  const showActivityTask = (task: TaskRecord) => {
-    if (task.status !== "queued" && task.status !== "running") return;
-    setSelectedIssueId(undefined);
-    setActivityTab("tasks");
-    setIssuesOpen(true);
-    openTaskOutput(task);
-    setPendingTaskFocusId(task.id);
-  };
-
   const completeTaskFocus = useCallback((taskId: string) => {
     setPendingTaskFocusId((current) => current === taskId ? undefined : current);
   }, []);
 
   const showIssue = (issue: SystemIssue) => {
+    if (opened) return;
     setActivityTab("issues");
-    setIssuesOpen(true);
+    showActivity();
     setPendingIssueFocusId(issue.id);
   };
 
@@ -1341,31 +1796,20 @@ function App() {
     else reportError("tasks", "Linked task output is no longer available", "The bounded task record has expired. Issue details and actions are still available.", undefined, undefined, taskId);
   };
 
-  const showItemContext = async (item: LibraryItem) => {
-    const relatedIssue = issueForLibraryItem(item, systemIssues);
-    if ((item.status === "failed" || item.status === "setup-required") && relatedIssue) {
-      setDrawerOpen(false);
-      showIssue(relatedIssue);
-      return;
-    }
-    let task = taskState.tasks.find((candidate) => candidate.id === item.id);
-    if (!task && native) {
-      try {
-        const nativeTask = await invoke<TaskRecord | null>("task_record", { taskId: item.id });
-        task = nativeTask ? normalizeTaskRecord(nativeTask) : undefined;
-      } catch (reason) {
-        reportError("tasks", "Task details could not be opened", reason, undefined, undefined, item.id);
-      }
-    }
-    setDrawerOpen(false);
-    if (task && (task.status === "queued" || task.status === "running")) showActivityTask(task);
-    else if (relatedIssue) showIssue(relatedIssue);
-    else reportError("activity", "Related activity is no longer available", "No active task or matching Issue is available for this item.");
-  };
-
   const cancelActivityTask = (task: TaskRecord) => {
     invoke("cancel_task", { taskId: task.id })
-      .catch((reason) => reportError("tasks", `Could not cancel ${task.title}`, reason, undefined, undefined, task.id));
+      .catch((reason) => reportError("tasks", "Task could not be cancelled", reason, undefined, undefined, task.id));
+  };
+
+  const pauseActivityTask = (task: TaskRecord) => {
+    invoke("pause_task", { taskId: task.id })
+      .catch((reason) => reportError("tasks", "Task could not be paused", reason, "This job can only pause at a safe processing boundary.", undefined, task.id));
+  };
+
+  const resumeActivityTask = (task: TaskRecord) => {
+    invoke<CatalogSnapshot>("resume_task", { taskId: task.id })
+      .then((snapshot) => { setCatalog(snapshot); setShownItems(snapshot.items); })
+      .catch((reason) => reportError("tasks", "Task could not be resumed", reason, "Open the originating Library or Settings action for the next step.", undefined, task.id));
   };
 
   const copyTaskOutput = () => {
@@ -1407,39 +1851,88 @@ function App() {
 
   const events = opened?.renderPlan.events ?? [];
   const queueBadge = catalog.items.filter((item) => item.status === "processing" || item.status === "queued" || item.status === "waiting-for-lyrics").length;
+  const activityCount = activeTaskCount + systemIssues.length;
+  const effectiveDuration = duration || (audioRef.current && Number.isFinite(audioRef.current.duration) && audioRef.current.duration > 0 ? audioRef.current.duration : 0);
 
   return (
     <main className="app-shell">
-      <header className="topbar" inert={systemModalOpen}>
-        <div className="brand" aria-label="LyricRail">
-          <img className="brand-mark" src={lyricRailMark} alt="" />
-          <strong>LyricRail</strong>
-        </div>
-        <div className="now-playing">
-          <strong>{currentItem?.title || "Ready to sing"}</strong>
-          <span>{currentItem?.artist || currentItem?.firstLyricLine || "Open local media or an encrypted package"}</span>
-        </div>
-        <div className="topbar-actions">
-          <button className={`library-toggle ${drawerOpen ? "active" : ""}`} onClick={toggleLibrary} aria-expanded={drawerOpen} aria-controls="library-drawer">
-            Library {queueBadge > 0 && <b>{queueBadge}</b>}
-          </button>
-          <button ref={issuesToggleRef} className={`issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`} onClick={() => { setDrawerOpen(false); setUtilityOpen(false); setIssuesOpen((value) => !value); }} aria-expanded={issuesOpen} aria-controls="system-issues">
-            <Icon name={systemIssues.length ? "alert" : "activity"} size={17} /> Activity {(activeTaskCount + systemIssues.length) > 0 && <b>{activeTaskCount + systemIssues.length}</b>}
-          </button>
-          {showUtilityMenu && <div ref={utilityToggleRef}><IconButton className="utility-toggle" icon="more" label="Application menu" onClick={() => { setIssuesOpen(false); setUtilityOpen((value) => !value); }} aria-expanded={utilityOpen} /></div>}
-          {showUtilityMenu && utilityOpen && (
-            <>
-              <button className="utility-scrim" aria-label="Close application menu" onClick={() => setUtilityOpen(false)} />
-              <nav className="utility-menu" aria-label="Application">
-                <button autoFocus onClick={() => { setUtilityOpen(false); setAboutOpen(true); }}>About LyricRail</button>
-              </nav>
-            </>
-          )}
-        </div>
-      </header>
-
       <section className="player-area" inert={systemModalOpen}>
-        <div className="video-stage media-player-frame panel" ref={stageRef}>
+        <div className={`video-stage media-player-frame panel ${isStageIdle ? "is-idle" : ""}`} ref={stageRef}>
+          <div
+            className={`player-context ${isHeaderVisible ? "is-visible" : ""}`}
+            onMouseEnter={resetHeaderActivity}
+          >
+            <div className="player-command-menu">
+              <div ref={menuTriggerRef}>
+                {opened ? (
+                  <button
+                    className={`player-menu-toggle player-library-toggle library-toggle ${drawerOpen ? "active" : ""}`}
+                    onClick={toggleLibrary}
+                    aria-expanded={drawerOpen}
+                    aria-controls="library-drawer"
+                  >
+                    <Icon name="music" size={18} />
+                    <span>Library</span>
+                    {queueBadge > 0 && <b>{queueBadge}</b>}
+                  </button>
+                ) : (
+                  <IconButton
+                    className="player-menu-toggle player-application-toggle"
+                    icon="menu"
+                    label="Open application menu"
+                    visibleLabel="Application"
+                    aria-haspopup="menu"
+                    aria-expanded={menuOpen}
+                    aria-controls="player-application-menu"
+                    onClick={toggleMenu}
+                  />
+                )}
+              </div>
+              {!opened && menuOpen && (
+                <>
+                  <button className="player-menu-scrim" aria-label="Close application menu" onClick={closeMenu} />
+                  <div ref={menuRef} id="player-application-menu" className="player-menu panel" role="menu" aria-label="Application actions" onKeyDown={moveApplicationMenuFocus}>
+                    <div className="player-menu-group" role="group">
+                      <button role="menuitem" className="player-menu-action" onClick={showSettings}>
+                        <Icon name="settings" size={18} /><span>Settings</span>
+                      </button>
+                      <button role="menuitem" className="player-menu-action" onClick={() => { closeMenu(); setAboutOpen(true); }}>
+                        <Icon name="info" size={18} /><span>About</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            {opened && currentItem && (
+              <div
+                className="now-playing"
+                aria-live="polite"
+              >
+                <strong className="now-playing-title">{currentItem.title}</strong>
+                {(currentItem.artist || currentItem.firstLyricLine) && (
+                  <>
+                    <span className="now-playing-separator" aria-hidden="true">•</span>
+                    <span className="now-playing-artist">{currentItem.artist || currentItem.firstLyricLine}</span>
+                  </>
+                )}
+              </div>
+            )}
+            {!opened && (
+              <button
+                ref={activityTriggerRef}
+                className={`player-menu-toggle player-activity-toggle issues-toggle ${issuesOpen ? "active" : ""} ${systemIssues.length ? "has-issues" : activeTaskCount ? "has-running" : ""}`}
+                onClick={toggleActivity}
+                aria-expanded={issuesOpen}
+                aria-controls="system-issues"
+                aria-label={activityCount > 0 ? `Activity, ${activityCount} update${activityCount === 1 ? "" : "s"}` : "Activity"}
+              >
+                <Icon name={systemIssues.length ? "alert" : "activity"} size={18} />
+                <span>Activity</span>
+                {activityCount > 0 && <b aria-live="polite">{activityCount}</b>}
+              </button>
+            )}
+          </div>
           {opened ? (
             <>
               <video ref={videoRef} src={opened.media.videoUrl} muted playsInline onError={() => reportError("playback", "Video playback failed", "Video range could not be authenticated or downloaded.")} onCanPlay={() => { if (pendingPlay) { setPendingPlay(false); playElements().catch((reason) => reportError("playback", "Playback could not start", reason)); } }} />
@@ -1448,72 +1941,117 @@ function App() {
                 src={activeTrack?.url}
                 preload="auto"
                 onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+                onDurationChange={(event) => setDuration(event.currentTarget.duration || 0)}
                 onPlay={() => setPlaying(true)}
                 onPause={(event) => { setTime(event.currentTarget.currentTime); setPlaying(false); }}
-                onEnded={() => move(1)}
+                onEnded={() => {
+                  const nextItem = nextReadyItemOnEnded(catalog.items, currentId, shuffle);
+                  if (nextItem) {
+                    openItem(nextItem);
+                  } else {
+                    stopPlayback();
+                  }
+                }}
                 onError={() => reportError("playback", "Audio playback failed", "Audio range could not be authenticated or downloaded.")}
               />
               <div className="stage-shade" />
               <LyricOverlay events={events} time={time} presentation={opened.presentation} mediaRef={audioRef} playing={playing} />
             </>
-          ) : (
+          ) : null}
+          {!opened && (
             <div className="empty-stage">
-              <div className="empty-brand-lockup">
-                <img className="empty-brand-mark" src={lyricRailMark} alt="" />
-                <strong>LyricRail</strong>
-              </div>
-              <h1>Your karaoke, one click away.</h1>
-              <p>Choose a ready song from the library. Local media will process quietly in the same queue.</p>
-              <button onClick={() => setDrawerOpen(true)}>Open library</button>
-            </div>
-          )}
-          {opened && <div className="media-control-overlay player-controls" aria-label="Player controls">
-            <div className="media-control-progress">
-              <output>{formatTime(time)}</output>
-              <input
-                type="range"
-                min="0"
-                max={Math.max(0, duration)}
-                step="0.01"
-                value={Math.min(time, duration || 0)}
-                aria-label="Seek song"
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (audioRef.current) audioRef.current.currentTime = next;
-                  if (videoRef.current) videoRef.current.currentTime = next;
-                  setTime(next);
-                }}
-                style={{ "--progress": `${duration ? (time / duration) * 100 : 0}%` } as React.CSSProperties}
-              />
-              <output>{formatTime(duration)}</output>
-            </div>
-            <div className="media-control-row">
-              <div className="media-control-group">
-                {(opened?.media.audioTracks ?? []).map((track) => (
-                  <IconButton
-                    className={`track-control ${track.id === trackId ? "active" : ""}`}
-                    icon="music"
-                    iconSize={18}
-                    label={`Use ${track.name} audio`}
-                    aria-pressed={track.id === trackId}
-                    onClick={() => switchTrack(track)}
-                    key={track.id}
-                  />
+              <div className="stage-video-grid" role="list" aria-label="Available songs">
+                <button
+                  className="stage-video-card stage-library-card empty-stage-library-btn library-toggle"
+                  onClick={showLibrary}
+                  role="listitem"
+                  aria-label={queueBadge > 0 ? `Open library, ${queueBadge} queued item${queueBadge === 1 ? "" : "s"}` : "Open library"}
+                >Open library{queueBadge > 0 && <b>{queueBadge}</b>}</button>
+                {stageSongs.map((item) => (
+                  <button
+                    key={item.id}
+                    className="stage-video-card"
+                    onClick={() => { void openItem(item); }}
+                    role="listitem"
+                    aria-label={`Play ${item.title}`}
+                  >
+                    <div className="stage-video-thumb-wrap">
+                      <Thumbnail item={item} showLyrics={false} />
+                    </div>
+                    <div className="stage-video-meta">
+                      <strong className="stage-video-title">{item.title}</strong>
+                      <span className="stage-video-subtitle">{item.artist || item.firstLyricLine || "Karaoke"}</span>
+                    </div>
+                  </button>
                 ))}
               </div>
-              <div className="media-control-group player-transport">
-                <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
-                <IconButton className="media-control-primary" icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
-                <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
+            </div>
+          )}
+          {opened && (
+            <div className="media-control-overlay player-controls" aria-label="Player controls">
+              <div className="media-control-progress">
+                <output>{formatTime(time)}</output>
+                <input
+                  type="range"
+                  min="0"
+                  max={Math.max(0, effectiveDuration)}
+                  step="0.01"
+                  value={Math.min(time, effectiveDuration || 0)}
+                  aria-label="Seek song"
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (audioRef.current) audioRef.current.currentTime = next;
+                    if (videoRef.current) videoRef.current.currentTime = next;
+                    setTime(next);
+                  }}
+                  style={{ "--progress": `${effectiveDuration ? (time / effectiveDuration) * 100 : 0}%` } as React.CSSProperties}
+                />
+                <output>{formatTime(effectiveDuration)}</output>
               </div>
-              <div className="media-control-group end">
-                <IconButton className={shuffle ? "active" : ""} icon="shuffle" label={shuffle ? "Disable shuffle" : "Enable shuffle"} aria-pressed={shuffle} onClick={toggleShuffle} />
-                <IconButton icon={volume <= 0.001 ? "volume-muted" : "volume-high"} label={volume <= 0.001 ? "Unmute volume" : "Mute volume"} onClick={toggleMute} />
-                <input className="volume-range" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => applyVolume(Number(event.target.value))} style={{ "--progress": `${volume * 100}%` } as React.CSSProperties} />
-                <IconButton icon={fullscreen ? "fullscreen-exit" : "fullscreen"} label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => { void toggleFullscreen(); }} />
+              <div className="media-control-row">
+                <div className="media-control-group player-transport">
+                  <div className="media-control-cluster">
+                    <IconButton icon={playing ? "pause" : "play"} iconSize={22} label={playing ? "Pause song" : "Play song"} onClick={togglePlay} disabled={!opened} />
+                    <IconButton icon="stop" iconSize={19} label="Stop playback" onClick={stopPlayback} disabled={!opened} />
+                  </div>
+                  <div className="media-control-cluster">
+                    <IconButton icon="previous" iconSize={21} label="Previous ready song" onClick={() => move(-1)} disabled={!ready.length} />
+                    <IconButton icon="next" iconSize={21} label="Next ready song" onClick={() => move(1)} disabled={!ready.length} />
+                  </div>
+                </div>
+                <div className="media-control-group end">
+                  {(() => {
+                    const tracks = opened?.media.audioTracks ?? [];
+                    if (tracks.length === 0) return null;
+                    const karaokeTrack = tracks.find((t) => t.id === "karaoke" || t.name.toLowerCase().includes("karaoke")) ?? tracks[0];
+                    const vocalTrack = tracks.find((t) => t.id !== karaokeTrack?.id) ?? tracks[1];
+                    const isVocalActive = Boolean(vocalTrack && activeTrack && activeTrack.id === vocalTrack.id);
+                    const nextTrack = isVocalActive ? karaokeTrack : (vocalTrack ?? karaokeTrack);
+                    const hasToggle = Boolean(vocalTrack && karaokeTrack && vocalTrack.id !== karaokeTrack.id);
+                    return (
+                      <IconButton
+                        className={`track-control ${isVocalActive ? "active" : ""}`}
+                        icon={hasToggle ? (isVocalActive ? "mic" : "mic-off") : "mic"}
+                        iconSize={18}
+                        label={
+                          hasToggle
+                            ? (isVocalActive ? "Mute vocals (Karaoke)" : "Enable vocals (Original)")
+                            : `Audio: ${activeTrack?.name || "Track"}`
+                        }
+                        aria-pressed={isVocalActive}
+                        onClick={() => { if (hasToggle && nextTrack) switchTrack(nextTrack); }}
+                        disabled={!hasToggle}
+                      />
+                    );
+                  })()}
+                  <IconButton className={shuffle ? "active" : ""} icon="shuffle" label={shuffle ? "Disable shuffle" : "Enable shuffle"} aria-pressed={shuffle} onClick={toggleShuffle} />
+                  <IconButton icon={volume <= 0.001 ? "volume-muted" : "volume-high"} label={volume <= 0.001 ? "Unmute volume" : "Mute volume"} onClick={toggleMute} />
+                  <input className="volume-range" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => applyVolume(Number(event.target.value))} style={{ "--progress": `${volume * 100}%` } as React.CSSProperties} />
+                  <IconButton icon={fullscreen ? "fullscreen-exit" : "fullscreen"} label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={() => { void toggleFullscreen(); }} />
+                </div>
               </div>
             </div>
-          </div>}
+          )}
         </div>
       </section>
 
@@ -1533,69 +2071,69 @@ function App() {
         onQuery={setQuery}
         onSelect={(item) => setSelectedId(item.id)}
         onPlay={openItem}
+        onEditVideo={openLibraryVideo}
+        onLyricsPreview={(item) => native
+          ? invoke<string>("item_lyrics", { itemId: item.id }).catch(() => undefined)
+          : Promise.resolve(undefined)}
         onAddFiles={addFiles}
         onAddFolder={addFolder}
         onDrive={connectDrive}
-        onLyricsFile={chooseLyrics}
-        onLyricsPaste={(item) => showLyricDialog(item, "add").catch((reason) => reportError("lyrics", "Lyric editor could not open", reason))}
-        onEditLyrics={(item) => showLyricDialog(item, "edit").catch((reason) => reportError("lyrics", "Lyric editor could not open", reason))}
-        onRetry={(item) => runBusy(() => invoke("retry_processing_item", { itemId: item.id }), "processing", `Retry failed for ${item.title}`, item.id)}
-        onShowContext={showItemContext}
         onRemoveItem={requestRemove}
         onRemoveSource={(id) => runBusy(() => invoke("remove_library_source", { sourceId: id }), "library", "Library source could not be removed")}
         onRecoveryExport={exportRecovery}
         onRecoveryRestore={restoreRecovery}
       />
 
-      <ActivityCenter
-        open={issuesOpen}
-        issues={systemIssues}
-        tasks={activityTasks}
-        runningTotal={taskState.activeTaskCount}
-        nowMillis={nowMillis}
-        tab={activityTab}
-        selectedTaskId={selectedTaskId}
-        selectedIssueId={selectedIssueId}
-        focusTaskId={pendingTaskFocusId}
-        focusIssueId={pendingIssueFocusId}
-        taskOutputById={taskState.output}
-        taskOutputTruncatedById={taskOutputTruncated}
-        headingRef={issuesHeadingRef}
-        onClose={() => { setIssuesOpen(false); setPendingTaskFocusId(undefined); setPendingIssueFocusId(undefined); }}
-        onTab={setActivityTab}
-        onSelectTask={selectActivityTask}
-        onOpenIssueTask={(issue) => { void openIssueTask(issue); }}
-        onTaskFocusComplete={completeTaskFocus}
-        onIssueFocusComplete={completeIssueFocus}
-        onCancelTask={cancelActivityTask}
-        onCopyTaskOutput={copyTaskOutput}
-        onDismiss={dismissIssue}
-        onResolve={resolveIssue}
-        onCopyDiagnostics={copyIssueDiagnostics}
-        blocked={systemModalOpen}
-        restoreRef={issuesToggleRef}
-      />
-
-      {lyricDialog && (
-        <div className="modal-layer" role="dialog" aria-modal="true">
-          <div ref={lyricDialogRef} className="lyric-dialog panel">
-            <header><div><p className="eyebrow">{lyricDialog.mode === "edit" ? "Confirmed revision" : "Authoritative lyrics"}</p><h2>{lyricDialog.item.title}</h2></div><IconButton className="dialog-close" icon="close" label="Close lyric editor" onClick={() => setLyricDialog(undefined)} /></header>
-            <p>{lyricDialog.mode === "edit" ? "Nothing changes until you confirm. The original package remains valid until its revision authenticates." : "Paste exact UTF-8 lyrics, one semantic phrase per line."}</p>
-            {lyricDialog.item.canRename && <label className="clip-field"><span>Song title</span><input value={lyricTitle} maxLength={200} onChange={(event) => setLyricTitle(event.target.value)} /><button disabled={busy || !lyricTitle.trim()} onClick={() => runBusy(async () => { await invoke("rename_waiting_section", { itemId: lyricDialog.item.id, title: lyricTitle }); setLyricDialog({ ...lyricDialog, item: { ...lyricDialog.item, title: lyricTitle } }); }, "library", "Song title could not be saved")}>Save title</button></label>}
-            <textarea ref={lyricInputRef} value={lyricDraft} onChange={(event) => setLyricDraft(event.target.value)} spellCheck />
-            <footer><button onClick={() => setLyricDialog(undefined)}>Cancel</button><button className="primary" onClick={submitLyrics} disabled={busy || !lyricDraft.trim()}>{lyricDialog.mode === "edit" ? "Create revision" : "Add to queue"}</button></footer>
-          </div>
-        </div>
+      {!opened && (
+        <ActivityCenter
+          open={issuesOpen}
+          issues={systemIssues}
+          tasks={activityTasks}
+          runningTotal={taskState.activeTaskCount}
+          nowMillis={nowMillis}
+          tab={activityTab}
+          selectedTaskId={selectedTaskId}
+          selectedIssueId={selectedIssueId}
+          focusTaskId={pendingTaskFocusId}
+          focusIssueId={pendingIssueFocusId}
+          taskOutputById={taskState.output}
+          taskOutputTruncatedById={taskOutputTruncated}
+          headingRef={issuesHeadingRef}
+          onClose={() => { setIssuesOpen(false); setPendingTaskFocusId(undefined); setPendingIssueFocusId(undefined); }}
+          onTab={setActivityTab}
+          onSelectTask={selectActivityTask}
+          onOpenIssueTask={(issue) => { void openIssueTask(issue); }}
+          onTaskFocusComplete={completeTaskFocus}
+          onIssueFocusComplete={completeIssueFocus}
+          onCancelTask={cancelActivityTask}
+          onPauseTask={pauseActivityTask}
+          onResumeTask={resumeActivityTask}
+          onCopyTaskOutput={copyTaskOutput}
+          onDismiss={dismissIssue}
+          onResolve={resolveIssue}
+          onCopyDiagnostics={copyIssueDiagnostics}
+          blocked={systemModalOpen}
+          restoreRef={activityRestoreRef}
+        />
       )}
 
       {deleteCandidate && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="delete-item-title">
+        <div
+          className="modal-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-item-title"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !busy) {
+              setDeleteCandidate(undefined);
+            }
+          }}
+        >
           <div ref={deleteDialogRef} className="setup-dialog panel" tabIndex={-1}>
-            <header><div><p className="eyebrow">Unfinished Library item</p><h2 id="delete-item-title">Remove “{deleteCandidate.title}”?</h2></div><IconButton className="dialog-close" icon="close" label="Cancel removing item" onClick={() => setDeleteCandidate(undefined)} /></header>
-            <p>This removes only this unfinished item from Library. The original media file and its lyric sidecar stay unchanged.</p>
-            {deleteCandidate.status === "queued" && <p className="processing-note">This song is queued but has not finished processing; confirming will cancel only its pending work first.</p>}
-            <p className="processing-note">Authenticated <code>.lrail</code> packages are protected and never use this action.</p>
-            <footer><button onClick={() => setDeleteCandidate(undefined)} disabled={busy}>Cancel</button><button className="danger" onClick={() => { void confirmRemove(); }} disabled={busy}>Remove from library</button></footer>
+            <header><div><p className="eyebrow">Permanent Library delete</p><h2 id="delete-item-title">Delete “{deleteCandidate.title}”?</h2></div><IconButton className="dialog-close" icon="close" label="Cancel deleting item" onClick={() => setDeleteCandidate(undefined)} /></header>
+            <p>This permanently removes the item from Library. The original local media, lyric sidecar, and external cloud file stay unchanged.</p>
+            {(deleteCandidate.status === "queued" || deleteCandidate.status === "processing") && <p className="processing-note">Processing will be terminated before this item is deleted. Unrelated queued work stays intact.</p>}
+            <footer><button onClick={() => setDeleteCandidate(undefined)} disabled={busy}>Cancel</button><button className="danger" onClick={() => { void confirmRemove(); }} disabled={busy}>Delete permanently</button></footer>
           </div>
         </div>
       )}
@@ -1612,12 +2150,75 @@ function App() {
 
       {clipDialogOpen && clipPreview && (
         <div className="modal-layer" style={{ display: clipPreparing ? "none" : undefined }} role="dialog" aria-modal="true" aria-labelledby="clip-editor-title">
-            <ClipEditor preparationError={clipPreparationError} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed", "clip-preparation"); }} />
+            <ClipEditor preparationError={clipPreparationError} aiMessage={clipAiMessage} preview={clipPreview} busy={clipBusy} containerRef={clipDialogRef} onClose={closeClipDialog} onCommit={commitClips} onPlay={pauseElements} onAiProcess={startClipAiProcess} onOpenActivity={opened ? undefined : showActivity} onCompatible={() => { if (clipSource.current) void runBusy(() => prepareClip(clipSource.current!, true), "library", "Compatible preview failed", "clip-preparation"); }} />
         </div>
       )}
 
+      {libraryVideoPreparing && (
+        <div className="modal-layer" style={{ zIndex: 120 }} role="dialog" aria-modal="true" aria-labelledby="library-video-preparing-title">
+          <div ref={libraryVideoPreparingRef} className="setup-dialog panel" tabIndex={-1}>
+            <h2 id="library-video-preparing-title">Opening video editor</h2>
+            <p role="status">Reading the local source. Your original media stays unchanged.</p>
+            <button onClick={cancelLibraryVideoPreparation}>Cancel and close</button>
+          </div>
+        </div>
+      )}
+
+      {libraryVideoOpenError && (
+        <div className="modal-layer" style={{ zIndex: 121 }} role="dialog" aria-modal="true" aria-labelledby="library-video-error-title">
+          <div ref={libraryVideoPreparingRef} className="setup-dialog panel" tabIndex={-1}>
+            <h2 id="library-video-error-title">Edit video unavailable</h2>
+            <p role="alert">{libraryVideoOpenError.message}</p>
+            <footer>
+              <button onClick={dismissLibraryVideoOpenError}>Close</button>
+              <button className="primary" onClick={() => { const item = libraryVideoOpenError.item; setLibraryVideoOpenError(undefined); void prepareLibraryVideo(item); }}>Try again</button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {libraryVideoEdit && !libraryVideoPreparing && (
+        <VideoEditor
+          preview={libraryVideoEdit.preview}
+          range={libraryVideoEdit.range}
+          value={libraryVideoEdit.value}
+          busy={libraryVideoBusy}
+          onClose={closeLibraryVideoEditor}
+          onSave={saveLibraryVideo}
+          onPlay={pauseElements}
+          preparationError={libraryVideoError}
+          onCompatible={() => void prepareLibraryVideo(libraryVideoEdit.item, true)}
+        />
+      )}
+
+      <SettingsDialog
+        open={settingsOpen}
+        snapshot={preferences}
+        draft={preferencesDraft}
+        busy={busy || !native}
+        installing={taskState.tasks.some((task) => task.kind === "model-install" && (task.status === "queued" || task.status === "running"))}
+        onClose={() => setSettingsOpen(false)}
+        onSave={saveSettings}
+        onChooseLibrary={() => choosePreferencePath("libraryPath")}
+        onChooseCache={() => choosePreferencePath("cachePath")}
+        onResetPath={resetPreferencePath}
+        onInstallModels={requestModelInstallFromSettings}
+        onOpenActivity={() => { setSettingsOpen(false); showActivity(); }}
+      />
+
       {confirmIssue && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="model-install-title">
+        <div
+          className="modal-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="model-install-title"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setConfirmIssue(undefined);
+              setLicenseConfirmed(false);
+            }
+          }}
+        >
           <div ref={setupDialogRef} className="setup-dialog panel" tabIndex={-1}>
             <header><div><p className="eyebrow">Processing setup</p><h2 id="model-install-title">Install pinned models?</h2></div><IconButton className="dialog-close" icon="close" label="Close model installation confirmation" onClick={() => { setConfirmIssue(undefined); setLicenseConfirmed(false); }} /></header>
             <p>This downloads several gigabytes of machine-local model files. LyricRail verifies every pinned revision and hash before retrying your songs.</p>
@@ -1629,19 +2230,31 @@ function App() {
       )}
 
       {aboutOpen && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <div
+          className="modal-layer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="about-title"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setAboutOpen(false);
+            }
+          }}
+        >
           <div ref={aboutDialogRef} className="about-dialog panel" tabIndex={-1}>
-            <header><div><p className="eyebrow">Private karaoke</p><h2 id="about-title">LyricRail</h2></div><IconButton className="dialog-close" icon="close" label="Close About LyricRail" autoFocus onClick={() => setAboutOpen(false)} /></header>
-            <img src={lyricRailMark} alt="" />
-            <p>One focused local karaoke core and player.</p>
-            <span>Version {status?.version || "0.8.0"}</span>
-            <footer><button className="primary" onClick={() => setAboutOpen(false)}>Close</button></footer>
+            <header><span className="about-kicker">About</span><IconButton className="dialog-close" icon="close" label="Close About" autoFocus onClick={() => setAboutOpen(false)} /></header>
+            <div className="about-brand">
+              <div className="about-mark"><img src={lyricRailMark} alt="" /></div>
+              <h2 id="about-title">LyricRail</h2>
+              <p className="about-summary">A karaoke player for local and cloud libraries.</p>
+            </div>
+            <div className="about-meta"><span>Version</span><strong>{status?.version || "0.8.0"}</strong></div>
           </div>
         </div>
       )}
 
       {!native && <div className="notice">Browser preview — native playback and processing controls are disabled.</div>}
-      {shouldShowIssueNotice(anyModalOpen, issuesOpen, systemIssues[0], seenIssueNotice) && <button className="issue-toast" onClick={() => { setSeenIssueNotice(`${systemIssues[0]!.id}:${systemIssues[0]!.updatedAtMillis}`); showIssue(systemIssues[0]!); }}><span><strong>{systemIssues[0]!.title}</strong>{systemIssues[0]!.summary}</span><span>View issue</span></button>}
+      {!opened && shouldShowIssueNotice(anyModalOpen, issuesOpen, systemIssues[0], seenIssueNotice) && <button className="issue-toast" onClick={() => { setSeenIssueNotice(`${systemIssues[0]!.id}:${systemIssues[0]!.updatedAtMillis}`); showIssue(systemIssues[0]!); }}><span><strong>{systemIssues[0]!.title}</strong>{systemIssues[0]!.summary}</span><span>View issue</span></button>}
     </main>
   );
 }

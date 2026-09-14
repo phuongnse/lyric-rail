@@ -17,13 +17,16 @@ export type LibraryItem = {
   artist?: string;
   composer?: string;
   firstLyricLine?: string;
+  lyricSha256?: string;
   status: ItemStatus;
   progressPercent: number;
   statusMessage?: string;
   hasThumbnail: boolean;
   canProcess: boolean;
   canRename?: boolean;
-  canDelete?: boolean;
+  canDelete: boolean;
+  trimStartMillis?: number;
+  trimEndMillis?: number;
   sources: string[];
   lyricSnippet?: string;
 };
@@ -51,7 +54,7 @@ export function activeProcessingTasksByItem(tasks: TaskRecord[]): Map<string, Ta
   return new Map(tasks
     .filter((task) => task.kind === "processing"
       && task.relatedItemId
-      && (task.status === "queued" || task.status === "running"))
+      && (task.status === "queued" || task.status === "running" || task.status === "paused"))
     .map((task) => [task.relatedItemId!, task]));
 }
 
@@ -79,6 +82,25 @@ export function shuffledReadyItem(
   const choices = readyItems(items).filter((item) => item.id !== currentId);
   if (!choices.length) return readyItems(items)[0];
   return choices[Math.floor(random() * choices.length)];
+}
+
+export function nextReadyItemOnEnded(
+  items: LibraryItem[],
+  currentId: string | undefined,
+  shuffle: boolean,
+  random = Math.random,
+): LibraryItem | undefined {
+  const ready = readyItems(items);
+  if (shuffle) {
+    const choices = ready.filter((item) => item.id !== currentId);
+    if (!choices.length) return undefined;
+    return shuffledReadyItem(items, currentId, random);
+  }
+  const index = ready.findIndex((item) => item.id === currentId);
+  if (index >= 0 && index + 1 < ready.length) {
+    return ready[index + 1];
+  }
+  return undefined;
 }
 
 export function visibleRange(
