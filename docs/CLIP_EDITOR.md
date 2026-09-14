@@ -3,10 +3,11 @@
 Open **Library → Local → Files** and choose one audio or video file. Your original
 file stays unchanged.
 
-In **Library**, any local or cloud item can be deleted with **Delete permanently**.
+In **Library**, local-backed items can be deleted with **Delete permanently**.
 LyricRail asks for confirmation, terminates that item's active processing first, and
 removes only the Library record; source media, lyric sidecars, packages, sibling
-sections, and external cloud files stay untouched.
+sections, and external cloud files stay untouched. Cloud-only items are read-only in
+the current version and expose no action menu.
 
 ## One timeline for sections
 

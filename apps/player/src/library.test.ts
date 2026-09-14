@@ -17,6 +17,7 @@ function item(id: string, status: LibraryItem["status"]): LibraryItem {
     progressPercent: 0,
     hasThumbnail: false,
     canProcess: false,
+    canDelete: false,
     sources: ["Disk"],
   };
 }

@@ -169,6 +169,15 @@ pub struct CatalogItem {
 }
 
 impl CatalogItem {
+    pub fn has_local_location(&self) -> bool {
+        self.locations.iter().any(|location| {
+            matches!(
+                location,
+                ItemLocation::LocalPackage { .. } | ItemLocation::LocalMedia { .. }
+            )
+        })
+    }
+
     pub fn source_labels(&self) -> Vec<&'static str> {
         let mut labels = self
             .locations
@@ -320,7 +329,7 @@ impl CatalogItemView {
             status_message: item.status_message.clone(),
             has_thumbnail: item.has_thumbnail,
             can_rename: item.section_id.is_some() && item.status == ItemStatus::WaitingForLyrics,
-            can_delete: true,
+            can_delete: item.has_local_location(),
             can_process: item.locations.iter().any(|location| {
                 matches!(
                     location,
@@ -1905,10 +1914,55 @@ mod tests {
             md5_checksum: None,
             available: true,
         }];
+        let mut mixed = cloud.clone();
+        mixed.id = "mixed-source".into();
+        mixed.package_id = Some("mixed-package".into());
+        if let ItemLocation::GoogleDrive { file_id, name, .. } = &mut mixed.locations[0] {
+            *file_id = "mixed-file".into();
+            *name = "mixed.lrail".into();
+        }
+        mixed.locations.push(ItemLocation::LocalMedia {
+            source_id: None,
+            path: directory.path().join("mixed.mp4"),
+            lyrics_path: None,
+            origin: MediaOrigin::Disk,
+            trim_start_millis: None,
+            trim_end_millis: None,
+            available: true,
+        });
         let mut catalog = catalog(0);
         catalog.upsert(local).unwrap();
         catalog.upsert(cloud).unwrap();
-        assert!(catalog.snapshot().items.iter().all(|item| item.can_delete));
+        catalog.upsert(mixed).unwrap();
+        assert!(catalog.item("local-ready").unwrap().has_local_location());
+        assert!(
+            !catalog
+                .item("cloud-processing")
+                .unwrap()
+                .has_local_location()
+        );
+        let snapshot = catalog.snapshot();
+        assert!(
+            snapshot
+                .items
+                .iter()
+                .find(|item| item.id == "local-ready")
+                .is_some_and(|item| item.can_delete)
+        );
+        assert!(
+            snapshot
+                .items
+                .iter()
+                .find(|item| item.id == "cloud-processing")
+                .is_some_and(|item| !item.can_delete)
+        );
+        assert!(
+            snapshot
+                .items
+                .iter()
+                .find(|item| item.id == "mixed-source")
+                .is_some_and(|item| item.can_delete)
+        );
         let media_before = fs::read(&media).unwrap();
 
         let candidate = catalog

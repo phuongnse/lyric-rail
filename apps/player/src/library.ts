@@ -24,7 +24,7 @@ export type LibraryItem = {
   hasThumbnail: boolean;
   canProcess: boolean;
   canRename?: boolean;
-  canDelete?: boolean;
+  canDelete: boolean;
   trimStartMillis?: number;
   trimEndMillis?: number;
   sources: string[];

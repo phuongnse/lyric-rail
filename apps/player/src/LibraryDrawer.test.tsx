@@ -14,6 +14,7 @@ const item: LibraryItem = {
   progressPercent: 100,
   hasThumbnail: false,
   canProcess: true,
+  canDelete: true,
   firstLyricLine: "First lyric line",
   sources: ["Disk", "Drive"],
 };
@@ -337,10 +338,11 @@ describe("Library source groups", () => {
     expect(row.querySelector(".thumbnail-lyric")?.textContent).toContain("New exact lyric");
   });
 
-  it("uses the same action menu for local and cloud rows", () => {
+  it("keeps cloud-only rows read-only and preserves local actions", () => {
     const onRemoveItem = vi.fn();
+    const onPlay = vi.fn();
     const rows = [
-      { ...item, id: "cloud", title: "Cloud offline", status: "offline" as const, canProcess: false, sources: ["Drive"] },
+      { ...item, id: "cloud", title: "Cloud offline", status: "offline" as const, canProcess: false, canDelete: false, sources: ["Drive"] },
       { ...item, id: "local", title: "Local ready" },
       { ...item, id: "queued", title: "Queued local", status: "queued" as const },
     ];
@@ -348,12 +350,12 @@ describe("Library source groups", () => {
       <LibraryDrawer
         open items={rows} catalog={{ ...catalog, items: rows }} tasksByItem={new Map()} query="" busy={false} blocked={false}
         onClose={() => undefined} onRescan={() => undefined} onQuery={() => undefined} onSelect={() => undefined}
-        onPlay={() => undefined} onEditVideo={() => undefined} onAddFiles={() => undefined} onAddFolder={() => undefined}
+        onPlay={onPlay} onEditVideo={() => undefined} onAddFiles={() => undefined} onAddFolder={() => undefined}
         onDrive={() => undefined} onRemoveItem={onRemoveItem} onRemoveSource={() => undefined}
         onRecoveryExport={() => undefined} onRecoveryRestore={() => undefined}
       />,
     ));
-    for (const [title, count] of [["Cloud offline", 1], ["Local ready", 2], ["Queued local", 1]] as const) {
+    for (const [title, count] of [["Local ready", 2], ["Queued local", 1]] as const) {
       const row = [...host.querySelectorAll<HTMLElement>(".song-row")]
         .find((candidate) => candidate.textContent?.includes(title))!;
       const trigger = row.querySelector<HTMLButtonElement>('[aria-label^="Open actions for"]')!;
@@ -362,13 +364,15 @@ describe("Library source groups", () => {
       expect(row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).toHaveLength(count);
       expect(document.activeElement).toBe(row.querySelector('[role="menuitem"]'));
       expect([...row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].some((button) => button.textContent === "Delete")).toBe(true);
-      if (title === "Cloud offline") {
-        act(() => [...row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Delete")!.click());
-        expect(onRemoveItem).toHaveBeenCalledWith(expect.objectContaining({ title }));
-      } else {
-        act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-        expect(document.activeElement).toBe(trigger);
-      }
+      act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+      expect(document.activeElement).toBe(trigger);
     }
+    const cloud = [...host.querySelectorAll<HTMLElement>(".song-row")]
+      .find((candidate) => candidate.textContent?.includes("Cloud offline"))!;
+    expect(cloud.querySelector('[aria-label^="Open actions for"]')).toBeNull();
+    expect(cloud.querySelector('[role="menu"]')).toBeNull();
+    act(() => cloud.querySelector<HTMLButtonElement>('[aria-label="Play Cloud offline"]')!.click());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ title: "Cloud offline" }));
+    expect(onRemoveItem).not.toHaveBeenCalled();
   });
 });

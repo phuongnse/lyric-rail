@@ -56,6 +56,7 @@ const MAX_THUMBNAIL_BYTES: u64 = 1024 * 1024;
 const MAX_PASTED_LYRIC_BYTES: usize = 1_000_000;
 
 pub struct CatalogState(pub Mutex<Catalog>);
+pub struct CatalogMutationState(pub Mutex<()>);
 
 #[derive(Clone)]
 struct PlaybackAsset {
@@ -1673,6 +1674,11 @@ fn remove_library_source(
     app: tauri::AppHandle,
     source_id: String,
 ) -> Result<CatalogSnapshot, String> {
+    let mutation = app.state::<CatalogMutationState>();
+    let _mutation = mutation
+        .0
+        .lock()
+        .map_err(|_| "Library mutation lock is poisoned".to_string())?;
     {
         let state = app.state::<CatalogState>();
         let mut catalog = state
@@ -1685,11 +1691,33 @@ fn remove_library_source(
 }
 }
 
+fn require_local_delete(item: &CatalogItem) -> Result<(), String> {
+    item.has_local_location()
+        .then_some(())
+        .ok_or_else(|| "Cloud Library items are read-only in this version".into())
+}
+
 ipc_command! {
 fn delete_library_item(
     app: tauri::AppHandle,
     item_id: String,
 ) -> Result<CatalogSnapshot, String> {
+    let mutation = app.state::<CatalogMutationState>();
+    let _mutation = mutation
+        .0
+        .lock()
+        .map_err(|_| "Library mutation lock is poisoned".to_string())?;
+    let initial = {
+        let state = app.state::<CatalogState>();
+        state
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?
+            .item(&item_id)
+            .cloned()
+            .ok_or_else(|| "Library item no longer exists".to_string())?
+    };
+    require_local_delete(&initial)?;
     let transient_lyrics = processing::fence_item(&app, &item_id, true)?;
     let deletion = {
         let state = app.state::<CatalogState>();
@@ -1701,15 +1729,19 @@ fn delete_library_item(
             .item(&item_id)
             .cloned()
             .ok_or_else(|| "Library item no longer exists".to_string())?;
-        match processing::cleanup_fenced_lyrics(transient_lyrics.as_deref()) {
-            Ok(()) => match catalog.remove_item_candidate(&item_id, |candidate| candidate.save()) {
-                Ok(candidate) => {
-                    *catalog = candidate;
-                    Ok((catalog.snapshot(), previous))
-                }
+        if let Err(error) = require_local_delete(&previous) {
+            Err((previous, error))
+        } else {
+            match processing::cleanup_fenced_lyrics(transient_lyrics.as_deref()) {
+                Ok(()) => match catalog.remove_item_candidate(&item_id, |candidate| candidate.save()) {
+                    Ok(candidate) => {
+                        *catalog = candidate;
+                        Ok((catalog.snapshot(), previous))
+                    }
+                    Err(error) => Err((previous, error)),
+                },
                 Err(error) => Err((previous, error)),
-            },
-            Err(error) => Err((previous, error)),
+            }
         }
     };
     let snapshot = match deletion {
@@ -2372,6 +2404,11 @@ async fn rescan_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, S
 
 ipc_command! {
 fn disconnect_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
+    let mutation = app.state::<CatalogMutationState>();
+    let _mutation = mutation
+        .0
+        .lock()
+        .map_err(|_| "Library mutation lock is poisoned".to_string())?;
     if let Ok(provider) = drive_provider(&app) {
         provider.disconnect()?;
     }
@@ -2671,6 +2708,7 @@ pub fn run() {
     builder
         .manage(PlayerState::default())
         .manage(CloudState::default())
+        .manage(CatalogMutationState(Mutex::new(())))
         .manage(ProcessingState::default())
         .manage(issues::IssueStateStore::default())
         .manage(model_installer::ModelInstallerState::default())
@@ -2788,7 +2826,8 @@ mod tests {
     }
     use super::{
         bind_retry_lyrics_path, drive_download_task_id, is_supported_original_reference,
-        parse_karaoke_presentation, parse_single_range, validate_presentation_asset_contract,
+        parse_karaoke_presentation, parse_single_range, require_local_delete,
+        validate_presentation_asset_contract,
     };
     use crate::catalog::{
         CatalogItem, ItemLocation, ItemStatus, MediaOrigin, ProcessingEvidenceStatus,
@@ -2796,6 +2835,42 @@ mod tests {
     };
     use crate::range_cache::RemoteObject;
     use std::path::PathBuf;
+
+    #[test]
+    fn cloud_delete_gate_rejects_before_any_library_side_effect() {
+        let item = CatalogItem {
+            section_id: None,
+            id: "cloud-item".into(),
+            package_id: Some("cloud-package".into()),
+            title: "Cloud song".into(),
+            artist: None,
+            composer: None,
+            first_lyric_line: None,
+            lyric_text: String::new(),
+            status: ItemStatus::Offline,
+            progress_percent: 0.0,
+            status_message: None,
+            processing_job_id: None,
+            processing_task_evidence: None,
+            has_thumbnail: false,
+            locations: vec![ItemLocation::GoogleDrive {
+                source_id: "drive".into(),
+                root_id: "root".into(),
+                file_id: "file".into(),
+                name: "cloud.lrail".into(),
+                size: 1,
+                version: "v1".into(),
+                modified_time: None,
+                md5_checksum: None,
+                available: true,
+            }],
+        };
+        assert!(!item.has_local_location());
+        assert_eq!(
+            require_local_delete(&item).unwrap_err(),
+            "Cloud Library items are read-only in this version"
+        );
+    }
 
     #[test]
     fn authenticated_empty_original_is_rejected_and_zero_routes_cannot_underflow() {

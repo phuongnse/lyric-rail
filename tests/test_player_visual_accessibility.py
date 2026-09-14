@@ -191,6 +191,8 @@ def test_library_rows_keep_video_actions_and_clean_lyric_preview_separate() -> N
     assert ".row-menu" in APP and ".row-menu" in CSS
     assert 'role="menu"' in APP and 'role="menuitem"' in APP
     assert 'onClick={() => closeItemMenu(() => props.onRemoveItem(item))}' in APP
+    assert "const canManage = item.canDelete;" in APP
+    assert "{canManage && <div className=\"row-actions\"" in APP
     assert 'delete_library_item' in APP and 'Delete permanently' in APP
     assert "justify-content: center; padding: 8px;" in CSS
     assert ".thumbnail-lyric p" in CSS and "line-height: 1.2;" in CSS and "text-align: left;" in CSS
@@ -211,7 +213,9 @@ def test_library_rows_keep_video_actions_and_clean_lyric_preview_separate() -> N
     assert "catalog.remove_item_candidate" in native
     assert "restore_processing_after_delete_failure" in native
     assert "remove_item_candidate" in catalog
-    assert "can_delete: true" in catalog
+    assert "can_delete: item.has_local_location()" in catalog
+    assert "Cloud Library items are read-only in this version" in native
+    assert "CatalogMutationState" in native and "Library mutation lock is poisoned" in native
     processing = (ROOT / "apps" / "player" / "src-tauri" / "src" / "processing.rs").read_text(
         encoding="utf-8"
     )

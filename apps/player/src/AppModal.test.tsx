@@ -10,7 +10,7 @@ import type { TaskRecord, TaskRuntimeUpdate, TaskSnapshot } from "./tasks";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
-const readyCatalog: CatalogSnapshot = { items: [{ id: "song", title: "Song", firstLyricLine: "Exact words", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: true, hasThumbnail: false }], localSources: [], driveSources: [] };
+const readyCatalog: CatalogSnapshot = { items: [{ id: "song", title: "Song", firstLyricLine: "Exact words", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false }], localSources: [], driveSources: [] };
 let catalogFixture: CatalogSnapshot = readyCatalog;
 let commitSnapshotFixture: CatalogSnapshot = readyCatalog;
 let systemIssuesFixture: SystemIssue[] = [];
@@ -650,13 +650,13 @@ it("requires confirmation before deleting any Library item", async () => {
   expect(host.querySelector('[aria-label="Open actions for Unfinished"]')).toBeNull();
 });
 
-it("exposes Delete for every local or cloud Library status", async () => {
+it("keeps cloud-only Library statuses read-only", async () => {
   await act(async () => root.unmount());
   const rows: CatalogSnapshot["items"] = [
-    { id: "ready-local", title: "Ready local", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: true, hasThumbnail: false },
-    { id: "offline-cloud", title: "Offline cloud", status: "offline", progressPercent: 0, sources: ["Drive"], canProcess: false, hasThumbnail: false },
-    { id: "failed-local", title: "Failed local", status: "failed", progressPercent: 0, sources: ["Disk"], canProcess: true, hasThumbnail: false },
-    { id: "processing-cloud", title: "Processing cloud", status: "processing", progressPercent: 42, sources: ["Drive"], canProcess: false, hasThumbnail: false },
+    { id: "ready-local", title: "Ready local", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false },
+    { id: "offline-cloud", title: "Offline cloud", status: "offline", progressPercent: 0, sources: ["Drive"], canProcess: false, canDelete: false, hasThumbnail: false },
+    { id: "failed-local", title: "Failed local", status: "failed", progressPercent: 0, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false },
+    { id: "processing-local", title: "Processing local", status: "processing", progressPercent: 42, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false },
   ];
   catalogFixture = { items: rows, localSources: [], driveSources: [] };
   root = createRoot(host);
@@ -665,8 +665,12 @@ it("exposes Delete for every local or cloud Library status", async () => {
   for (const row of rows) {
     const shell = [...host.querySelectorAll<HTMLElement>(".song-row")]
       .find((candidate) => candidate.textContent?.includes(row.title))!;
-    const trigger = shell.querySelector<HTMLButtonElement>('[aria-label^="Open actions for"]')!;
-    await act(async () => trigger.click());
+    const trigger = shell.querySelector<HTMLButtonElement>('[aria-label^="Open actions for"]');
+    if (row.canDelete === false) {
+      expect(trigger).toBeNull();
+      continue;
+    }
+    await act(async () => trigger!.click());
     expect([...shell.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].some((button) => button.textContent === "Delete")).toBe(true);
     await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
   }

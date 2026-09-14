@@ -330,7 +330,8 @@ export function LibraryDrawer(props: DrawerProps) {
               {visible.map((item, index) => {
                 const top = (range.start + index) * ROW_HEIGHT;
                 const playable = item.status === "ready" || item.status === "offline";
-                const editable = item.canProcess && item.status !== "queued" && item.status !== "processing";
+                const canManage = item.canDelete;
+                const editable = canManage && item.canProcess && item.status !== "queued" && item.status !== "processing";
                 const preview = lyricPreviews[item.id];
                 const lyrics = preview?.key === lyricPreviewKey(item)
                   ? preview.text
@@ -374,13 +375,13 @@ export function LibraryDrawer(props: DrawerProps) {
                         )}
                       </div>
                     </button>
-                    <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                    {canManage && <div className="row-actions" onClick={(event) => event.stopPropagation()}>
                       <IconButton className="row-icon row-action-trigger" icon="more-vertical" iconSize={18} label={`Open actions for ${item.title}`} aria-haspopup="menu" aria-expanded={itemMenu === item.id} data-library-item-id={item.id} onClick={() => setItemMenu((current) => current === item.id ? undefined : item.id)} />
                       {itemMenu === item.id && <div className="row-menu" role="menu" aria-label={`Actions for ${item.title}`} onKeyDown={moveItemMenuFocus}>
                         {editable && <button role="menuitem" onClick={() => closeItemMenu(() => props.onEditVideo(item))}><Icon name="edit" size={16} /><span>Edit video</span></button>}
                         <button role="menuitem" className="danger" onClick={() => closeItemMenu(() => props.onRemoveItem(item))}><Icon name="trash" size={16} /><span>Delete</span></button>
                       </div>}
-                    </div>
+                    </div>}
                   </article>
                 );
               })}
