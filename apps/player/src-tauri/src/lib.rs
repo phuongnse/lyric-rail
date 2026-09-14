@@ -34,7 +34,7 @@ use google_drive::{
     DriveFile, GoogleConfig, GoogleDriveTransport, GoogleTokenProvider, authorize_and_pick,
     expand_drive_root, resolve_selection_roots,
 };
-use local_source::{read_authoritative_lyrics, scan_files, scan_root};
+use local_source::{ScanResult, read_authoritative_lyrics, scan_files, scan_root};
 use lrail_format::{LockedSecret, PackageReader, load_vault_master};
 use processing::{ProcessingState, enqueue_item, fence_item};
 use range_cache::{CachedRandomAccessSource, RangeCache, RangeTransport, RemoteObject};
@@ -922,6 +922,58 @@ fn save_and_emit(app: &tauri::AppHandle) -> Result<CatalogSnapshot, String> {
     Ok(snapshot)
 }
 
+fn apply_local_scan(catalog: &mut Catalog, scan: ScanResult) -> Result<Vec<CatalogItem>, String> {
+    let ScanResult {
+        root,
+        mut items,
+        truncated,
+        ..
+    } = scan;
+    let live_paths = items
+        .iter()
+        .flat_map(|item| item.locations.iter())
+        .filter_map(|location| match location {
+            ItemLocation::LocalPackage { path, .. } | ItemLocation::LocalMedia { path, .. } => {
+                Some(path.clone())
+            }
+            ItemLocation::GoogleDrive { .. } => None,
+        })
+        .collect::<HashSet<_>>();
+    catalog.validate_upserts(items.iter())?;
+    let source_id = catalog.add_local_source(root);
+    if !truncated {
+        catalog.reconcile_local_source(&source_id, &live_paths);
+    }
+    let ids = items
+        .iter_mut()
+        .map(|item| {
+            for location in &mut item.locations {
+                match location {
+                    ItemLocation::LocalPackage {
+                        source_id: current,
+                        available,
+                        ..
+                    }
+                    | ItemLocation::LocalMedia {
+                        source_id: current,
+                        available,
+                        ..
+                    } => {
+                        *current = Some(source_id.clone());
+                        *available = true;
+                    }
+                    ItemLocation::GoogleDrive { .. } => {}
+                }
+            }
+            catalog.upsert(item.clone())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids
+        .into_iter()
+        .filter_map(|id| catalog.item(&id).cloned())
+        .collect())
+}
+
 fn restore_catalog_item(
     app: &tauri::AppHandle,
     item_id: &str,
@@ -1332,13 +1384,18 @@ async fn add_local_folder(app: tauri::AppHandle, path: PathBuf) -> Result<Catalo
             ..Default::default()
         },
     );
-    let result: Result<CatalogSnapshot, String> = async {
-        let scan = tauri::async_runtime::spawn_blocking(move || scan_root(&path))
-            .await
-            .map_err(|error| format!("Local scan task failed: {error}"))??;
+    let task_app = app.clone();
+    let task_key = task_id.clone();
+    let result: Result<CatalogSnapshot, String> = tauri::async_runtime::spawn_blocking(move || {
+        let mutation = task_app.state::<CatalogMutationState>();
+        let _mutation = mutation
+            .0
+            .lock()
+            .map_err(|_| "Library mutation lock is poisoned".to_string())?;
+        let scan = scan_root(&path)?;
         tasks::progress(
-            &app,
-            &task_id,
+            &task_app,
+            &task_key,
             tasks::TaskProgress {
                 stage_key: Some("catalog".into()),
                 stage_title: Some("Update Library catalog".into()),
@@ -1350,59 +1407,21 @@ async fn add_local_folder(app: tauri::AppHandle, path: PathBuf) -> Result<Catalo
                 ..Default::default()
             },
         );
-        let mut items = scan.items;
-        let live_paths = items
-            .iter()
-            .flat_map(|item| item.locations.iter())
-            .filter_map(|location| match location {
-                ItemLocation::LocalPackage { path, .. } | ItemLocation::LocalMedia { path, .. } => {
-                    Some(path.clone())
-                }
-                ItemLocation::GoogleDrive { .. } => None,
-            })
-            .collect::<std::collections::HashSet<_>>();
         let queued_items = {
-            let state = app.state::<CatalogState>();
+            let state = task_app.state::<CatalogState>();
             let mut catalog = state
                 .0
                 .lock()
                 .map_err(|_| "Catalog lock is poisoned".to_string())?;
-            catalog.validate_upserts(items.iter())?;
-            let source_id = catalog.add_local_source(scan.root);
-            if !scan.truncated {
-                catalog.reconcile_local_source(&source_id, &live_paths);
-            }
-            let mut ids = Vec::new();
-            for item in &mut items {
-                for location in &mut item.locations {
-                    match location {
-                        ItemLocation::LocalPackage {
-                            source_id: current,
-                            available,
-                            ..
-                        }
-                        | ItemLocation::LocalMedia {
-                            source_id: current,
-                            available,
-                            ..
-                        } => {
-                            *current = Some(source_id.clone());
-                            *available = true;
-                        }
-                        ItemLocation::GoogleDrive { .. } => {}
-                    }
-                }
-                ids.push(catalog.upsert(item.clone())?);
-            }
-            ids.into_iter()
-                .filter_map(|id| catalog.item(&id).cloned())
-                .collect::<Vec<_>>()
+            apply_local_scan(&mut catalog, scan)?
         };
-        let snapshot = save_and_emit(&app)?;
-        enqueue_ready(&app, queued_items);
+        let snapshot = save_and_emit(&task_app)?;
+        enqueue_ready(&task_app, queued_items);
         Ok(snapshot)
-    }
-    .await;
+    })
+    .await
+    .map_err(|error| format!("Local scan task failed: {error}"))
+    .and_then(|result| result);
     finish_runtime_task(&app, &task_id, &result, "Folder scan completed");
     result
 }
@@ -1648,24 +1667,88 @@ fn rename_waiting_section(app: tauri::AppHandle, item_id: String, title: String)
 
 ipc_command! {
 async fn rescan_local_sources(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
-    let sources = app
-        .state::<CatalogState>()
-        .0
-        .lock()
-        .map_err(|_| "Catalog lock is poisoned".to_string())?
-        .local_sources()
-        .to_vec();
-    for source in sources {
-        if add_local_folder(app.clone(), source.path).await.is_err() {
-            let state = app.state::<CatalogState>();
-            let mut catalog = state
-                .0
-                .lock()
-                .map_err(|_| "Catalog lock is poisoned".to_string())?;
-            catalog.reconcile_local_source(&source.id, &HashSet::new());
+    let task_id = start_runtime_task(
+        &app,
+        "local-rescan",
+        tasks::TaskKind::LocalScan,
+        "Rescan local sources",
+        tasks::ProgressMode::Indeterminate,
+    )?;
+    tasks::append_output(
+        &app,
+        &task_id,
+        tasks::OutputStream::System,
+        Some("scan"),
+        "Refreshing connected local sources under the catalog mutation boundary",
+    );
+    let task_app = app.clone();
+    let task_key = task_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mutation = task_app.state::<CatalogMutationState>();
+        let _mutation = mutation
+            .0
+            .lock()
+            .map_err(|_| "Library mutation lock is poisoned".to_string())?;
+        let sources = task_app
+            .state::<CatalogState>()
+            .0
+            .lock()
+            .map_err(|_| "Catalog lock is poisoned".to_string())?
+            .local_sources()
+            .to_vec();
+        let mut queued_items = Vec::new();
+        for (index, source) in sources.iter().enumerate() {
+            tasks::progress(
+                &task_app,
+                &task_key,
+                tasks::TaskProgress {
+                    stage_key: Some("scan".into()),
+                    stage_title: Some("Scan local sources".into()),
+                    stage_progress_percent: Some(if sources.is_empty() {
+                        100.0
+                    } else {
+                        index as f32 / sources.len() as f32 * 100.0
+                    }),
+                    completed_units: Some(index as u64),
+                    total_units: Some(sources.len() as u64),
+                    unit_label: Some("sources".into()),
+                    message: Some(format!("Scanning local source {} of {}", index + 1, sources.len())),
+                    ..Default::default()
+                },
+            );
+            let scan = scan_root(&source.path);
+            let result = match scan {
+                Ok(scan) => {
+                    let state = task_app.state::<CatalogState>();
+                    let mut catalog = state
+                        .0
+                        .lock()
+                        .map_err(|_| "Catalog lock is poisoned".to_string())?;
+                    apply_local_scan(&mut catalog, scan)
+                }
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(mut items) => queued_items.append(&mut items),
+                Err(_) => {
+                    let state = task_app.state::<CatalogState>();
+                    let mut catalog = state
+                        .0
+                        .lock()
+                        .map_err(|_| "Catalog lock is poisoned".to_string())?;
+                    catalog.reconcile_local_source(&source.id, &HashSet::new());
+                }
+            }
         }
-    }
-    save_and_emit(&app)
+        let snapshot = save_and_emit(&task_app)?;
+        enqueue_ready(&task_app, queued_items);
+        Ok(snapshot)
+    })
+    .await
+    .map_err(|error| format!("Local rescan task failed: {error}"))
+    .and_then(|result| result);
+    finish_runtime_task(&app, &task_id, &result, "Local sources rescanned");
+    result
 }
 }
 
@@ -1692,9 +1775,9 @@ fn remove_library_source(
 }
 
 fn require_local_delete(item: &CatalogItem) -> Result<(), String> {
-    item.has_local_location()
+    item.can_delete_unfinished_local_media()
         .then_some(())
-        .ok_or_else(|| "Cloud Library items are read-only in this version".into())
+        .ok_or_else(|| "Only unfinished local media can be removed from Library".into())
 }
 
 ipc_command! {
@@ -1718,7 +1801,7 @@ fn delete_library_item(
             .ok_or_else(|| "Library item no longer exists".to_string())?
     };
     require_local_delete(&initial)?;
-    let transient_lyrics = processing::fence_item(&app, &item_id, true)?;
+    let transient_lyrics = processing::fence_item_for_delete(&app, &item_id)?;
     let deletion = {
         let state = app.state::<CatalogState>();
         let mut catalog = state
@@ -2208,23 +2291,6 @@ async fn connect_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, 
 
 ipc_command! {
 async fn rescan_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, String> {
-    let sources = {
-        let state = app.state::<CatalogState>();
-        let catalog = state
-            .0
-            .lock()
-            .map_err(|_| "Catalog lock is poisoned".to_string())?;
-        let mut sources = catalog.drive_sources().to_vec();
-        for source in &mut sources {
-            if source.roots.is_empty() {
-                source.roots = legacy_drive_roots(&catalog, &source.id);
-            }
-        }
-        sources
-    };
-    if sources.is_empty() {
-        return catalog_snapshot(app.state::<CatalogState>());
-    }
     let task_id = start_runtime_task(
         &app,
         "drive-rescan",
@@ -2235,6 +2301,33 @@ async fn rescan_google_drive(app: tauri::AppHandle) -> Result<CatalogSnapshot, S
     let task_app = app.clone();
     let task_key = task_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let mutation = task_app.state::<CatalogMutationState>();
+        let _mutation = mutation
+            .0
+            .lock()
+            .map_err(|_| "Library mutation lock is poisoned".to_string())?;
+        let sources = {
+            let state = task_app.state::<CatalogState>();
+            let catalog = state
+                .0
+                .lock()
+                .map_err(|_| "Catalog lock is poisoned".to_string())?;
+            let mut sources = catalog.drive_sources().to_vec();
+            for source in &mut sources {
+                if source.roots.is_empty() {
+                    source.roots = legacy_drive_roots(&catalog, &source.id);
+                }
+            }
+            sources
+        };
+        if sources.is_empty() {
+            return task_app
+                .state::<CatalogState>()
+                .0
+                .lock()
+                .map(|catalog| catalog.snapshot())
+                .map_err(|_| "Catalog lock is poisoned".to_string());
+        }
         tasks::progress(
             &task_app,
             &task_key,
@@ -2868,7 +2961,25 @@ mod tests {
         assert!(!item.has_local_location());
         assert_eq!(
             require_local_delete(&item).unwrap_err(),
-            "Cloud Library items are read-only in this version"
+            "Only unfinished local media can be removed from Library"
+        );
+
+        let mut packaged = item.clone();
+        packaged.id = "packaged-item".into();
+        packaged.package_id = Some("package".into());
+        packaged.status = ItemStatus::Ready;
+        packaged.locations = vec![ItemLocation::LocalMedia {
+            source_id: None,
+            path: PathBuf::from("song.mp4"),
+            lyrics_path: None,
+            origin: MediaOrigin::Disk,
+            trim_start_millis: None,
+            trim_end_millis: None,
+            available: true,
+        }];
+        assert_eq!(
+            require_local_delete(&packaged).unwrap_err(),
+            "Only unfinished local media can be removed from Library"
         );
     }
 

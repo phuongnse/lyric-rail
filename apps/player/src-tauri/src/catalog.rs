@@ -178,6 +178,25 @@ impl CatalogItem {
         })
     }
 
+    pub fn can_delete_unfinished_local_media(&self) -> bool {
+        self.package_id.is_none()
+            && matches!(
+                &self.status,
+                ItemStatus::Queued
+                    | ItemStatus::WaitingForLyrics
+                    | ItemStatus::SetupRequired
+                    | ItemStatus::Failed
+            )
+            && matches!(
+                self.locations.as_slice(),
+                [ItemLocation::LocalMedia {
+                    origin: MediaOrigin::Disk,
+                    available: true,
+                    ..
+                }]
+            )
+    }
+
     pub fn source_labels(&self) -> Vec<&'static str> {
         let mut labels = self
             .locations
@@ -329,7 +348,7 @@ impl CatalogItemView {
             status_message: item.status_message.clone(),
             has_thumbnail: item.has_thumbnail,
             can_rename: item.section_id.is_some() && item.status == ItemStatus::WaitingForLyrics,
-            can_delete: item.has_local_location(),
+            can_delete: item.can_delete_unfinished_local_media(),
             can_process: item.locations.iter().any(|location| {
                 matches!(
                     location,
@@ -1886,19 +1905,19 @@ mod tests {
     }
 
     #[test]
-    fn universal_removal_handles_local_and_cloud_items_without_touching_sources() {
+    fn removal_projection_rejects_ready_package_and_mixed_items() {
         let directory = tempfile::tempdir().unwrap();
-        let media = directory.path().join("ready.mp4");
+        let media = directory.path().join("unfinished.mp4");
         fs::write(&media, b"source bytes").unwrap();
         let mut local = unfinished_item(media.clone());
-        local.id = "local-ready".into();
-        local.package_id = Some("local-package".into());
-        local.status = ItemStatus::Ready;
-        local.locations.push(ItemLocation::LocalPackage {
+        local.id = "local-unfinished".into();
+        let mut package = item(2);
+        package.id = "local-package".into();
+        package.locations = vec![ItemLocation::LocalPackage {
             source_id: None,
             path: directory.path().join("ready.lrail"),
             available: true,
-        });
+        }];
         let mut cloud = item(1);
         cloud.id = "cloud-processing".into();
         cloud.package_id = Some("cloud-package".into());
@@ -1932,9 +1951,34 @@ mod tests {
         });
         let mut catalog = catalog(0);
         catalog.upsert(local).unwrap();
+        catalog.upsert(package).unwrap();
         catalog.upsert(cloud).unwrap();
         catalog.upsert(mixed).unwrap();
-        assert!(catalog.item("local-ready").unwrap().has_local_location());
+        assert!(
+            catalog
+                .item("local-unfinished")
+                .unwrap()
+                .can_delete_unfinished_local_media()
+        );
+        for status in [
+            ItemStatus::Queued,
+            ItemStatus::WaitingForLyrics,
+            ItemStatus::SetupRequired,
+            ItemStatus::Failed,
+        ] {
+            let mut candidate = unfinished_item(media.clone());
+            candidate.status = status;
+            assert!(candidate.can_delete_unfinished_local_media());
+        }
+        for status in [
+            ItemStatus::Ready,
+            ItemStatus::Processing,
+            ItemStatus::Offline,
+        ] {
+            let mut candidate = unfinished_item(media.clone());
+            candidate.status = status;
+            assert!(!candidate.can_delete_unfinished_local_media());
+        }
         assert!(
             !catalog
                 .item("cloud-processing")
@@ -1946,8 +1990,15 @@ mod tests {
             snapshot
                 .items
                 .iter()
-                .find(|item| item.id == "local-ready")
+                .find(|item| item.id == "local-unfinished")
                 .is_some_and(|item| item.can_delete)
+        );
+        assert!(
+            snapshot
+                .items
+                .iter()
+                .find(|item| item.id == "local-package")
+                .is_some_and(|item| !item.can_delete)
         );
         assert!(
             snapshot
@@ -1961,20 +2012,25 @@ mod tests {
                 .items
                 .iter()
                 .find(|item| item.id == "mixed-source")
-                .is_some_and(|item| item.can_delete)
+                .is_some_and(|item| !item.can_delete)
         );
         let media_before = fs::read(&media).unwrap();
 
         let candidate = catalog
-            .remove_item_candidate("local-ready", |candidate| {
+            .remove_item_candidate("local-unfinished", |candidate| {
                 let persisted = serde_json::to_vec(&candidate.document).unwrap();
                 let reloaded: CatalogDocument = serde_json::from_slice(&persisted).unwrap();
-                assert!(!reloaded.items.iter().any(|item| item.id == "local-ready"));
+                assert!(
+                    !reloaded
+                        .items
+                        .iter()
+                        .any(|item| item.id == "local-unfinished")
+                );
                 Ok(())
             })
             .unwrap();
-        assert!(candidate.item("local-ready").is_none());
-        assert!(catalog.item("local-ready").is_some());
+        assert!(candidate.item("local-unfinished").is_none());
+        assert!(catalog.item("local-unfinished").is_some());
         assert_eq!(fs::read(&media).unwrap(), media_before);
 
         let failed =

@@ -461,9 +461,10 @@ def test_scan_progress_precedes_expensive_work_and_rows_project_shared_tasks() -
     local_scan = player.index('stage_title: Some("Scan selected local files"')
     local_work = player.index("spawn_blocking(move || scan_files(paths))")
     folder_scan = player.index('stage_title: Some("Scan local folder"')
-    folder_work = player.index("spawn_blocking(move || scan_root(&path))")
+    folder_work = player.index("let scan = scan_root(&path)?")
     assert local_scan < local_work
     assert folder_scan < folder_work
+    assert "let _mutation = mutation" in player
     assert "let completed = index + 1" in player
     assert 'completed_units: Some(completed as u64)' in player
     connect = player.split("async fn connect_google_drive", 1)[1].split("async fn rescan_google_drive", 1)[0]

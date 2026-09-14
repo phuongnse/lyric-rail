@@ -24,9 +24,9 @@ hand-authored SVG icon set. Icon-only actions include matching accessible labels
 hover/focus help text; compact UI copy is kept at a readable 10px minimum.
 
 Visible actions have one home. Library groups Files/Folder under Local and Google Drive
-under Cloud; lyric and retry controls stay on their song; playback controls stay in Player. Windows and
-Linux use no duplicate native menu. The top bar adds only a styled Activity entry and a
-small About utility on those platforms; macOS owns About in its minimal system menu.
+under Cloud; lyric and retry controls stay on their song; playback controls stay in Player.
+The idle Player frame owns one accessible Application menu for Settings and About, with
+macOS retaining its platform-conventional About entry where applicable.
 
 Activity is the single detailed home for long work. Tasks contains only queued/running
 work, while Issues contains failures and setup requirements from every subsystem. Both share
@@ -79,7 +79,7 @@ Activity can be opened, inspected and closed without losing that context. Proces
 can pause at a safe durable boundary and resume; other jobs expose only the controls
 their native owner can perform safely.
 
-The application menu includes Settings. Settings shows effective Library/import and
+The application menu includes Settings and About. Settings shows effective Library/import and
 cache locations, runtime integrity and the manifest-backed model catalog. Model downloads
 continue through the verified native installer and remain visible in Activity. Choosing a
 location never moves or deletes existing media or model files.
@@ -93,7 +93,7 @@ Double-click a block or press **Edit video** to open the shared information dial
 It previews only the selected interval with a zero-based clock and seek control,
 and edits Video name, Artist, Composer and exact UTF-8 lyrics. Save applies this
 information without changing the cut; Cancel discards the draft. Section operations
-remain on the timeline. The shared dialog is also ready for a future Library edit action.
+remain on the timeline. The shared dialog is also used by the Library Edit action.
 The editor supports up to 128 sections. See [the editor guide](docs/CLIP_EDITOR.md).
 All sections appear at the top of Library & queue in editor order, waiting for each
 section's exact lyrics when lyrics were not entered in Edit video. Existing active

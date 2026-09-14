@@ -51,13 +51,14 @@ use the explicit cancellable compatible preview, with anonymous PCM/H264 handles
 PTS normalization to preserve source timing. Preview, cancel and commit leave source
 bytes unchanged. Packages and multi-file selections still enter the library directly.
 
-Playable Library rows start playback on click. Each local-backed row has one
-consistent action trigger; its menu contains **Edit video** when editable and
-**Delete**. Cloud-only rows remain read-only and expose no action trigger. Edit opens
-the shared bounded metadata/preview dialog and requeues the local source without
-changing source bytes. Local Delete is permanent for the Library record, terminates
-that item's processing first, and leaves source files, lyric sidecars, `.lrail`
-packages, and cloud objects untouched.
+Playable Library rows start playback on click. Each editable row has one consistent
+action trigger; its menu contains **Edit video** when available. **Delete** is exposed
+only for an unfinished, available local-media row; ready/package, cloud-only and active
+processing rows remain protected. Edit opens the shared bounded metadata/preview dialog
+and requeues the local source without changing source bytes. Confirmed Delete removes
+only that Library record, cancels queued work that has not started, rejects active work,
+and leaves source files, lyric sidecars, `.lrail` packages, sibling rows and cloud
+objects untouched.
 Hovering or focusing a row reveals an exact lyric preview without putting lyrics into
 the thumbnail image itself; the thumbnail remains a clean representative video frame.
 

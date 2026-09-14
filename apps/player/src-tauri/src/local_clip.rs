@@ -1128,7 +1128,7 @@ fn prepare_source(
             duration_millis,
             frame_duration_millis,
             frame_times_millis: Vec::new(),
-            video_offset_millis: 0.0,
+            video_offset_millis: video_offset.unwrap_or(0.0),
             direct: true,
             content_type,
             timeline_origin,
@@ -1649,6 +1649,13 @@ fn section_items(
             return Err("Section range is outside the source timeline".into());
         }
     }
+    for (index, section) in sections.iter().enumerate() {
+        if sections[..index].iter().any(|previous| {
+            section.start_millis < previous.end_millis && previous.start_millis < section.end_millis
+        }) {
+            return Err("Section ranges overlap on the source timeline".into());
+        }
+    }
     verify_source_unchanged(
         &session.source_file,
         &session.path,
@@ -2055,7 +2062,7 @@ mod tests {
         let ffprobe = available_tool("LYRICRAIL_FFPROBE", "ffprobe").unwrap();
         let ffmpeg = available_tool("LYRICRAIL_FFMPEG", "ffmpeg").unwrap();
         assert!(
-            Command::new(ffmpeg)
+            Command::new(&ffmpeg)
                 .args([
                     "-v",
                     "error",
@@ -2091,6 +2098,60 @@ mod tests {
         assert!(super::requires_compatibility(true, -0.023));
         assert!(!super::requires_compatibility(true, 0.0));
         assert!(!super::requires_compatibility(false, info.timeline_origin));
+
+        let delayed = root.path().join("delayed.mp4");
+        assert!(
+            Command::new(&ffmpeg)
+                .args([
+                    "-v",
+                    "error",
+                    "-itsoffset",
+                    "0.3",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x48:rate=10:duration=1",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=duration=1.5",
+                    "-map",
+                    "0:v",
+                    "-map",
+                    "1:a",
+                    "-fps_mode",
+                    "passthrough",
+                    "-c:v",
+                    "libx264",
+                    "-bf",
+                    "0",
+                    "-c:a",
+                    "aac",
+                ])
+                .arg(&delayed)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let delayed_info = super::probe_media_cancellable(
+            &ffprobe,
+            &delayed,
+            &|_, _| {},
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        let offset = delayed_info.video_offset.unwrap();
+        let prepared = super::prepare_source(
+            delayed,
+            root.path().join("preview"),
+            |_, _| {},
+            |_, _| {},
+            |_, _| {},
+            false,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!((prepared.video_offset_millis - offset).abs() < 0.01);
     }
 
     use super::{
@@ -2275,6 +2336,7 @@ mod tests {
                     ..section.clone()
                 },
             ],
+            vec![section.clone(), section.clone()],
             vec![super::ClipSection {
                 title: "".into(),
                 ..section.clone()
@@ -2282,8 +2344,38 @@ mod tests {
         ] {
             assert!(super::section_items(&session, &invalid).is_err());
         }
-        let items = super::section_items(&session, &[section.clone(), section.clone()]).unwrap();
+        let items = super::section_items(
+            &session,
+            &[
+                section.clone(),
+                super::ClipSection {
+                    start_millis: 500,
+                    end_millis: 900,
+                    title: "Second song".into(),
+                    ..section.clone()
+                },
+            ],
+        )
+        .unwrap();
         assert_ne!(items[0].id, items[1].id);
+        assert!(matches!(
+            items[0].locations[0],
+            crate::catalog::ItemLocation::LocalMedia {
+                lyrics_path: None,
+                trim_start_millis: Some(10),
+                trim_end_millis: Some(500),
+                ..
+            }
+        ));
+        assert!(matches!(
+            items[1].locations[0],
+            crate::catalog::ItemLocation::LocalMedia {
+                lyrics_path: None,
+                trim_start_millis: Some(500),
+                trim_end_millis: Some(900),
+                ..
+            }
+        ));
         for item in items {
             assert_eq!(item.status, crate::catalog::ItemStatus::WaitingForLyrics);
             assert!(item.lyric_text.is_empty());
@@ -2291,8 +2383,6 @@ mod tests {
                 item.locations[0],
                 crate::catalog::ItemLocation::LocalMedia {
                     lyrics_path: None,
-                    trim_start_millis: Some(10),
-                    trim_end_millis: Some(500),
                     ..
                 }
             ));

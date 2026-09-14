@@ -3,11 +3,11 @@
 Open **Library → Local → Files** and choose one audio or video file. Your original
 file stays unchanged.
 
-In **Library**, local-backed items can be deleted with **Delete permanently**.
-LyricRail asks for confirmation, terminates that item's active processing first, and
-removes only the Library record; source media, lyric sidecars, packages, sibling
-sections, and external cloud files stay untouched. Cloud-only items are read-only in
-the current version and expose no action menu.
+In **Library**, an unfinished, available local-media row can be deleted with **Delete
+permanently**. LyricRail asks for confirmation, cancels queued work that has not
+started, rejects active processing, and removes only the Library record; source media,
+lyric sidecars, packages, sibling sections, and external cloud files stay untouched.
+Ready/package, unavailable and cloud-only items expose no delete action.
 
 ## One timeline for sections
 
@@ -28,8 +28,9 @@ frame stepping; section frame buttons sit beside Start and End. Moving an edge b
 frame immediately auditions the new beginning or ending of that section.
 
 Invalid time drafts stay visible and block publishing until corrected. Escape in a
-time field discards that edit. Up to 128 sections may overlap; **Add N songs to queue**
-publishes the valid sections in the chosen order.
+time field discards that edit. Up to 128 non-overlapping sections are supported;
+overlapping ranges are rejected at admission. **Add N songs to queue** publishes the
+valid sections in the chosen order.
 
 ## Edit video information
 

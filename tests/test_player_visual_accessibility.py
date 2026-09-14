@@ -208,13 +208,13 @@ def test_library_rows_keep_video_actions_and_clean_lyric_preview_separate() -> N
     assert "Package identity does not match the Library authority" in native
     assert "let _ = local_clip::cancel(&app, &clip_id);" in native
     assert "owned_lyrics_path" in native and "fs::remove_file(path)" in native
-    assert "processing::fence_item(&app" in native
+    assert "processing::fence_item_for_delete(&app" in native
     assert "processing::cleanup_fenced_lyrics" in native
     assert "catalog.remove_item_candidate" in native
     assert "restore_processing_after_delete_failure" in native
     assert "remove_item_candidate" in catalog
-    assert "can_delete: item.has_local_location()" in catalog
-    assert "Cloud Library items are read-only in this version" in native
+    assert "can_delete: item.can_delete_unfinished_local_media()" in catalog
+    assert "Only unfinished local media can be removed from Library" in native
     assert "CatalogMutationState" in native and "Library mutation lock is poisoned" in native
     processing = (ROOT / "apps" / "player" / "src-tauri" / "src" / "processing.rs").read_text(
         encoding="utf-8"

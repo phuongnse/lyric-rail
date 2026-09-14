@@ -860,6 +860,12 @@ fn handle_event(app: &AppHandle, mut event: WorkerEvent, generation: u64) {
             }) else {
                 return;
             };
+            let lyric_cleanup_failed = cleanup_pending_lyrics(&pending);
+            let detail = if lyric_cleanup_failed {
+                format!("{detail}; task-owned lyric snapshot cleanup failed")
+            } else {
+                detail
+            };
             if let Ok(mut catalog) = app.state::<CatalogState>().0.lock() {
                 for id in pending.keys() {
                     let existing = catalog
@@ -1197,8 +1203,15 @@ fn commit_waiting_request(
 }
 
 impl ProcessingInner {
-    fn fence_item(&mut self, item_id: &str) -> Result<Option<FencedItem>, String> {
+    fn fence_item(
+        &mut self,
+        item_id: &str,
+        reject_active: bool,
+    ) -> Result<Option<FencedItem>, String> {
         if self.active_request.as_deref() == Some(item_id) {
+            if reject_active {
+                return Err("Cannot remove a Library item while processing is active".into());
+            }
             let pending = self
                 .pending
                 .remove(item_id)
@@ -1244,6 +1257,13 @@ fn cleanup_transient_lyrics(path: Option<&Path>) -> Result<(), String> {
             "Unable to remove task-owned lyric snapshot: {error}"
         )),
     }
+}
+
+fn cleanup_pending_lyrics(pending: &HashMap<String, PendingJob>) -> bool {
+    pending
+        .values()
+        .filter_map(|job| job.transient_lyrics.as_deref())
+        .any(|path| cleanup_transient_lyrics(Some(path)).is_err())
 }
 
 fn drain_dispatch_failures(
@@ -1985,13 +2005,26 @@ pub fn fence_item(
     item_id: &str,
     keep_transient_lyrics: bool,
 ) -> Result<Option<PathBuf>, String> {
+    fence_item_with_policy(app, item_id, keep_transient_lyrics, false)
+}
+
+pub fn fence_item_for_delete(app: &AppHandle, item_id: &str) -> Result<Option<PathBuf>, String> {
+    fence_item_with_policy(app, item_id, true, true)
+}
+
+fn fence_item_with_policy(
+    app: &AppHandle,
+    item_id: &str,
+    keep_transient_lyrics: bool,
+    reject_active: bool,
+) -> Result<Option<PathBuf>, String> {
     let fenced = {
         let state = app.state::<ProcessingState>();
         let mut inner = state
             .inner
             .lock()
             .map_err(|_| "Processing state lock is poisoned".to_string())?;
-        inner.fence_item(item_id)?
+        inner.fence_item(item_id, reject_active)?
     };
     let Some(FencedItem {
         process,
@@ -2207,10 +2240,11 @@ mod tests {
     use super::encode_worker_request;
     use super::{
         DispatchFailure, DispatchFailureKind, MODEL_PROVENANCE_FAILURE_PREFIX, PendingJob,
-        ProcessingInner, WorkerRequest, apply_current_generation, commit_waiting_request,
-        dispatch_failure_projection, drain_dispatch_failures, durable_task_record, error_code,
-        load_durable_manifest, read_bounded_lines, read_durable_output, read_worker_stdout,
-        recover_worker_disconnect, take_worker_disconnect_failure, worker_command, worker_request,
+        ProcessingInner, WorkerRequest, apply_current_generation, cleanup_pending_lyrics,
+        commit_waiting_request, dispatch_failure_projection, drain_dispatch_failures,
+        durable_task_record, error_code, load_durable_manifest, read_bounded_lines,
+        read_durable_output, read_worker_stdout, recover_worker_disconnect,
+        take_worker_disconnect_failure, worker_command, worker_request,
     };
     use crate::catalog::{
         CatalogItem, ItemLocation, ItemStatus, MediaOrigin, ProcessingEvidenceStatus,
@@ -2263,7 +2297,7 @@ mod tests {
             .pending
             .insert("sibling-item".into(), test_pending(None));
 
-        let fenced = inner.fence_item("edited-item").unwrap().unwrap();
+        let fenced = inner.fence_item("edited-item", false).unwrap().unwrap();
         assert!(fenced.restart_worker);
         assert!(fenced.process.is_none());
         assert_eq!(
@@ -2274,6 +2308,45 @@ mod tests {
         assert!(!inner.pending.contains_key("edited-item"));
         assert!(inner.pending.contains_key("sibling-item"));
         assert_eq!(inner.waiting.front().unwrap().request_id, "sibling-item");
+    }
+
+    #[test]
+    fn deletion_fencing_rejects_active_request_without_detaching_it() {
+        let mut inner = ProcessingInner {
+            active_request: Some("active-item".into()),
+            ..Default::default()
+        };
+        inner.pending.insert(
+            "active-item".into(),
+            test_pending(Some(PathBuf::from("active-lyrics.txt"))),
+        );
+
+        let error = match inner.fence_item("active-item", true) {
+            Err(error) => error,
+            Ok(_) => panic!("active deletion fencing must be rejected"),
+        };
+        assert_eq!(
+            error,
+            "Cannot remove a Library item while processing is active"
+        );
+        assert_eq!(inner.active_request.as_deref(), Some("active-item"));
+        assert!(inner.pending.contains_key("active-item"));
+    }
+
+    #[test]
+    fn fatal_pending_cleanup_removes_every_owned_lyric_snapshot() {
+        let temporary = tempfile::tempdir().unwrap();
+        let first = temporary.path().join("first.txt");
+        let second = temporary.path().join("second.txt");
+        fs::write(&first, "exact first").unwrap();
+        fs::write(&second, "exact second").unwrap();
+        let mut pending = HashMap::new();
+        pending.insert("first".into(), test_pending(Some(first.clone())));
+        pending.insert("second".into(), test_pending(Some(second.clone())));
+
+        assert!(!cleanup_pending_lyrics(&pending));
+        assert!(!first.exists());
+        assert!(!second.exists());
     }
 
     #[test]
@@ -2291,7 +2364,7 @@ mod tests {
             .pending
             .insert("sibling-item".into(), test_pending(None));
 
-        let fenced = inner.fence_item("queued-item").unwrap().unwrap();
+        let fenced = inner.fence_item("queued-item", false).unwrap().unwrap();
         assert!(!fenced.restart_worker);
         assert!(fenced.process.is_none());
         assert_eq!(
