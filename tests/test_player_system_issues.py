@@ -420,6 +420,7 @@ def test_copy_diagnostics_exports_bounded_context_from_the_shared_policy() -> No
     assert "Raw technical text was withheld for privacy." in DIAGNOSTICS
     assert "safeIssueContext" in DIAGNOSTICS
     assert "safeIssueCode" in DIAGNOSTICS
+    assert "PRODUCER_ISSUE_CODES" in DIAGNOSTICS
     assert "<details><summary>Technical details" in APP
     assert "issue.detail &&" not in APP
     assert "relatedTaskId?: string" in (ROOT / "apps/player/src/issues.ts").read_text(encoding="utf-8")

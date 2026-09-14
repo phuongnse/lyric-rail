@@ -8,6 +8,7 @@ import {
   projectDiagnostic,
   selectDiagnosticTasks,
 } from "./diagnostics";
+import { clientIssue } from "./issues";
 import { latestModelTransferProgress } from "./modelProgress";
 import type { SystemIssue } from "./issues";
 import type { TaskOutputLine, TaskRecord } from "./tasks";
@@ -120,9 +121,33 @@ describe("closed diagnostic contract", () => {
     const report = formatIssueDiagnostics({ issue: unsafe });
     expect(detail).toContain("Issue code: producer-code-unavailable");
     expect(detail).toContain("Scope: unknown-scope");
-    expect(detail).toContain("Related task: available");
+    expect(detail).toContain(`Related task: ${contract.withheld}`);
     for (const line of detail.split("\n")) expect(report).toContain(line);
     expect(report).not.toContain("TOPSECRET");
+  });
+
+  it("retains current producer issue codes, closed actions and opaque references", () => {
+    for (const [title, code] of [
+      ["Task could not be cancelled", "tasks.task-could-not-be-cancelled"],
+      ["Task could not be paused", "tasks.task-could-not-be-paused"],
+      ["Task could not be resumed", "tasks.task-could-not-be-resumed"],
+    ] as const) {
+      const produced = clientIssue("tasks", title, "TOPSECRET", undefined, { kind: "retry-item", label: "Retry", requiresConfirmation: false });
+      expect(produced.code).toBe(code);
+      expect(formatIssueDetail({ ...produced, detail: undefined })).toContain(`Issue code: ${code}`);
+    }
+    const reference = "123e4567-e89b-12d3-a456-426614174000";
+    const withReference = { ...issue, detail: undefined, relatedTaskId: reference, actions: [{ kind: "retry-item" as const, label: "Retry", requiresConfirmation: false }] };
+    const detail = formatIssueDetail(withReference);
+    const report = formatIssueDiagnostics({ issue: withReference });
+    expect(detail).toContain(`Related task: ${reference}`);
+    expect(detail).toContain("Available actions: retry-item");
+    expect(report).toContain(`Related task: ${reference}`);
+    expect(report).toContain("Actions: retry-item");
+    for (const kind of ["install-models", "retry-item", "reconnect-drive"] as const) {
+      expect(formatIssueDetail({ ...issue, detail: undefined, actions: [{ kind, label: "Action", requiresConfirmation: false }] }))
+        .toContain(`Available actions: ${kind}`);
+    }
   });
 
   it("keeps allowlisted issue detail unchanged", () => {
