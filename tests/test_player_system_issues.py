@@ -40,6 +40,89 @@ FOCUS = (ROOT / "apps/player/src/focus.ts").read_text(encoding="utf-8")
 FOCUS_TEST = (ROOT / "apps/player/src/focus.test.tsx").read_text(encoding="utf-8")
 
 
+def _split_call_arguments(source: str, start: int) -> list[str]:
+    arguments: list[str] = []
+    argument_start = start
+    depths = {"(": 0, "[": 0, "{": 0}
+    closing = {")": "(", "]": "[", "}": "{",
+    }
+    quote: str | None = None
+    escaped = False
+    comment: str | None = None
+    index = start
+    while index < len(source):
+        character = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if comment == "line":
+            if character == "\n":
+                comment = None
+            index += 1
+            continue
+        if comment == "block":
+            if character == "*" and following == "/":
+                comment = None
+                index += 2
+            else:
+                index += 1
+            continue
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in ('"', "'", "`"):
+            quote = character
+        elif character == "/" and following == "/":
+            comment = "line"
+            index += 2
+            continue
+        elif character == "/" and following == "*":
+            comment = "block"
+            index += 2
+            continue
+        elif character in depths:
+            depths[character] += 1
+        elif character in closing:
+            opening = closing[character]
+            if not depths[opening] and character == ")":
+                arguments.append(source[argument_start:index])
+                return arguments
+            depths[opening] -= 1
+        elif character == "," and not any(depths.values()):
+            arguments.append(source[argument_start:index])
+            argument_start = index + 1
+        index += 1
+    raise AssertionError("unterminated runBusy call")
+
+
+def _string_literal(value: str) -> str | None:
+    try:
+        parsed = json.loads(value.strip())
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, str) else None
+
+
+def _run_busy_producers(source: str) -> list[tuple[str, str]]:
+    producers: list[tuple[str, str]] = []
+    for match in re.finditer(r"\brunBusy\(", source):
+        line_start = source.rfind("\n", 0, match.start()) + 1
+        line_prefix = source[line_start : match.start()]
+        if re.search(r"\b(?:const|let|var)\s+runBusy\s*=\s*async\s*$", line_prefix):
+            continue
+        arguments = _split_call_arguments(source, match.end())
+        scope = _string_literal(arguments[1]) if len(arguments) > 1 else "system"
+        title = _string_literal(arguments[2]) if len(arguments) > 2 else "Action could not be completed"
+        assert scope is not None, f"runBusy scope must be a string literal: {arguments[1]}"
+        assert title is not None, f"runBusy title must be a string literal: {arguments[2]}"
+        producers.append((scope, title))
+    return producers
+
+
 def test_native_issue_contract_is_typed_bounded_and_deduplicated() -> None:
     for text in (
         "pub enum IssueSeverity",
@@ -447,21 +530,9 @@ def test_issue_code_registry_covers_frontend_and_native_producers() -> None:
         client_code(scope, title)
         for scope, title in re.findall(r'reportError\("([^"]+)", "([^"]+)"', APP)
     }
-    run_busy = (
-        ("library", "Files could not be added"),
-        ("library", "Folder could not be added"),
-        ("drive", "Google Drive could not connect"),
-        ("library", "Library sources could not be rescanned"),
-        ("recovery", "Recovery bundle could not be exported"),
-        ("recovery", "Recovery bundle could not be restored"),
-        ("settings", "Settings could not be saved"),
-        ("processing", "Song retry failed"),
-        ("library", "Library source could not be removed"),
-        ("library", "Compatible preview failed"),
-    )
-    calls = APP.split("runBusy(")[1:]
+    run_busy = _run_busy_producers(APP)
+    assert run_busy
     for scope, title in run_busy:
-        assert any(re.search(rf'"{re.escape(scope)}"\s*,\s*"{re.escape(title)}"', call, re.DOTALL) for call in calls)
         frontend.add(client_code(scope, title))
     assert frontend <= registered
     assert native <= registered
