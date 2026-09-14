@@ -25,7 +25,8 @@ frame. The selected section's exact frame timestamp is shown beside each edge.
 
 **Remove** removes the selected block. The transport has only Play/Pause and source
 frame stepping; section frame buttons sit beside Start and End. Moving an edge by a
-frame immediately auditions the new beginning or ending of that section.
+frame immediately auditions the new beginning or ending of that section. Dragging a
+timeline handle and committing an exact boundary uses the same edge audition.
 
 Invalid time drafts stay visible and block publishing until corrected. Escape in a
 time field discards that edit. Up to 128 non-overlapping sections are supported;

@@ -21,7 +21,7 @@ use std::{
     ffi::OsString,
     fs,
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -47,6 +47,7 @@ use tauri::{
     Emitter, Manager,
     http::{Method, Request, Response, StatusCode, header},
 };
+use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 const MAX_PROTOCOL_RANGE: u64 = 2 * 1024 * 1024;
@@ -1524,11 +1525,19 @@ fn update_library_item(
     };
     let (lyrics_path, owned_lyrics_path) = if lyrics.trim().is_empty() {
         (None, None)
-    } else if existing_lyrics == lyrics && existing_path.as_ref().is_some_and(|path| path.is_file()) {
-        (existing_path, None)
+    } else if existing_lyrics == lyrics {
+        if let Some(path) = existing_path.filter(|path| fs::symlink_metadata(path).is_ok()) {
+            verify_lyrics_snapshot(&path, &lyrics)?;
+            (Some(path), None)
+        } else {
+            let candidate = pasted_lyrics_path(&app, &item_id, &lyrics)?;
+            let existed = fs::symlink_metadata(&candidate).is_ok();
+            let path = write_pasted_lyrics(&app, &item_id, &lyrics)?;
+            (Some(path.clone()), (!existed).then_some(path))
+        }
     } else {
         let candidate = pasted_lyrics_path(&app, &item_id, &lyrics)?;
-        let existed = candidate.exists();
+        let existed = fs::symlink_metadata(&candidate).is_ok();
         let path = write_pasted_lyrics(&app, &item_id, &lyrics)?;
         let owned = (!existed).then_some(path.clone());
         (Some(path), owned)
@@ -1937,20 +1946,52 @@ fn write_pasted_lyrics(
     text: &str,
 ) -> Result<PathBuf, String> {
     let path = pasted_lyrics_path(app, item_id, text)?;
-    if !path.exists() {
-        let temporary = path.with_extension("txt.partial");
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| format!("Unable to create lyric snapshot: {error}"))?;
-        file.write_all(text.as_bytes())
-            .and_then(|()| file.sync_all())
-            .map_err(|error| format!("Unable to write lyric snapshot: {error}"))?;
-        fs::rename(&temporary, &path)
-            .map_err(|error| format!("Unable to publish lyric snapshot: {error}"))?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => verify_lyrics_snapshot(&path, text)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .ok_or_else(|| "Lyric snapshot directory is unavailable".to_string())?;
+            let mut temporary = NamedTempFile::new_in(parent)
+                .map_err(|error| format!("Unable to create lyric snapshot: {error}"))?;
+            temporary
+                .write_all(text.as_bytes())
+                .and_then(|()| temporary.as_file_mut().sync_all())
+                .map_err(|error| format!("Unable to write lyric snapshot: {error}"))?;
+            let published = match temporary.persist_noclobber(&path) {
+                Ok(_) => true,
+                Err(error) if fs::symlink_metadata(&path).is_ok() => {
+                    drop(error);
+                    false
+                }
+                Err(error) => {
+                    return Err(format!("Unable to publish lyric snapshot: {}", error.error));
+                }
+            };
+            if !published {
+                verify_lyrics_snapshot(&path, text)?;
+            }
+        }
+        Err(error) => return Err(format!("Unable to inspect lyric snapshot: {error}")),
     }
     Ok(path)
+}
+
+fn verify_lyrics_snapshot(path: &Path, text: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "Existing lyric snapshot is unavailable".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Existing lyric snapshot is not a regular file".into());
+    }
+    if metadata.len() > MAX_PASTED_LYRIC_BYTES as u64 {
+        return Err("Existing lyric snapshot exceeds its size limit".into());
+    }
+    let existing =
+        fs::read(path).map_err(|_| "Existing lyric snapshot could not be read".to_string())?;
+    if existing != text.as_bytes() {
+        return Err("Existing lyric snapshot does not match the supplied lyrics".into());
+    }
+    Ok(())
 }
 
 ipc_command! {
@@ -2010,12 +2051,15 @@ fn retry_processing_item(
         ItemLocation::LocalMedia { lyrics_path, .. } => lyrics_path.clone(),
         _ => None,
     });
-    let (lyrics_path, transient) = if let Some(path) = existing_lyrics.filter(|path| path.is_file())
-    {
-        (path, None)
-    } else {
-        let path = write_pasted_lyrics(&app, &item_id, &item.lyric_text)?;
-        (path.clone(), Some(path))
+    let (lyrics_path, transient) = match existing_lyrics {
+        Some(path) if fs::symlink_metadata(&path).is_ok() => {
+            verify_lyrics_snapshot(&path, &item.lyric_text)?;
+            (path, None)
+        }
+        _ => {
+            let path = write_pasted_lyrics(&app, &item_id, &item.lyric_text)?;
+            (path.clone(), Some(path))
+        }
     };
     let queued = bind_retry_lyrics_path(item, lyrics_path)?;
     enqueue_item(&app, queued, transient)?;
@@ -2920,14 +2964,14 @@ mod tests {
     use super::{
         bind_retry_lyrics_path, drive_download_task_id, is_supported_original_reference,
         parse_karaoke_presentation, parse_single_range, require_local_delete,
-        validate_presentation_asset_contract,
+        validate_presentation_asset_contract, verify_lyrics_snapshot,
     };
     use crate::catalog::{
         CatalogItem, ItemLocation, ItemStatus, MediaOrigin, ProcessingEvidenceStatus,
         ProcessingTaskEvidence,
     };
     use crate::range_cache::RemoteObject;
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     #[test]
     fn cloud_delete_gate_rejects_before_any_library_side_effect() {
@@ -2981,6 +3025,19 @@ mod tests {
             require_local_delete(&packaged).unwrap_err(),
             "Only unfinished local media can be removed from Library"
         );
+    }
+
+    #[test]
+    fn lyric_snapshot_verification_rejects_tampered_bytes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("lyrics.txt");
+        fs::write(&path, "different exact text").unwrap();
+        assert_eq!(
+            verify_lyrics_snapshot(&path, "supplied exact text").unwrap_err(),
+            "Existing lyric snapshot does not match the supplied lyrics"
+        );
+        fs::write(&path, "supplied exact text").unwrap();
+        assert!(verify_lyrics_snapshot(&path, "supplied exact text").is_ok());
     }
 
     #[test]

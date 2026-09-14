@@ -1,4 +1,8 @@
-use std::{fs, io::Write, path::PathBuf};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -149,12 +153,69 @@ pub fn save(
         .write_all(&encoded)
         .and_then(|()| temporary.as_file().sync_all())
         .map_err(|_| "Preferences could not be written".to_string())?;
-    if path.exists() {
-        fs::remove_file(&path)
-            .map_err(|_| "Existing Preferences could not be replaced".to_string())?;
-    }
-    temporary
-        .persist(&path)
-        .map_err(|_| "Preferences could not be published".to_string())?;
+    publish_replacement(temporary.path(), &path)?;
     snapshot(app)
+}
+
+#[cfg(windows)]
+fn publish_replacement(replacement: &Path, destination: &Path) -> Result<(), String> {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    let wide = |path: &Path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let replacement_wide = wide(replacement);
+    let destination_wide = wide(destination);
+    let replaced = unsafe {
+        ReplaceFileW(
+            destination_wide.as_ptr(),
+            replacement_wide.as_ptr(),
+            ptr::null(),
+            0,
+            ptr::null(),
+            ptr::null(),
+        )
+    };
+    if replaced != 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() != std::io::ErrorKind::NotFound {
+        return Err(format!("Preferences could not be published: {error}"));
+    }
+    fs::rename(replacement, destination)
+        .map_err(|error| format!("Preferences could not be published: {error}"))
+}
+
+#[cfg(not(windows))]
+fn publish_replacement(replacement: &Path, destination: &Path) -> Result<(), String> {
+    fs::rename(replacement, destination)
+        .map_err(|error| format!("Preferences could not be published: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::publish_replacement;
+    use std::fs;
+
+    #[test]
+    fn replacement_keeps_previous_preferences_until_publish_succeeds() {
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = temporary.path().join("preferences.json");
+        let replacement = temporary.path().join("replacement.json");
+        fs::write(&destination, b"old").unwrap();
+        fs::write(&replacement, b"new").unwrap();
+
+        publish_replacement(&replacement, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        assert!(!replacement.exists());
+
+        let missing = temporary.path().join("missing.json");
+        assert!(publish_replacement(&missing, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+    }
 }

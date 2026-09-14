@@ -183,7 +183,7 @@ function SectionTimeline({ preview, sections, duration, selected, pendingStart, 
               aria-label={`Section ${number} ${endpoint === "startMillis" ? "start" : "end"} handle`} aria-valuetext={formatTimecodeMillis(section[endpoint])}
               type="range" min={view.start} max={view.end} step={1} value={Math.max(view.start, Math.min(view.end, section[endpoint]))}
               style={{ visibility: section[endpoint] < view.start || section[endpoint] > view.end ? "hidden" : "visible" }} disabled={busy}
-              onKeyDown={(event) => handleKey(event, endpoint)} onChange={(event) => changeBoundary(endpoint, Number(event.target.value))} />)}
+              onKeyDown={(event) => handleKey(event, endpoint)} onChange={(event) => changeBoundary(endpoint, Number(event.target.value), true, true)} />)}
           </div>;
         })}
         {position >= view.start && position <= view.end && <i className="clip-picker-playhead" style={{ left: percent(position) }} aria-hidden="true" />}
