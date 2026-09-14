@@ -406,6 +406,7 @@ def test_activity_center_has_one_styled_accessible_resolution_flow() -> None:
 def test_copy_diagnostics_exports_bounded_context_from_the_shared_policy() -> None:
     for text in (
         "formatIssueDiagnostics",
+        "formatIssueDetail",
         "selectDiagnosticTasks",
         "MAX_ISSUE_DIAGNOSTIC_TASKS",
         "MAX_ISSUE_DIAGNOSTIC_OUTPUT_LINES",
@@ -415,7 +416,12 @@ def test_copy_diagnostics_exports_bounded_context_from_the_shared_policy() -> No
     ):
         assert text in DIAGNOSTICS or text in APP
     assert "Clip preview requires the verified ffprobe tool" in DIAGNOSTIC_CONTRACT
-    assert "Detail: ${safeDiagnostic(issue.detail)}" in DIAGNOSTICS
+    assert "Detail: ${issueDetail}" in DIAGNOSTICS
+    assert "Raw technical text was withheld for privacy." in DIAGNOSTICS
+    assert "safeIssueContext" in DIAGNOSTICS
+    assert "safeIssueCode" in DIAGNOSTICS
+    assert "<details><summary>Technical details" in APP
+    assert "issue.detail &&" not in APP
     assert "relatedTaskId?: string" in (ROOT / "apps/player/src/issues.ts").read_text(encoding="utf-8")
     assert "relatedTaskId);" in APP
 

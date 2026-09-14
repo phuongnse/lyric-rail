@@ -349,6 +349,19 @@ describe("Activity Center", () => {
     expect(host.querySelectorAll('[role="tab"]')[1].getAttribute("aria-selected")).toBe("true");
   });
 
+  it("shows safe technical context when an Issue has no raw detail", () => {
+    const missingDetail = {
+      ...issue("missing-detail"),
+      code: "system.lyricrail-could-not-refresh",
+      detail: undefined,
+    };
+    act(() => root.render(<Harness tasks={[]} issues={[missingDetail]} initialTab="issues" />));
+    const card = host.querySelector<HTMLElement>('[aria-label="Issue missing-detail, issue"]')!;
+    expect(card.querySelector("summary")?.textContent).toBe("Technical details");
+    expect(card.querySelector("pre")?.textContent).toContain("Issue code: system.lyricrail-could-not-refresh");
+    expect(card.querySelector("pre")?.textContent).toContain("Raw technical text was withheld for privacy.");
+  });
+
   it("expands output under only the selected Issue when task IDs are shared", () => {
     const sharedTask: TaskRecord = {
       ...runningTask,

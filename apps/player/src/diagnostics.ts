@@ -26,6 +26,22 @@ export type IssueDiagnosticTask = {
 const textEncoder = new TextEncoder();
 const MAX_DIAGNOSTIC_FIELD_CHARS = 4_000;
 const SAFE_METADATA = Object.values(contract.safeMetadata).flat();
+const SAFE_ISSUE_CODES = new Set([
+  "processing.models-missing", "processing.runtime-repair-required", "processing.runtime-startup", "processing.job-failed",
+  "drive.unavailable", "runtime.invalid", "remote.invalid",
+  "tasks.task-output-could-not-be-replayed", "system.lyricrail-could-not-refresh", "system.action-failed",
+  "library.package-import-failed", "library.startup-package-import-failed", "library.local-source-scan-failed", "library.library-search-failed",
+  "library.library-item-could-not-be-deleted", "library.edit-video-unavailable", "library.video-changes-could-not-be-saved", "library.library-source-could-not-be-removed", "library.compatible-preview-failed", "library.files-could-not-be-added", "library.folder-could-not-be-added", "library.library-sources-could-not-be-rescanned",
+  "recovery.library-refresh-after-recovery-failed", "recovery.recovery-bundle-could-not-be-exported", "recovery.recovery-bundle-could-not-be-restored",
+  "drive.drive-source-scan-failed", "drive.drive-unavailable", "drive.google-drive-could-not-connect",
+  "view.fullscreen-could-not-be-changed", "lyrics.lyrics-could-not-be-queued", "clip.songs-could-not-be-added",
+  "processing.ai-processing-could-not-start", "processing.song-retry-failed",
+  "playback.song-could-not-be-opened", "playback.playback-could-not-start", "playback.audio-track-could-not-resume", "playback.video-playback-failed", "playback.audio-playback-failed", "player.playback-failed",
+  "settings.settings-location-could-not-be-selected", "settings.settings-could-not-be-saved", "issues.issue-could-not-be-dismissed", "issues.diagnostics-could-not-be-copied",
+  "tasks.could-not-cancel-clip-preparation", "tasks.could-not-cancel-video-preview", "tasks.linked-task-output-could-not-be-opened", "tasks.linked-task-output-is-no-longer-available", "tasks.could-not-cancel-task", "tasks.could-not-pause-task", "tasks.could-not-resume-task", "tasks.task-output-could-not-be-copied",
+]);
+const SAFE_ISSUE_SCOPES = new Set(["system", "tasks", "library", "recovery", "drive", "view", "lyrics", "clip", "playback", "processing", "settings", "issues", "player"]);
+const SAFE_ACTION_KINDS = new Set(["install-models", "retry-item", "reconnect-drive"]);
 
 function compact(value: string | null | undefined, maximum = MAX_DIAGNOSTIC_FIELD_CHARS): string {
   return (value || "unknown")
@@ -63,11 +79,50 @@ function safeIdentifier(value: string | null | undefined, maximum = 180): string
     : contract.withheld;
 }
 
+function safeIssueCode(value: string | null | undefined): string {
+  return value && SAFE_ISSUE_CODES.has(value) ? value : "producer-code-unavailable";
+}
+
+function safeIssueScope(value: string | null | undefined): string {
+  return value && SAFE_ISSUE_SCOPES.has(value) ? value : "unknown-scope";
+}
+
+function safeActionKind(value: string): string {
+  return SAFE_ACTION_KINDS.has(value) ? value : "unknown-action";
+}
+
+function safeReference(value: string | null | undefined): string {
+  return value ? "available" : "none";
+}
+
 function safeContractMetadata(value: string | null | undefined, maximum = MAX_DIAGNOSTIC_FIELD_CHARS): string {
   if (!value) return "unknown";
   const normalized = compact(value, maximum);
   const projected = projectDiagnostic(normalized);
   return projected === contract.withheld ? contract.withheld : projected;
+}
+
+function safeIssueContext(issue: SystemIssue): string[] {
+  const actions = issue.actions.length === 0
+    ? "none"
+    : issue.actions.map((action) => safeActionKind(action.kind)).join(", ");
+  return [
+    "Raw technical text was withheld for privacy.",
+    `Issue code: ${safeIssueCode(issue.code)}`,
+    `Scope: ${safeIssueScope(issue.scope)}`,
+    `Related task: ${safeReference(issue.relatedTaskId)}`,
+    `Available actions: ${actions}`,
+    issue.relatedTaskId
+      ? "Open View output for bounded task diagnostics."
+      : "Use the issue summary and available action to continue.",
+  ];
+}
+
+export function formatIssueDetail(issue: SystemIssue): string {
+  const detail = safeDiagnostic(issue.detail);
+  return detail === contract.withheld || !issue.detail
+    ? safeIssueContext(issue).join("\n")
+    : detail;
 }
 
 export function selectDiagnosticTasks(issue: SystemIssue, tasks: TaskRecord[]): TaskRecord[] {
@@ -148,8 +203,9 @@ export function formatIssueDiagnostics({
   const processing = status?.processing;
   const actions = issue.actions.length === 0
     ? "none"
-    : issue.actions.map((action) => `${action.kind}${action.requiresConfirmation ? " (confirmation required)" : ""}`).join(", ");
+    : issue.actions.map((action) => `${safeActionKind(action.kind)}${action.requiresConfirmation ? " (confirmation required)" : ""}`).join(", ");
   const boundedTasks = tasks.slice(0, MAX_ISSUE_DIAGNOSTIC_TASKS);
+  const issueDetail = safeDiagnostic(issue.detail);
   const lines = [
     "LyricRail diagnostics v1",
     `Captured: ${timestamp(capturedAtMillis)}`,
@@ -158,8 +214,8 @@ export function formatIssueDiagnostics({
     `Vault available: ${availability(status?.vaultAvailable)}`,
     "",
     "Issue",
-    `Code: ${safeIdentifier(issue.code, 120)}`,
-    `Scope: ${safeIdentifier(issue.scope, 80)}`,
+    `Code: ${safeIssueCode(issue.code)}`,
+    `Scope: ${safeIssueScope(issue.scope)}`,
     `Severity: ${safeIdentifier(issue.severity, 40)}`,
     `State: ${safeIdentifier(issue.state, 40)}`,
     `Occurrences: ${numberValue(issue.occurrences)}`,
@@ -167,12 +223,15 @@ export function formatIssueDiagnostics({
     `Updated: ${timestamp(issue.updatedAtMillis)}`,
     `Title: ${safeContractMetadata(issue.title, 240)}`,
     `Summary: ${safeContractMetadata(issue.summary)}`,
-    `Detail: ${safeDiagnostic(issue.detail)}`,
+    `Detail: ${issueDetail}`,
+    ...(!issue.detail || issueDetail === contract.withheld
+      ? safeIssueContext(issue).map((line) => `  ${line}`)
+      : []),
     `Progress: ${numberValue(issue.progressPercent)}%`,
     `Progress message: ${safeDiagnostic(issue.progressMessage)}`,
     `Actions: ${actions}`,
-    `Related item: ${safeIdentifier(issue.relatedItemId)}`,
-    `Related task: ${safeIdentifier(issue.relatedTaskId)}`,
+    `Related item: ${safeReference(issue.relatedItemId)}`,
+    `Related task: ${safeReference(issue.relatedTaskId)}`,
     "",
     "Processing",
     `Runtime available: ${availability(processing?.runtimeAvailable)}`,

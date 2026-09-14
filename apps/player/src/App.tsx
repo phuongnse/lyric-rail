@@ -38,7 +38,7 @@ import {
   latestModelTransferProgress,
   outputStageLabel,
 } from "./modelProgress";
-import { formatIssueDiagnostics, selectDiagnosticTasks } from "./diagnostics";
+import { formatIssueDetail, formatIssueDiagnostics, selectDiagnosticTasks } from "./diagnostics";
 import {
   EMPTY_TASK_STATE,
   applyTaskSnapshot,
@@ -646,7 +646,7 @@ export function ActivityCenter({
               <p>{issue.summary}</p>
               {issue.occurrences > 1 && <span className="issue-occurrences">Occurred {issue.occurrences} times</span>}
               {issue.state === "resolving" && <p className="issue-resolving">{issue.progressMessage || "Resolution is running"}. Realtime output is available here when the resolution has a linked task.</p>}
-              {issue.detail && <details><summary>Technical details</summary><pre>{issue.detail}</pre></details>}
+              <details><summary>Technical details</summary><pre>{formatIssueDetail(issue)}</pre></details>
               <footer>
                 <button onClick={() => onCopyDiagnostics(issue)}>Copy diagnostics</button>
                 {issue.relatedTaskId && <button onClick={() => onOpenIssueTask(issue)}>{outputOpen ? "Hide output" : "View output"}</button>}
@@ -1483,7 +1483,7 @@ function App() {
         try {
           snapshot = await invoke<CatalogSnapshot>("provide_lyrics_text", { itemId: item.id, text: lyrics });
         } catch (reason) {
-          reportError("lyrics", `Lyrics could not be queued for ${section.title}`, reason, undefined, undefined, item.id);
+          reportError("lyrics", "Lyrics could not be queued", reason, undefined, undefined, item.id);
         }
       }
       setCatalog(snapshot); setShownItems(snapshot.items); setQuery("");
@@ -1798,18 +1798,18 @@ function App() {
 
   const cancelActivityTask = (task: TaskRecord) => {
     invoke("cancel_task", { taskId: task.id })
-      .catch((reason) => reportError("tasks", `Could not cancel ${task.title}`, reason, undefined, undefined, task.id));
+      .catch((reason) => reportError("tasks", "Task could not be cancelled", reason, undefined, undefined, task.id));
   };
 
   const pauseActivityTask = (task: TaskRecord) => {
     invoke("pause_task", { taskId: task.id })
-      .catch((reason) => reportError("tasks", `Could not pause ${task.title}`, reason, "This job can only pause at a safe processing boundary.", undefined, task.id));
+      .catch((reason) => reportError("tasks", "Task could not be paused", reason, "This job can only pause at a safe processing boundary.", undefined, task.id));
   };
 
   const resumeActivityTask = (task: TaskRecord) => {
     invoke<CatalogSnapshot>("resume_task", { taskId: task.id })
       .then((snapshot) => { setCatalog(snapshot); setShownItems(snapshot.items); })
-      .catch((reason) => reportError("tasks", `Could not resume ${task.title}`, reason, "Open the originating Library or Settings action for the next step.", undefined, task.id));
+      .catch((reason) => reportError("tasks", "Task could not be resumed", reason, "Open the originating Library or Settings action for the next step.", undefined, task.id));
   };
 
   const copyTaskOutput = () => {

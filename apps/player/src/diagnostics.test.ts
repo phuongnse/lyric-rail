@@ -3,6 +3,7 @@ import cases from "../../../tests/fixtures/diagnostics-v1.json";
 import contract from "../../../src/lyricrail/diagnostic_contract.json";
 import {
   formatIssueDiagnostics,
+  formatIssueDetail,
   MAX_ISSUE_DIAGNOSTIC_BYTES,
   projectDiagnostic,
   selectDiagnosticTasks,
@@ -90,10 +91,61 @@ describe("closed diagnostic contract", () => {
     expect(report).toContain("Pending jobs: 2");
     expect(report).toContain("Title: Files could not be added");
     expect(report).toContain("Summary: The selected media could not be prepared.");
+    expect(report).toContain("Status: failed");
+    expect(report).toContain("Progress: unknown% (stage unknown%)");
+    expect(report).toContain("Output retained: 1 line(s); truncated: no");
     expect(report).toContain("Clip preview requires the verified ffprobe tool");
     expect(report).toContain(contract.withheld);
     expect(report).not.toContain("TOPSECRET");
     expect(new TextEncoder().encode(report).byteLength).toBeLessThanOrEqual(MAX_ISSUE_DIAGNOSTIC_BYTES);
+  });
+
+  it("keeps safe issue context when raw technical detail is withheld", () => {
+    const detail = formatIssueDetail({ ...issue, detail: "C:\\TOPSECRET\\job.log" });
+    expect(detail).toContain("Raw technical text was withheld for privacy.");
+    expect(detail).toContain("Issue code: library.files-could-not-be-added");
+    expect(detail).toContain("Available actions: none");
+    expect(detail).not.toContain("TOPSECRET");
+  });
+
+  it("fails closed for identifier-shaped secrets and keeps Activity/copy context aligned", () => {
+    const unsafe = {
+      ...issue,
+      code: "library.action-failed-TOPSECRET",
+      scope: "TOPSECRET",
+      relatedTaskId: "TOPSECRET",
+      detail: undefined,
+    };
+    const detail = formatIssueDetail(unsafe);
+    const report = formatIssueDiagnostics({ issue: unsafe });
+    expect(detail).toContain("Issue code: producer-code-unavailable");
+    expect(detail).toContain("Scope: unknown-scope");
+    expect(detail).toContain("Related task: available");
+    for (const line of detail.split("\n")) expect(report).toContain(line);
+    expect(report).not.toContain("TOPSECRET");
+  });
+
+  it("keeps allowlisted issue detail unchanged", () => {
+    const detail = "Clip preview requires the verified ffprobe tool";
+    expect(formatIssueDetail({ ...issue, detail })).toBe(detail);
+  });
+
+  it("projects structured producer progress detail", () => {
+    const detail = JSON.stringify({
+      kind: contract.progressKind,
+      phase: "downloading",
+      progressPercent: 25,
+      completedBytes: 3,
+      totalBytes: 12,
+    });
+    expect(formatIssueDetail({ ...issue, detail })).toBe(JSON.stringify({
+      kind: contract.progressKind,
+      phase: "downloading",
+      message: contract.phases.downloading,
+      progressPercent: 25,
+      completedBytes: 3,
+      totalBytes: 12,
+    }));
   });
 
   it("projects untrusted issue and task metadata instead of copying it verbatim", () => {
