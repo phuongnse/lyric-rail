@@ -17,6 +17,20 @@ export const PRODUCER_ISSUE_SCOPES = ["system", "tasks", "library", "recovery", 
 
 export const SAFE_ISSUE_ACTION_KINDS = ["install-models", "retry-item", "reconnect-drive"] as const;
 
+const PRODUCER_ISSUE_CODE_SET: ReadonlySet<string> = new Set(PRODUCER_ISSUE_CODES);
+
+export function isProducerIssueCode(value: string): boolean {
+  return PRODUCER_ISSUE_CODE_SET.has(value);
+}
+
+export function isProducerIssueScope(value: string): boolean {
+  return PRODUCER_ISSUE_SCOPES.includes(value as (typeof PRODUCER_ISSUE_SCOPES)[number]);
+}
+
+export function isSafeIssueActionKind(value: string): boolean {
+  return SAFE_ISSUE_ACTION_KINDS.includes(value as (typeof SAFE_ISSUE_ACTION_KINDS)[number]);
+}
+
 export function clientIssueCode(scope: string, title: string): string {
   const kind = title
     .normalize("NFKD")
@@ -24,5 +38,6 @@ export function clientIssueCode(scope: string, title: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 64) || "action-failed";
-  return `${scope}.${kind}`;
+  const candidate = `${scope}.${kind}`;
+  return isProducerIssueCode(candidate) ? candidate : "system.action-failed";
 }

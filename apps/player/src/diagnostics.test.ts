@@ -150,6 +150,7 @@ describe("closed diagnostic contract", () => {
         .toContain(`Available actions: ${kind}`);
     }
     expect(PRODUCER_ISSUE_CODES).toContain(clientIssueCode("system", "Action could not be completed"));
+    expect(clientIssue("tasks", "Unexpected TOPSECRET title", "detail").code).toBe("system.action-failed");
   });
 
   it("accepts every producer-owned opaque reference form", () => {

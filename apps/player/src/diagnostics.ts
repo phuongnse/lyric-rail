@@ -1,5 +1,5 @@
 import contract from "../../../src/lyricrail/diagnostic_contract.json";
-import { PRODUCER_ISSUE_CODES, PRODUCER_ISSUE_SCOPES, SAFE_ISSUE_ACTION_KINDS } from "./issueCodes";
+import { isProducerIssueCode, isProducerIssueScope, isSafeIssueActionKind } from "./issueCodes";
 import type { SystemIssue } from "./issues";
 import type { TaskOutputLine, TaskRecord } from "./tasks";
 
@@ -27,9 +27,6 @@ export type IssueDiagnosticTask = {
 const textEncoder = new TextEncoder();
 const MAX_DIAGNOSTIC_FIELD_CHARS = 4_000;
 const SAFE_METADATA = Object.values(contract.safeMetadata).flat();
-const SAFE_ISSUE_CODES: ReadonlySet<string> = new Set(PRODUCER_ISSUE_CODES);
-const SAFE_ISSUE_SCOPES: ReadonlySet<string> = new Set(PRODUCER_ISSUE_SCOPES);
-const SAFE_ACTION_KINDS: ReadonlySet<string> = new Set(SAFE_ISSUE_ACTION_KINDS);
 const SAFE_REFERENCE = /^(?:clip-preparation|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|(?:local|drive-download)-[0-9a-f]{64}|(?:local-scan|folder-scan|drive-connect|drive-rescan)-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 
 function compact(value: string | null | undefined, maximum = MAX_DIAGNOSTIC_FIELD_CHARS): string {
@@ -69,15 +66,15 @@ function safeIdentifier(value: string | null | undefined, maximum = 180): string
 }
 
 function safeIssueCode(value: string | null | undefined): string {
-  return value && SAFE_ISSUE_CODES.has(value) ? value : "producer-code-unavailable";
+  return value && isProducerIssueCode(value) ? value : "producer-code-unavailable";
 }
 
 function safeIssueScope(value: string | null | undefined): string {
-  return value && SAFE_ISSUE_SCOPES.has(value) ? value : "unknown-scope";
+  return value && isProducerIssueScope(value) ? value : "unknown-scope";
 }
 
 function safeActionKind(value: string): string {
-  return SAFE_ACTION_KINDS.has(value) ? value : "unknown-action";
+  return isSafeIssueActionKind(value) ? value : "unknown-action";
 }
 
 function safeReference(value: string | null | undefined): string {

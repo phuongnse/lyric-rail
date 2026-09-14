@@ -31,6 +31,7 @@ MODEL_SCRIPT = (ROOT / "scripts/install_models.py").read_text(encoding="utf-8")
 APP = (ROOT / "apps/player/src/App.tsx").read_text(encoding="utf-8")
 DIAGNOSTICS = (ROOT / "apps/player/src/diagnostics.ts").read_text(encoding="utf-8")
 ISSUE_CODES = (ROOT / "apps/player/src/issueCodes.ts").read_text(encoding="utf-8")
+ISSUES_TS = (ROOT / "apps/player/src/issues.ts").read_text(encoding="utf-8")
 DIAGNOSTIC_CONTRACT = (ROOT / "src/lyricrail/diagnostic_contract.json").read_text(encoding="utf-8")
 MODEL_PROVENANCE = (ROOT / "src/lyricrail/model_provenance.py").read_text(encoding="utf-8")
 MODEL_CACHE_POLICY = (ROOT / "src/lyricrail/model_cache_policy.json").read_text(encoding="utf-8")
@@ -423,7 +424,8 @@ def test_copy_diagnostics_exports_bounded_context_from_the_shared_policy() -> No
     assert "Raw technical text was withheld for privacy." in DIAGNOSTICS
     assert "safeIssueContext" in DIAGNOSTICS
     assert "safeIssueCode" in DIAGNOSTICS
-    assert "PRODUCER_ISSUE_CODES" in DIAGNOSTICS
+    assert "PRODUCER_ISSUE_CODES" in ISSUE_CODES
+    assert "clientIssueCode(scope, title)" in ISSUES_TS
     assert "<details><summary>Technical details" in APP
     assert "issue.detail &&" not in APP
     assert "relatedTaskId?: string" in (ROOT / "apps/player/src/issues.ts").read_text(encoding="utf-8")
@@ -445,7 +447,22 @@ def test_issue_code_registry_covers_frontend_and_native_producers() -> None:
         client_code(scope, title)
         for scope, title in re.findall(r'reportError\("([^"]+)", "([^"]+)"', APP)
     }
-    frontend.add(client_code("system", "Action could not be completed"))
+    run_busy = (
+        ("library", "Files could not be added"),
+        ("library", "Folder could not be added"),
+        ("drive", "Google Drive could not connect"),
+        ("library", "Library sources could not be rescanned"),
+        ("recovery", "Recovery bundle could not be exported"),
+        ("recovery", "Recovery bundle could not be restored"),
+        ("settings", "Settings could not be saved"),
+        ("processing", "Song retry failed"),
+        ("library", "Library source could not be removed"),
+        ("library", "Compatible preview failed"),
+    )
+    calls = APP.split("runBusy(")[1:]
+    for scope, title in run_busy:
+        assert any(re.search(rf'"{re.escape(scope)}"\s*,\s*"{re.escape(title)}"', call, re.DOTALL) for call in calls)
+        frontend.add(client_code(scope, title))
     assert frontend <= registered
     assert native <= registered
 
