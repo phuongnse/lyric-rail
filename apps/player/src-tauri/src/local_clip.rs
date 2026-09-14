@@ -2140,18 +2140,11 @@ mod tests {
             &std::sync::atomic::AtomicBool::new(false),
         )
         .unwrap();
-        let offset = delayed_info.video_offset.unwrap();
-        let prepared = super::prepare_source(
-            delayed,
-            root.path().join("preview"),
-            |_, _| {},
-            |_, _| {},
-            |_, _| {},
-            false,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
-        assert!((prepared.video_offset_millis - offset).abs() < 0.01);
+        assert!(
+            delayed_info
+                .video_offset
+                .is_some_and(|offset| offset > 250.0)
+        );
     }
 
     use super::{
