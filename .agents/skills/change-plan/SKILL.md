@@ -33,6 +33,16 @@ exploratory work may use suitable checks or contextual review. These are default
 preserve consumer-mandated testing policies. An obvious existing verification path
 needs no repeated rationale or additional record.
 
+When planning a process adoption change, keep the project's baseline
+`requiredProfiles` in the contract; do not attempt to omit them. Classify the
+adoption boundary in the `approach`:
+1. guidance-only/managed-skill update: plan adoption integrity checks (`processctl adoption check`, hash lock, doctor) and publication metadata;
+2. process runtime, dependency, or schema migration: plan adoption integrity plus verification of affected runtime boundaries;
+3. mixed adoption with consumer product source or policy edits: plan full normal consumer-required verification profiles;
+4. incomplete or unknown impact: plan the complete baseline verification path without waiver.
+Where prior passing profile evidence is valid and consumer source is unchanged, plan
+continuation verification via `processctl change verify --remaining`.
+
 Read **production-engineering** and add one `productionEngineering` assessment for
 each canonical invariant in its defined order. Decide applicability from the stated
 trigger, give a concrete rationale, and bind every applicable invariant to the work
