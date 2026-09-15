@@ -52,8 +52,15 @@ When the phase is `review-pending`, resume the existing assignment; do not run
 `reviewAssignment`, including the assigned reviewer, checkpoint, and
 `reportSchemaVersion`. Continue with the assigned independent actor/context and the
 existing report path, `.process/runs/ID/review-CYCLE.json`. If that reviewer is
-unavailable, report the pending assignment as a blocker; never impersonate its
-identity or create a replacement assignment from another context.
+unavailable, use this authoritative decision table:
+
+| Situation | Condition | Required action | Prohibited action |
+| --- | --- | --- | --- |
+| 1. Reachable valid reviewer | Assigned reviewer session is active and reachable | Resume the assigned session using the existing assignment | Do not start a new reviewer or alter identities |
+| 2. Initial proven reused context | Core proves cross-change context conflict on unsubmitted initial assignment | Use `processctl change review replace-reused --change-id ID --actor NEW --context NEW` | Do not replace if valid, or if a review report exists or was submitted |
+| 3. Unsubmitted reviewer unreachable | Initial assignment is valid, but native reviewer session is unrecoverable | Leave change in `review-pending`; report missing reviewer handoff to owner | Never forge reviewer signature, impersonate, or manufacture replacement |
+| 4. Correction reviewer unreachable | Previous review submitted (`changes-requested`), but original reviewer is unreachable | Leave change in `review-pending`; report limitation to owner under existing rules | Never substitute a different reviewer for correction rounds |
+| 5. Native session unverifiable | Host cannot verify independent dispatch, clean context, or model/effort settings | Halt before assignment or submission; report missing verification | Do not proceed with unverified or inherited context |
 
 The core rejects an agent context recorded in another accepted change in this Git
 repository or its registered worktrees. It reads canonical run history with bounded
@@ -143,7 +150,14 @@ report classifies `processImprovement` as `none`, `consumer-specific`, or
 `shared-process` and gives a concrete rationale. Consumer-specific behavior stays in
 the consumer. For `shared-process`, keep the assignment `review-pending` and route the
 candidate through **process-improve**. Submit only after an existing or owner-authorized
-issue supplies the stable HTTPS `recordUrl`; the review itself remains read-only.
+issue supplies the stable HTTPS `recordUrl` (e.g. `https://github.com/phuongnse/engineering-process/issues/NUM`).
+Draft issue files, search queries, or submission form URLs cannot serve as `recordUrl`.
+If no issue URL is available yet, the review truthfully remains `review-pending`
+awaiting owner issue creation; missing GitHub tools or CLI access does not waive the
+durable record requirement. The review itself remains read-only.
+
+For process adoption changes, reviewers assess the candidate against the four bounded cases:
+1) guidance-only update; 2) runtime, dependency, or schema migration; 3) mixed adoption with product source changes; 4) unknown impact. Verify adoption integrity (`processctl adoption check`, hash lock, doctor) and compatibility without requiring the reviewer to re-review the upstream producer's entire source implementation. Verify that required profiles are satisfied through valid passing reports or valid reuse, with no omitted baseline profiles.
 
 Read the consumer readiness result and repository rules. Check the complete diff for
 an affected enforced capability omitted from the contract, weakened evidence, a pack
