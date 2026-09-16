@@ -54,10 +54,17 @@ reasoned scope decision, not a waiver for a known violation.
 
 During implementation, follow the required structure for every applicable invariant
 and put objective evidence into consumer-owned verification commands. Prefer an
-authoritative signal and positive structure. Never approximate open-world meaning
-with a keyword, identifier, filename, diagnostic-text, or exception vocabulary.
-A literal mapping remains appropriate when an owned, versioned protocol defines the
-complete domain, such as a state machine or schema enum.
+authoritative signal and positive structure. Address structural root causes rather
+than local symptom-patching workarounds. Never approximate open-world meaning
+with a keyword, identifier, filename, diagnostic-text, environment-variable, or
+exception vocabulary. If an external or ambient host factor is volatile and outside
+the repository's managed authority boundary, decouple it from deterministic decision
+and evidence logic entirely instead of attempting to filter it with blacklists or
+whitelists. Verification checks must demonstrate invariant structural boundaries or
+behavioral invariance across unmanaged variance, rather than asserting the absence
+or presence of specific local tokens, identifier names, or incident-specific strings.
+A literal mapping remains appropriate only when an owned, versioned protocol defines
+the complete domain, such as a state machine or schema enum.
 
 Verification proves only the deterministic properties exercised by its exact
 commands on the unchanged candidate. It must not claim to infer architecture,

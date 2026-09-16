@@ -15,8 +15,15 @@ criteria and inspected consumer code: responsibility and state ownership,
 collaboration contracts, reusable structures, and actual sources of variation.
 Explain how the chosen structure helps trace the behavior and contains a concrete
 maintenance change, accounting for indirection and coupling. Bind needed design work
-to existing work-item outcomes. Keep reasoning proportional; retaining a clear
-existing structure is a valid choice.
+to existing work-item outcomes. Trace the causal chain from observed symptoms to
+underlying structural defects; plan root-cause corrections rather than local
+symptom-patching workarounds. Explicitly reject forbidden workarounds: do not
+approximate open-world meaning with heuristic token lists, do not introduce
+special-case branches for unmanaged callers or tools, do not mask errors or add
+silent fallbacks, and do not leak ambient host state into deterministic authority
+boundaries. Decouple volatile external state from core decision logic rather than
+attempting to filter it. Keep reasoning proportional; retaining a clear existing
+structure is a valid choice.
 
 Identify project knowledge this change would make misleading, incomplete, or obsolete,
 and concrete information gaps obstructing the accepted work. Plan only the necessary

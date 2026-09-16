@@ -15,6 +15,18 @@ consumer. Promote only the reusable invariant, and publish changed pack requirem
 under a new immutable pack version; never mutate a version already selected by a
 consumer or make process adoption depend on upgrading that pack.
 
+## Automated finish incident intake
+
+Before `change finish` writes the completion receipt, the process collects structured lifecycle incidents across a closed taxonomy:
+1. `evidence-integrity`: verification reports invalidated due to input digest mismatch or repeated verification runs;
+2. `execution-boundary`: check timeouts, output overflows, terminated child processes, or stream failures;
+3. `governance-thrashing`: excessive correction cycles (cycle >= 2) or reviewer context replacement;
+4. `invariant-violation`: production invariant violated in review;
+5. `publication-boundary`: branch, commit subject, or range preflight failure;
+6. `explicit-review-signal`: reviewer-classified `shared-process`.
+
+Incidents are deduplicated against the tracker using the stable title key across open and closed states. Matches are reused; missing issues are created automatically under a finite budget (default at most 1 issue per key, at most 3 issues per finish run). A recursion breaker prevents process-producer changes from filing recursive self-improvement issues. All results are recorded in lifecycle history as `created`, `reused`, `suppressed`, or `failed`.
+
 ## Consumer issue handoff
 
 From a consumer-only checkout, first fix or safely block the current consumer change

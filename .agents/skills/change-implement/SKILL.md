@@ -14,6 +14,10 @@ before its first edit. During an active cycle the command appends that participa
 without starting another cycle; review checks all registered participants.
 
 Implement only the current plan and keep consumer-owned policy in the consumer.
+Address the structural root cause identified in the plan rather than applying
+local symptom-patching workarounds. Do not approximate open-world meaning with
+heuristic token lists, special-case branches for callers, or error masking; decouple
+unmanaged ambient state from authority boundaries.
 For a deterministic defect, add focused regression evidence that distinguishes the
 reported faulty behavior from the correction. When a known-faulty state is safely
 available, demonstrate that distinction; no proof of test-authoring or execution

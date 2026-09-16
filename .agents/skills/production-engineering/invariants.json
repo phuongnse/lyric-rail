@@ -7,8 +7,8 @@
       "title": "Authoritative structure",
       "trigger": "The change classifies, filters, authorizes, or otherwise decides over values whose complete vocabulary is not fixed by an owned protocol.",
       "requiredStructure": "Derive the decision from an authoritative typed value, explicit state, provider result, or positive protocol grammar. Literal tables and pattern sets are valid only when the owning contract closes and versions the domain.",
-      "prohibitedFailure": "Do not infer open-world meaning from partial keywords, names, paths, messages, or an expanding exception list.",
-      "evidence": "Exercise valid previously unseen values, invalid structured states, and the authoritative boundary that makes the decision."
+      "prohibitedFailure": "Do not infer open-world meaning from partial keywords, names, paths, messages, environment-variable prefixes, or expanding exception lists / whitelists / blacklists. Decouple unmanaged volatile host state from authority boundaries rather than attempting to filter it.",
+      "evidence": "Exercise valid previously unseen values, invalid structured states, and the authoritative boundary that makes the decision. Verification must demonstrate invariant structural boundaries or behavioral invariance across unmanaged variance, not local keyword or identifier presence."
     },
     {
       "id": "single-policy-authority",
