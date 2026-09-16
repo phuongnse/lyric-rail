@@ -34,7 +34,7 @@ when authorized readers can access it.
 Use a stable title key such as
 `[consumer-process][CONSUMER][PROCESS-VERSION][INVARIANT]`. Search before creating:
 
-    gh issue list --repo phuongnse/engineering-process --state open \
+    gh issue list --repo phuongnse/engineering-process --state all \
       --search 'STABLE-KEY in:title'
 
 If an issue already owns the invariant, link it in the consumer report; add a
@@ -45,19 +45,34 @@ to the owner. Open it only after explicit authorization:
       --title 'STABLE-KEY concise summary' \
       --body-file .process/runs/CHANGE_ID/process-improvement-issue.md
 
-When this handoff came from a pending schema-version 7 review, return the existing or
+When this handoff comes from a pending schema-version 7 review, return the existing or
 newly owner-authorized issue's stable HTTPS URL to that review. It remains
 `review-pending`, and a `shared-process` disposition cannot submit without that
-`recordUrl`.
+`recordUrl`. Resolve the issue through one of three explicit paths:
 
-Do not run issue creation from consumer CI, reuse a consumer or Renovate write token,
-or treat missing GitHub access as a blocker. Without authorized `gh` access, return
-the draft, the open-issue search URL containing the complete stable key, and then the
-`Consumer process improvement` issue-form URL. The owner must search and reuse an
+1. **Existing issue reuse**: Search for the complete stable key `STABLE-KEY`. If an
+   open or closed issue already owns the invariant, link its canonical HTTPS `recordUrl`
+   in the review disposition. Do not create duplicate issues.
+2. **Authorized creation**: When no matching issue exists and creation is authorized
+   by the owner, create it via `gh issue create` or the `Consumer process improvement`
+   web form using the exact stable title key. Once created, record the resulting
+   permanent HTTPS issue URL (`https://.../issues/NUM`) in `recordUrl`.
+3. **Missing authorization or access (Awaiting URL)**: Without authorized `gh` access
+   or an existing issue, return the prepared draft body, the open-issue search URL containing the complete stable key, and then the
+   `Consumer process improvement` issue-form URL. The review remains `review-pending`
+   awaiting owner creation. The search URL must include all issue states. Draft files,
+   search URLs, or form links must never be
+   submitted as `recordUrl`. Missing GitHub tooling does not waive the schema
+   requirement; report truthfully that the change is waiting for owner issue creation
+   while other work may proceed.
+
+The owner must search and reuse an
 existing issue before manual submission, copy the same stable key into the editable
 issue title, and authorize any comment. A generic form title is not a deduplication
 key.
-An issue is asynchronous evidence, not permission to change the process or a reason
+
+Do not run issue creation from consumer CI, and never reuse a consumer or Renovate write
+token. An issue is asynchronous evidence, not permission to change the process or a reason
 to wait for a new release.
 
 Find the smallest reusable correction. Prefer, in order:
