@@ -121,11 +121,22 @@ length, formatting, and resolving links do not establish semantic usefulness or 
 Assess whether material test expectations follow the accepted contract, important
 claimed risks are actually exercised, and the execution boundary could detect the
 claimed failure. Reject assertions overfitted to implementation details when they do
-not protect observable behavior. Findings identify an accepted behavior or applicable
-contract and a concrete consequence; tests must not introduce new product behavior.
-Test counts, coverage percentages, or green profiles alone do not establish adequacy.
-No newly added test is required when existing evidence protects the behavior or an
-automated behavioral check is not meaningful; preserve consumer-mandated policies.
+not protect observable behavior. Specifically reject verification checks that merely
+assert the absence or presence of ad-hoc identifier names, keyword tokens, or
+incident-specific markers instead of verifying invariant structural boundaries or
+behavioral invariance across unmanaged inputs. Findings identify an accepted behavior
+or applicable contract and a concrete consequence; tests must not introduce new product
+behavior. Test counts, coverage percentages, or green profiles alone do not establish
+adequacy. No newly added test is required when existing evidence protects the behavior
+or an automated behavioral check is not meaningful; preserve consumer-mandated policies.
+Ensure the candidate implementation remains strictly agent-neutral and does not
+introduce hardcoded AI assistant harness names or vendor brand couplings into
+runtime logic or consumer boundaries. Reject symptom-patching workarounds: verify
+that the implementation addresses structural root causes rather than patching symptoms.
+Flag as a blocking finding any solution that relies on ad-hoc heuristic token filters,
+keyword blacklists/whitelists to approximate open-world meaning, special-case branches
+for unmanaged external callers or tools, silent error masking, or leaking ambient host
+state into deterministic authority boundaries.
 
 Read **production-engineering** and independently reassess every canonical invariant.
 Use the report's `productionEngineering` entries to record `satisfied`,
