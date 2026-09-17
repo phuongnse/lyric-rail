@@ -74,7 +74,7 @@ jobs:
         run: processctl adoption check --project-root . --requirements-lock requirements/process.txt
       - name: Run governed Python profile
         run: |
-          processctl doctor --project-root . --profile python
+          processctl doctor --project-root .
           processctl verify --project-root . --profile python
 
   frontend:
@@ -105,7 +105,7 @@ jobs:
       - run: npm ci
       - name: Run governed frontend profile
         run: |
-          processctl doctor --project-root . --profile frontend
+          processctl doctor --project-root .
           processctl verify --project-root . --profile frontend
 
   rust:
@@ -154,11 +154,11 @@ jobs:
       - name: Run governed Rust profile
         if: runner.os != 'Windows'
         run: |
-          processctl doctor --project-root . --profile rust
+          processctl doctor --project-root .
           processctl verify --project-root . --profile rust
-      - name: Validate Windows Rust environment (process 0.5.1 containment bridge)
+      - name: Validate Windows Rust environment
         if: runner.os == 'Windows'
-        run: processctl doctor --project-root . --profile rust
+        run: processctl doctor --project-root .
       - name: Run Windows Rust formatting gate
         if: runner.os == 'Windows'
         run: cargo fmt --all --check
@@ -200,5 +200,5 @@ jobs:
           cargo install cargo-fuzz --version 0.13.2 --locked
       - name: Run governed security profile
         run: |
-          processctl doctor --project-root . --profile security
+          processctl doctor --project-root .
           processctl verify --project-root . --profile security

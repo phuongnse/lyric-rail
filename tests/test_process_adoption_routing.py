@@ -62,8 +62,8 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
     assert "cargo install cargo-audit --version 0.22.2 --locked" in workflow
     assert "if: runner.os != 'Windows'" in workflow
     windows_gates = {
-        "Validate Windows Rust environment (process 0.5.1 containment bridge)": (
-            "processctl doctor --project-root . --profile rust",
+    "Validate Windows Rust environment": (
+        "processctl doctor --project-root .",
             2,
         ),
         "Run Windows Rust formatting gate": ("cargo fmt --all --check", 1),
