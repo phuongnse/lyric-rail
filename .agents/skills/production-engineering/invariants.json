@@ -29,10 +29,10 @@
     {
       "id": "contractual-evolution",
       "title": "Contractual evolution",
-      "trigger": "The change alters a released, persisted, externally consumed, or independently versioned format, API, CLI, package contract, protocol, schema, platform promise, migration, or recovery path.",
-      "requiredStructure": "State compatibility and migration behavior explicitly. Version immutable contracts, preserve supported readers and writers, or declare and verify an intentional breaking boundary and recovery path.",
-      "prohibitedFailure": "Do not mutate a released contract implicitly, rely on an undocumented migration, or claim compatibility from current-version tests alone.",
-      "evidence": "Exercise supported old and new fixtures, installed artifacts, failure and recovery behavior, and every claimed platform or compatibility boundary."
+      "trigger": "The change alters a released, persisted, externally consumed, or independently versioned format, API, CLI, package contract, protocol, schema, platform promise, or recovery path.",
+      "requiredStructure": "State the current contract version, direct breaking boundary, consumer regeneration action, and recovery path explicitly. Preserve supported readers and writers only when the accepted policy requires them; otherwise reject superseded inputs.",
+      "prohibitedFailure": "Do not mutate a released contract implicitly, rely on an undocumented conversion, or claim cross-release compatibility from current-version tests alone.",
+      "evidence": "Exercise the current fixtures and installed artifacts, direct rejection and recovery behavior, and every claimed platform or compatibility boundary."
     },
     {
       "id": "evidence-bound-assurance",

@@ -24,8 +24,8 @@ unsatisfied required profiles:
 
 `--remaining` reuses only a complete passed whole-profile report whose candidate,
 accepted contract and plan, consumer project policy, process authority, runtime and
-bounded child environment all match. It records reuse as a lifecycle event without
-pretending that a command ran again. Missing or legacy input identity is unknown and
+  bounded child environment all match. It records reuse as a lifecycle event without
+  pretending that a command ran again. Missing input identity is unknown and
 runs again. Optional configured profiles not selected by the accepted contract are
 reported as inapplicable; a required profile missing from the current policy is
 blocked. This path never deduplicates check positions or equal check IDs.
@@ -53,20 +53,20 @@ policy:
     processctl change explain --change-id ID --impact
     processctl change verify --change-id ID --affected --affected-profile development
 
-The policy lives in the consumer project configuration as `impactProfiles`. Version 1
-declares independently executable units, exact argument-array commands, and normalized
-path patterns for feedback. A version 2 policy may additionally name required
-`finalProfiles`; those profiles explicitly assert that their selected units are
-complete final assurance, and each must contain an explicit `scope: "global"` unit
-whose paths include the universal `**` pattern for cross-cutting reach. A unit with
+The policy lives in the consumer project configuration as one current version-1
+`impactProfiles` definition. It declares independently executable units, exact
+argument-array commands, and normalized path patterns for feedback. It may additionally
+name required `finalProfiles`; those profiles explicitly assert that their selected
+units are complete final assurance, and each must contain an explicit `scope: "global"`
+unit whose paths include the universal `**` pattern for cross-cutting reach. A unit with
 `scope: "global"` is a deliberate global rule only when that universal pattern is
 declared; narrower patterns never cover unrelated paths. The process computes paths
 from the pinned
 comparison base through the current candidate and selects every matching unit in
 declared order.
 
-For a version 1 policy, affected execution remains feedback-only. For an opted-in
-version 2 final profile, `change verify --remaining` executes the resolved units as
+Affected execution remains feedback-only. When the current policy declares a final
+profile, `change verify --remaining` executes the resolved units as
 `impact-assurance` evidence, records the selection identity in the lifecycle report
 and receipt, and lets review/finish consume that evidence. An unresolved final
 selection blocks remaining verification; it never silently falls back to a partial
@@ -85,9 +85,9 @@ satisfy required profiles proportionally. First verify adoption integrity
 (`processctl adoption check`, hash lock, doctor). When consumer product sources are
 unchanged and prior passing profile reports match the current candidate and environment,
 `--remaining` reuses valid reports without rerunning unaffected checks, and executes
-any unsatisfied profiles. Impact feedback, final impact assurance and whole-profile
+any unsatisfied profiles. The current impact policy, final impact assurance, and whole-profile
 reuse are separate mechanisms: an unresolved feedback selection blocks affected
-execution, an unresolved final opt-in blocks remaining verification, while an owner
+execution, an unresolved final selection blocks remaining verification, and an owner
 or release workflow may intentionally request the explicit full profile.
 
 Commands are exact argument arrays with timeouts. Do not substitute a different tool
@@ -121,7 +121,7 @@ approval. Entirely custom formats use consumer-owned template and validator comm
 The contract must already include conditional profiles required by affected enforced
 capabilities. `--remaining` may select only the accepted contract's requiredProfiles;
 it does not infer reuse from branch names, labels, filenames, commands or diagnostics.
-The separate `--affected` path uses only the explicit versioned `impactProfiles`
+The separate `--affected` path uses only the explicit current `impactProfiles`
 policy; it does not guess missing coverage from filenames. do not run every planned
 production gate for an unrelated change, and do not treat a passing baseline profile
 as evidence for a planned capability whose gap remains open. A readiness promotion

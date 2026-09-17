@@ -14,8 +14,8 @@ Use a clear consumer-owned reading entry point to locate the project knowledge n
 for this work. Reuse coherent existing sources; consumers choose their organization
 and document types, without placeholders for irrelevant material. Where sources could
 conflict, establish which is authoritative and which is current or superseded. A
-missing entry point or necessary explanation calls for a focused repair, not a broad
-documentation migration.
+  missing entry point or necessary explanation calls for a focused repair, not a broad
+  documentation rewrite.
 
 When the work produces an issue record, PR description, release notes or an automation name, inspect the consumer's
 selected artifact standard and existing publication checks. The consumer may override
@@ -56,4 +56,4 @@ If `.process/project.json` opts in with `lifecycle.publication.required: true`, 
 also runs the existing read-only publication branch validator against the current
 checkout branch before creating `.process/runs/ID`. A rejected branch leaves no new
 run state. The branch convention remains consumer-owned; the opt-in only makes the
-consumer's existing publication compatibility rule a lifecycle preflight.
+  consumer's existing publication rule a lifecycle preflight.
