@@ -40,7 +40,7 @@ role. The packaged automation-name standard supplies a default that consumers ma
 override. Consumer bootstrap and configuration code must apply and verify the same
 selected convention, including provider-returned names before subsequent side effects.
 Provider limits and authenticated identity remain consumer-owned checks; a conforming
-name is not evidence of authority. Treat a live rename as an explicit consumer migration.
+  name is not evidence of authority. Treat a live rename as an explicit consumer configuration change.
 
 Assess these outcomes through the existing accepted criteria. They do not add entries
 to the canonical invariant assessments or expand an in-flight contract.

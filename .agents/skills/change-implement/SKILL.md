@@ -18,6 +18,11 @@ Address the structural root cause identified in the plan rather than applying
 local symptom-patching workarounds. Do not approximate open-world meaning with
 heuristic token lists, special-case branches for callers, or error masking; decouple
 unmanaged ambient state from authority boundaries.
+Keep the implementation inside the plan's literal affected-path boundaries. Do not
+make an unplanned path appear covered by widening a directory merely to satisfy the
+runtime scope check; if the mechanism requires a different boundary, stop and ask the
+owner to supersede the contract or plan. Re-read the causal chain before editing and
+make the changed boundary capable of falsifying the reported faulty behavior.
 For a deterministic defect, add focused regression evidence that distinguishes the
 reported faulty behavior from the correction. When a known-faulty state is safely
 available, demonstrate that distinction; no proof of test-authoring or execution

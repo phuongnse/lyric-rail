@@ -11,7 +11,7 @@ Producer/intermediate PR: Refs ISSUE. Final verified consumer adoption only: Clo
 
 - Source: pending <!-- Accepted issue or request URL. -->
 - Risk: pending <!-- Consumer-assessed risk. -->
-- Compatibility: pending <!-- Compatibility and migration impact, or none. -->
+- Compatibility: pending <!-- Compatibility impact and consumer action, or none. -->
 - Stack: pending <!-- Dependencies on other pull requests, or none. -->
 
 ## Verification

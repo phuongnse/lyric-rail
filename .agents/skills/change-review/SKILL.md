@@ -96,8 +96,9 @@ finding.
 Carry every previously open blocking finding into the next report with its identity
 unchanged. It must remain blocking or have a `resolved` disposition with the reason
 the reviewed snapshot closes it. Omission, `accepted-risk`, and `tracked-follow-up`
-cannot retire a blocker. This also applies to older report versions; their ordinary
-non-blocking observations keep the existing compatibility rules.
+cannot retire a blocker. Every report consumed by this runtime uses the current
+version-1 review contract; a report from another release is not a substitute for
+current evidence.
 
 Assess accepted design criteria separately from passing checks. Use
 **production-engineering** design guidance to trace a significant behavior and a
@@ -108,6 +109,16 @@ location, and concrete correctness, comprehension, or maintenance consequence.
 Apply the existing blocking rules to demonstrated violations even when tests pass;
 preference for a pattern, shorter code, or a different valid structure is insufficient.
 Do not retrofit new design criteria into the frozen contract.
+
+For each material accepted criterion or risk, independently trace observed symptom or
+failure mode -> violated behavior or invariant -> actual mechanism -> smallest
+sufficient changed boundary -> evidence capable of distinguishing the faulty state
+from the correction. Block a solution that fixes a symptom while leaving that
+mechanism reachable, changes a broader boundary without a contract reason, or claims
+minimality without inspecting the complete diff. The runtime plan-scope check proves
+only that paths were declared; it does not prove causal correctness or minimality.
+Do not treat a valid schema, a `satisfied`/`approved` boolean, a checklist, test
+count, coverage number, or green profile as proof of those semantic properties.
 
 Assess relevant project knowledge against implementation and accepted requirements:
 can the intended reader find the authoritative current source, understand sufficient
@@ -129,6 +140,10 @@ or applicable contract and a concrete consequence; tests must not introduce new 
 behavior. Test counts, coverage percentages, or green profiles alone do not establish
 adequacy. No newly added test is required when existing evidence protects the behavior
 or an automated behavioral check is not meaningful; preserve consumer-mandated policies.
+Evidence references must be grounded in the exact reviewed snapshot and the actual
+consumer checks or focused regression boundary. A passing command proves only the
+properties its expectations and execution boundary observe; it cannot by itself prove
+that the selected check exercises the causal mechanism claimed by the plan.
 Ensure the candidate implementation remains strictly agent-neutral and does not
 introduce hardcoded AI assistant harness names or vendor brand couplings into
 runtime logic or consumer boundaries. Reject symptom-patching workarounds: verify
@@ -147,28 +162,28 @@ already supplies the bounded origin. The plan's applicability decision is eviden
 not authority: correct it in the review result when the complete diff proves
 otherwise.
 
-Use the `reportSchemaVersion` and `reportPath` returned by review start. In schema
-versions 6 and later, every non-blocking finding has a disposition and rationale;
-never omit an observation merely to reach approval. `resolved` records why the
-reviewed snapshot closes it. `accepted-risk` and `tracked-follow-up` also record an
-owner and stable HTTPS `recordUrl`. The report path is process state and does not
-mutate the reviewed snapshot.
+Use the `reportSchemaVersion` and `reportPath` returned by review start. In the
+current version-1 contract, every non-blocking finding has a disposition and
+rationale; never omit an observation merely to reach approval. `resolved` records
+why the reviewed snapshot closes it. `accepted-risk` and `tracked-follow-up` also
+record an owner and stable HTTPS `recordUrl`. The report path is process state and
+does not mutate the reviewed snapshot.
 
 Review start also returns bounded `processSignals` derived from exact lifecycle
 events. Treat them as prompts for judgment, not proof of a shared defect; independently
-consider consumer evidence that the lifecycle cannot observe. Every schema-version 7
-report classifies `processImprovement` as `none`, `consumer-specific`, or
-`shared-process` and gives a concrete rationale. Consumer-specific behavior stays in
-the consumer. For `shared-process`, keep the assignment `review-pending` and route the
-candidate through **process-improve**. Submit only after an existing or owner-authorized
-issue supplies the stable HTTPS `recordUrl` (e.g. `https://github.com/phuongnse/engineering-process/issues/NUM`).
+consider consumer evidence that the lifecycle cannot observe. Every current report
+classifies `processImprovement` as `none`, `consumer-specific`, or `shared-process`
+and gives a concrete rationale. Consumer-specific behavior stays in the consumer.
+For `shared-process`, keep the assignment `review-pending` and route the candidate
+through **process-improve**. Submit only after an existing or owner-authorized issue
+supplies the stable HTTPS `recordUrl` (e.g. `https://github.com/phuongnse/engineering-process/issues/NUM`).
 Draft issue files, search queries, or submission form URLs cannot serve as `recordUrl`.
 If no issue URL is available yet, the review truthfully remains `review-pending`
 awaiting owner issue creation; missing GitHub tools or CLI access does not waive the
 durable record requirement. The review itself remains read-only.
 
 For process adoption changes, reviewers assess the candidate against the four bounded cases:
-1) guidance-only update; 2) runtime, dependency, or schema migration; 3) mixed adoption with product source changes; 4) unknown impact. Verify adoption integrity (`processctl adoption check`, hash lock, doctor) and compatibility without requiring the reviewer to re-review the upstream producer's entire source implementation. Verify that required profiles are satisfied through valid passing reports or valid reuse, with no omitted baseline profiles.
+1) guidance-only update; 2) runtime, dependency, or schema contract break; 3) mixed adoption with product source changes; 4) unknown impact. Verify adoption integrity (`processctl adoption check`, hash lock, doctor) and direct rejection/recovery of superseded inputs without requiring the reviewer to re-review the upstream producer's entire source implementation. Verify that required profiles are satisfied through valid passing reports or valid reuse, with no omitted baseline profiles.
 
 Read the consumer readiness result and repository rules. Check the complete diff for
 an affected enforced capability omitted from the contract, weakened evidence, a pack
