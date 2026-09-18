@@ -80,6 +80,35 @@ jobs:
           $diagnosticExitCode = $LASTEXITCODE
           $diagnosticOutput | Write-Output
           Write-Host "diagnostic pytest exit code: $diagnosticExitCode"
+      - name: Diagnose managed Windows Python environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $managedEnvironmentDiagnostic = @'
+          import os
+          import subprocess
+          import sys
+
+          names = {
+              "PATH", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
+              "HOMEDRIVE", "HOMEPATH", "SYSTEMROOT", "SystemRoot",
+              "COMSPEC", "PATHEXT",
+          }
+          environment = {name: os.environ[name] for name in names if name in os.environ}
+          environment["PATH"] = os.pathsep.join(
+              [os.path.dirname(os.path.abspath(sys.executable)), *environment.get("PATH", "").split(os.pathsep)]
+          )
+          environment["PYTHONUNBUFFERED"] = "1"
+          raise SystemExit(subprocess.run(
+              [sys.executable, "-m", "pytest", "-q", "-x", "-vv"],
+              env=environment,
+              check=False,
+          ).returncode)
+          '@
+          $managedEnvironmentDiagnostic | Set-Content -Path "$env:RUNNER_TEMP\managed_env_diagnostic.py"
+          & python "$env:RUNNER_TEMP\managed_env_diagnostic.py"
+          $diagnosticExitCode = $LASTEXITCODE
+          Write-Host "managed-environment diagnostic pytest exit code: $diagnosticExitCode"
       - name: Run governed Python profile
         run: |
           processctl doctor --project-root .
