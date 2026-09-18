@@ -72,6 +72,14 @@ jobs:
       - name: Validate managed process distribution
         if: runner.os == 'Linux'
         run: processctl adoption check --project-root . --requirements-lock requirements/process.txt
+      - name: Diagnose Windows Python tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $diagnosticOutput = & python -m pytest -q -x -vv 2>&1
+          $diagnosticExitCode = $LASTEXITCODE
+          $diagnosticOutput | Write-Output
+          Write-Host "diagnostic pytest exit code: $diagnosticExitCode"
       - name: Run governed Python profile
         run: |
           processctl doctor --project-root .
