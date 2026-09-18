@@ -477,10 +477,10 @@ if (-not $SkipVerification) {
         "adoption", "check", "--project-root", $ProjectRoot,
         "--requirements-lock", (Join-Path $ProjectRoot "requirements\process.txt")
     ) -Label "Validate engineering-process adoption"
+    Invoke-Checked -FilePath $processctl -Arguments @(
+        "doctor", "--project-root", $ProjectRoot
+    ) -Label "Check process environment on Windows"
     foreach ($profile in @("frontend", "python", "rust", "security")) {
-        Invoke-Checked -FilePath $processctl -Arguments @(
-            "doctor", "--project-root", $ProjectRoot, "--profile", $profile
-        ) -Label "Check $profile profile on Windows"
         Invoke-Checked -FilePath $processctl -Arguments @(
             "verify", "--project-root", $ProjectRoot, "--profile", $profile
         ) -Label "Verify $profile profile on Windows"
