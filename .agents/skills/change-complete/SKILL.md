@@ -5,6 +5,15 @@ description: Complete an approved change when routed by deliver-change, only whi
 
 # Complete a change
 
+## Route card
+
+**State:** `approved`. **Do:** recheck the exact reviewed checkpoint and let
+`change finish` write the one receipt; keep release, merge, adoption, and deployment
+with the consumer owner. **Evidence:** required profiles, approved independent
+review, current publication boundary, incident-intake result, and receipt. **Next:**
+owner-controlled publication/adoption, or a new implementation cycle if the candidate
+changes.
+
 Confirm the lifecycle is approved, every required profile passed, every blocking
 finding is closed, every non-blocking finding has its required disposition, and the
 repository still matches the reviewed snapshot.
@@ -46,6 +55,15 @@ Use actual current PR metadata and the selected consumer root. Keep the PR draft
 when a check fails, and repeat the same checks in required CI/branch protection.
 Custom publication policy uses consumer-owned commands at the same boundary.
 
+For the first complete PR, prepare the one body/title/branch/base/head candidate
+before calling the provider, then validate that same candidate before `gh pr create`
+or the equivalent API. For the packaged standard, the normal sequence is
+`artifact prepare-pr-data`, render the selected body, the four publication validators
+above, and only then provider creation. An existing PR is edited only when the
+current title/body actually differs; metadata repair is not a CI-refresh workaround.
+Keep a draft when evidence or metadata is incomplete. A successful publication
+check, auto-merge request, or merge request is not itself a merge result.
+
 Completion does not itself grant merge, deployment, or release authority; those
 remain project-owned operations. Never report completion from prose alone.
 
@@ -79,3 +97,9 @@ gaps after completion. Carry the owner and stable record URL for every accepted-
 or tracked-follow-up disposition into the durable handoff. Finish never edits
 readiness, upgrades a pack version, promotes a capability, or turns `building` into a
 production claim; those are reviewed consumer-owned source changes.
+
+Completion consumes only the current run's contract, plan, fresh verification, and
+approved review. A superseding run's prior relation is historical provenance; it does
+not make the prior run's evidence, approval, findings, or receipt valid for the new
+candidate. The prior blocked run remains visible and is not rewritten or marked
+complete by finishing its replacement.

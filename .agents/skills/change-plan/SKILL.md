@@ -5,6 +5,14 @@ description: Plan the registered change and its verification boundary when deliv
 
 # Plan a change
 
+## Route card
+
+**State:** `specified`. **Do:** inspect the accepted boundary and register one plan
+whose work items name literal affected paths, causal mechanism, risks, and invariant
+evidence. **Evidence:** the unchanged contract digest, current source behavior, and
+plan digest. **Next:** `change implement`; unresolved product choices remain with the
+owner.
+
 Read the registered contract and inspect the affected code. Describe one coherent
 approach, bounded work items with owned paths, and concrete risks with mitigations.
 The plan must bind the exact contract digest and must not add behavior that the
@@ -41,6 +49,13 @@ and concrete information gaps obstructing the accepted work. Plan only the neces
 updates or additions in consumer-owned sources. Any proposed cleanup names the
 obstacle, smallest useful repair, and expected benefit; unrelated gaps remain
 non-blocking proposals.
+
+For a contract that supersedes a plan-scope-blocked run, inspect the linked prior run
+and the complete diff from its recorded comparison base. Add only the implementation
+boundaries needed for the already accepted outcome; the new literal boundaries must
+cover inherited source changes as well as the new contract/plan control inputs. Do not
+carry prior verification, review, approval, findings, or correction-budget state into
+the plan, and do not select a new comparison base that hides inherited work.
 
 Explain a material or non-obvious evidence strategy in the existing `approach`, tied
 to accepted behavior, contract boundaries, and concrete risks. Derive expectations

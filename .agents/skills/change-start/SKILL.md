@@ -5,6 +5,14 @@ description: Turn an accepted request into a bounded change contract when delive
 
 # Start a change
 
+## Route card
+
+**State:** no run. **Do:** validate readiness, inspect the consumer, and register a
+bounded contract with real consumer evidence. **Evidence:** contract digest,
+comparison base, acceptance outcomes, affected capabilities, and required profiles.
+**Next:** `change plan`; do not edit implementation before the lifecycle reports
+`specified`.
+
 Read the owning project specification, relevant repository instructions, and current
 behavior. Write a change contract containing the source request, comparison base,
 risk, affected projects, observable acceptance criteria, and required verification
@@ -51,6 +59,22 @@ contract:
     processctl change start --actor ACTOR --context CONTEXT --contract change.json
 
 Do not edit implementation before the lifecycle reports specified.
+
+If the current run records a `plan-scope` blocker, do not modify its frozen contract or
+plan. A valid recovery is a new accepted current-v1 contract that preserves the
+accepted outcome and contains:
+
+    "supersedes": {
+      "changeId": "blocked-change-id",
+      "reason": "missing-plan-boundary"
+    }
+
+Start it with the same resolved `comparisonBaseCommit` as the blocked run. The runtime
+rejects a missing prior run, a prior review/approval/finding history, a different base,
+or any relation that is not a recorded plan-scope stop. It retains the prior run by
+path and digest and begins the new run without prior verification, review, or approval
+evidence. If the accepted outcome itself changes, obtain the necessary new owner
+decision and use a fresh ordinary contract instead of disguising it as a boundary fix.
 
 If `.process/project.json` opts in with `lifecycle.publication.required: true`, start
 also runs the existing read-only publication branch validator against the current

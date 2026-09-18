@@ -5,6 +5,14 @@ description: Implement the accepted plan or resolve blocking review findings whe
 
 # Implement a change
 
+## Route card
+
+**State:** `planned` or `changes-requested`. **Do:** register every mutating actor,
+implement only the accepted plan, and add behavioral regressions for the reported
+failure mode. **Evidence:** in-scope diff, implementation participants, and focused
+checks; no implicit contract expansion. **Next:** `change verify` on a committed,
+unchanged candidate.
+
 Register the implementation identity before editing:
 
     processctl change implement --change-id ID --actor ACTOR --context CONTEXT
@@ -62,3 +70,11 @@ gaps merely because they are listed.
 When evidence exposes a contract gap, stop and ask the project owner to supersede the
 contract. Do not make review prose into new scope. When implementation is ready,
 route to **change-verify**.
+
+When the lifecycle has a `plan-scope` blocker, the current run is terminal for this
+contract: stop editing and stop retrying. Report the uncovered paths, whether the
+accepted outcome is unchanged, and the exact owner action. An owner-approved
+superseding contract may continue the compatible work through `change start` →
+`change plan` → `change implement`; use the recorded prior run relation and preserve
+all inherited candidate paths. A new outcome is not an implementation-boundary
+repair and requires a fresh accepted decision.

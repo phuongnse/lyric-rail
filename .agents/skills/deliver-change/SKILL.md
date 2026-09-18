@@ -5,6 +5,24 @@ description: Drive a repository change through the governed engineering lifecycl
 
 # Deliver a change
 
+## Route card
+
+Use `processctl change status --change-id ID` as the state authority. The phase tells
+you the only next lifecycle command; the accepted contract and plan tell you the
+scope and evidence boundary.
+
+| Current state | Do now | Evidence consumed or produced | Next |
+| --- | --- | --- | --- |
+| no run | start | accepted contract, consumer evidence, readiness | `specified` → plan |
+| specified | plan | contract digest, affected paths, invariant assessments | `planned` → implement |
+| planned / changes-requested | implement | implementation identity and in-scope diff | `implementing` → verify |
+| implementing | verify | required profiles on one unchanged candidate | `verified` → independent review |
+| verified / review-pending | review | fresh independent reviewer, exact checkpoint, dispositions | `approved` or correction |
+| approved | complete | current checkpoint, profiles, review, receipt | owner-controlled release/adoption |
+
+If the candidate is outside the frozen plan, stop and supersede the contract or plan;
+do not widen a directory or replace missing evidence with prose.
+
 Use this as the only entry point for delivery work. Run `processctl project validate
 --json` first. When readiness is present, report its stage, immutable pack versions,
 enforced floor, and planned gaps. Planned gaps guide future work but do not become the
@@ -26,6 +44,26 @@ change status when a change already exists, then route exactly one current phase
    **change-implement**.
 7. blocked: stop. The current contract cannot merge; the owner may narrow or
    supersede it, but no correction-limit stop can waive independent review.
+
+If implementation finds candidate paths outside the frozen plan, the lifecycle records
+the paths as a `plan-scope` blocker and stops before verification or approval. Do not
+edit the accepted plan, widen a directory to satisfy the check, or retry the same
+operation. The owner may preserve the accepted outcome by preparing a new current-v1
+contract with `supersedes: {"changeId": "...", "reason": "missing-plan-boundary"}`;
+`change start` then records the prior run's path/digest and exact comparison base. The
+new plan must cover the complete inherited candidate diff. Prior findings, approvals,
+verification, and correction limits are never copied; a changed outcome needs a fresh
+owner decision and ordinary new contract.
+
+A failed required command is a different condition. Its report remains attached to the
+same run and exposes only safe structured execution metadata and the fixed selective
+reproduction descriptor. `change explain` labels that diagnostic `current`, `stale`, or
+`unavailable`; `change verify --remaining` does not retry a failed profile on the same
+candidate and input identity. Use an explicit profile refresh only after a concrete
+consumer/input action, and keep its result distinct from reused evidence. A spawn or
+other execution-condition error records the missing consumer action without persisting
+raw process errors. Blockers in the lifecycle are separate from consumer failures and
+from correction limits or any goal/coordination harness state.
 
 When changing this process itself, first use **process-improve** to prove the request
 came from a real consumer incident or need; the change still follows the same six
