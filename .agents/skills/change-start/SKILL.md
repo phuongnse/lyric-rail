@@ -5,6 +5,14 @@ description: Turn an accepted request into a bounded change contract when delive
 
 # Start a change
 
+## Route card
+
+**State:** no run. **Do:** validate readiness, inspect the consumer, and register a
+bounded contract with real consumer evidence. **Evidence:** contract digest,
+comparison base, acceptance outcomes, affected capabilities, and required profiles.
+**Next:** `change plan`; do not edit implementation before the lifecycle reports
+`specified`.
+
 Read the owning project specification, relevant repository instructions, and current
 behavior. Write a change contract containing the source request, comparison base,
 risk, affected projects, observable acceptance criteria, and required verification
@@ -16,6 +24,15 @@ and document types, without placeholders for irrelevant material. Where sources 
 conflict, establish which is authoritative and which is current or superseded. A
   missing entry point or necessary explanation calls for a focused repair, not a broad
   documentation rewrite.
+
+Before writing the contract, identify which reader groups could be affected: users,
+operators, developers, or maintainers. Name the changed knowledge and the
+consumer-owned authoritative source that should carry it. Add a documentation
+outcome only when the accepted behavior changes something a future reader must
+know or do; a reasoned no-impact decision is valid. Do not require a new document,
+an empty section, or a universal documentation inventory. For process-owned
+guidance, distinguish the source skill or standard from generated and adopted
+outputs so the contract does not make a current consumer drift from its package.
 
 When the work produces an issue record, PR description, release notes or an automation name, inspect the consumer's
 selected artifact standard and existing publication checks. The consumer may override
@@ -52,8 +69,34 @@ contract:
 
 Do not edit implementation before the lifecycle reports specified.
 
+If the current run records a `plan-scope` blocker, do not modify its frozen contract or
+plan. A valid recovery is a new accepted current-v1 contract that preserves the
+accepted outcome and contains:
+
+    "supersedes": {
+      "changeId": "blocked-change-id",
+      "reason": "missing-plan-boundary"
+    }
+
+Start it with the same resolved `comparisonBaseCommit` as the blocked run. The runtime
+rejects a missing prior run, a prior review/approval/finding history, a different base,
+or any relation that is not a recorded plan-scope stop. It retains the prior run by
+path and digest and begins the new run without prior verification, review, or approval
+evidence. If the accepted outcome itself changes, obtain the necessary new owner
+decision and use a fresh ordinary contract instead of disguising it as a boundary fix.
+
 If `.process/project.json` opts in with `lifecycle.publication.required: true`, start
 also runs the existing read-only publication branch validator against the current
 checkout branch before creating `.process/runs/ID`. A rejected branch leaves no new
 run state. The branch convention remains consumer-owned; the opt-in only makes the
   consumer's existing publication rule a lifecycle preflight.
+
+When a change arrives from another workspace, import its explicit handoff before
+routing the phase:
+
+    processctl change handoff import --handoff HANDOFF_PATH
+
+Import validates the process distribution, project, comparison base, candidate
+checkpoint, changed paths, and existing change id. It does not merge source changes,
+overwrite a conflicting run, or create a completed receipt; continue through the
+ordinary lifecycle with the imported state.

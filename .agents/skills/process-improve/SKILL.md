@@ -5,6 +5,17 @@ description: Change the shared process only in response to evidence from a real 
 
 # Improve the process
 
+## Route card
+
+**Reader goal:** decide whether a real consumer signal is an actionable shared-process
+gap. **Normal activity is not enough:** one correct evidence invalidation, an explicit
+refresh, a rerun after correction, a reopened completed change, or one ordinary review
+correction is retained as lifecycle history but is not automatically an incident.
+**Actionable evidence:** look for repeated current-cycle failure, an invariant
+violation, an execution/publication boundary failure, or an explicit shared-process
+review signal. **Next:** keep product behavior in the consumer, then use the normal
+change lifecycle for the smallest reusable correction.
+
 Before opening a process change, identify the consumer repository and the concrete
 incident, failed adoption, repeated friction, or missing capability. Put that evidence
 in the normal change contract. A hypothetical self-governance concern is not enough.
@@ -18,9 +29,9 @@ consumer or make process adoption depend on upgrading that pack.
 ## Automated finish incident intake
 
 Before `change finish` writes the completion receipt, the process collects structured lifecycle incidents across a closed taxonomy:
-1. `evidence-integrity`: verification reports invalidated due to input digest mismatch or repeated verification runs;
+1. `evidence-integrity`: the same profile is invalidated repeatedly before a successful rerun;
 2. `execution-boundary`: check timeouts, output overflows, terminated child processes, or stream failures;
-3. `governance-thrashing`: excessive correction cycles (cycle >= 2) or reviewer context replacement;
+3. `governance-thrashing`: at least two `changes-requested` reviews in the current implementation cycle or reviewer context replacement;
 4. `invariant-violation`: production invariant violated in review;
 5. `publication-boundary`: branch, commit subject, or range preflight failure;
 6. `explicit-review-signal`: reviewer-classified `shared-process`.
@@ -110,6 +121,16 @@ as any consumer change. Track cross-repository discussion in ordinary issues or 
 requests; do not create a second lifecycle or evidence federation. The process never
 self-publishes or self-merges: the owner retains release and adoption authority, and
 the next consumer result becomes evidence for another bounded iteration.
+
+When the observed friction is a frozen-plan boundary or a failed verification, classify
+the layer before proposing a process correction. A missing accepted outcome is an owner
+contract decision; an accepted outcome with an omitted implementation path is a
+plan-scope recovery; a non-zero consumer command is command failure; and timeout,
+output, stream, cleanup, or spawn inability is an execution-condition blocker. A goal
+or orchestration harness correction counter is not automatically a lifecycle blocker.
+Use the exact run/report/checkpoint metadata to describe what is known and what still
+needs diagnosis, and never publish raw command output or infer a cause from diagnostic
+text.
 
 When maintainers accept the issue, use its URL as the process change `source` and copy
 its bounded incident into `consumerEvidence`. Close the issue only after the process
