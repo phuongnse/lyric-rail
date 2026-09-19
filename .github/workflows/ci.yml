@@ -231,18 +231,18 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install "$CARGO_FUZZ_TOOLCHAIN" --profile minimal
-          audit_version="$(cargo audit --version 2>/dev/null || true)"
-          if [ "$audit_version" != "cargo-audit ${CARGO_AUDIT_VERSION}" ]; then
+          audit_version="$(cargo audit --version 2>/dev/null | awk '{print $2}' || true)"
+          if [ "$audit_version" != "$CARGO_AUDIT_VERSION" ]; then
             rm -f "$HOME/.cargo/bin/cargo-audit"
             cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked --force
           fi
-          fuzz_version="$(cargo fuzz --version 2>/dev/null || true)"
-          if [ "$fuzz_version" != "cargo-fuzz ${CARGO_FUZZ_VERSION}" ]; then
+          fuzz_version="$(cargo fuzz --version 2>/dev/null | awk '{print $2}' || true)"
+          if [ "$fuzz_version" != "$CARGO_FUZZ_VERSION" ]; then
             rm -f "$HOME/.cargo/bin/cargo-fuzz"
             cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked --force
           fi
-          test "$(cargo audit --version)" = "cargo-audit ${CARGO_AUDIT_VERSION}"
-          test "$(cargo fuzz --version)" = "cargo-fuzz ${CARGO_FUZZ_VERSION}"
+          test "$(cargo audit --version | awk '{print $2}')" = "$CARGO_AUDIT_VERSION"
+          test "$(cargo fuzz --version | awk '{print $2}')" = "$CARGO_FUZZ_VERSION"
       - name: Run governed security profile
         run: |
           processctl doctor --project-root .

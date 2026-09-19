@@ -100,6 +100,8 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
         if step.get("name") == "Install Rust security toolchain"
     )
     assert 'rustup toolchain install "$CARGO_FUZZ_TOOLCHAIN"' in security_install
+    assert 'audit_version="$(cargo audit --version 2>/dev/null | awk' in security_install
+    assert 'fuzz_version="$(cargo fuzz --version 2>/dev/null | awk' in security_install
     assert 'cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked --force' in security_install
     assert 'cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked --force' in security_install
     assert 'rm -f "$HOME/.cargo/bin/cargo-audit"' in security_install
