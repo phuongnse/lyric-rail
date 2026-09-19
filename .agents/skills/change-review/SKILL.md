@@ -5,6 +5,14 @@ description: Review the exact verified snapshot from an independent actor and co
 
 # Review a change
 
+## Route card
+
+**State:** `verified` or `review-pending`. **Do:** hand the exact snapshot, contract,
+plan, and reports to a genuinely independent reviewer; inspect the complete diff and
+causal evidence. **Evidence:** reviewer-native assignment, invariant assessments,
+finding identities, and dispositions. **Next:** `change complete` only after approval;
+requested changes return to implementation with the same reviewer.
+
 The reviewer must not share either actor identity or execution context with an
 implementer in the current cycle. An implementer must hand off this phase to an
 actual reviewer, not perform it under another identity.
@@ -53,6 +61,12 @@ When the phase is `review-pending`, resume the existing assignment; do not run
 `reportSchemaVersion`. Continue with the assigned independent actor/context and the
 existing report path, `.process/runs/ID/review-CYCLE.json`. If that reviewer is
 unavailable, use this authoritative decision table:
+
+An active review assignment may be moved sequentially with the explicit handoff
+package before completion. Import it into the matching committed candidate and
+resume the recorded assignment; do not create a new run, replace a valid reviewer,
+or treat the package as approval. After finish removes the runtime, review readers
+must use the retained receipt and its recorded independent-review result.
 
 | Situation | Condition | Required action | Prohibited action |
 | --- | --- | --- | --- |
@@ -129,6 +143,17 @@ heading, or style preference is insufficient. Consumer checks can prove properti
 such as valid links, runnable examples, parseable structure, or rendering; presence,
 length, formatting, and resolving links do not establish semantic usefulness or truth.
 
+Exercise at least one representative reader path for each material documentation
+claim: a new consumer starting, a person performing the change, or a user,
+operator, developer, or maintainer using the changed knowledge. Do so without
+adding context from the implementation conversation. Confirm that the source is
+current or clearly marked as generated, adopted, or historical, and that the
+reader can act. If no documentation change is warranted, check that the plan's
+no-impact reasoning still matches the completed behavior. Do not block on a
+preferred folder, heading, number of pages, or a documentation checkbox; a
+finding must identify wrong, missing, hard-to-find, or hard-to-use information
+and its concrete consequence.
+
 Assess whether material test expectations follow the accepted contract, important
 claimed risks are actually exercised, and the execution boundary could detect the
 claimed failure. Reject assertions overfitted to implementation details when they do
@@ -181,6 +206,13 @@ Draft issue files, search queries, or submission form URLs cannot serve as `reco
 If no issue URL is available yet, the review truthfully remains `review-pending`
 awaiting owner issue creation; missing GitHub tools or CLI access does not waive the
 durable record requirement. The review itself remains read-only.
+
+If a superseding run is presented, review the linked prior run and its digest as
+history, then review the new contract, plan, complete inherited diff, fresh required
+profiles, and independent assignment. Do not treat the relation as approval, do not
+reuse the old run's evidence or findings as current evidence, and reject any new base
+or plan boundary that makes inherited implementation disappear from the reviewed
+range. A plan-scope blocker is a recovery handoff, not permission to bypass review.
 
 For process adoption changes, reviewers assess the candidate against the four bounded cases:
 1) guidance-only update; 2) runtime, dependency, or schema contract break; 3) mixed adoption with product source changes; 4) unknown impact. Verify adoption integrity (`processctl adoption check`, hash lock, doctor) and direct rejection/recovery of superseded inputs without requiring the reviewer to re-review the upstream producer's entire source implementation. Verify that required profiles are satisfied through valid passing reports or valid reuse, with no omitted baseline profiles.
