@@ -1,0 +1,43 @@
+name: Cache Cargo dependencies and build outputs
+description: Restore exact-input Cargo caches without replacing verification
+inputs:
+  dependency-fingerprint:
+    description: Hash of Cargo manifests, locks, and the selected Rust toolchain
+    required: true
+  build-fingerprint:
+    description: Hash of build and native-input files that affect compiled outputs
+    required: true
+  target-directory:
+    description: Isolated Cargo target directory for this runner
+    required: true
+  cache-tools:
+    description: Cache the pinned cargo-audit and cargo-fuzz installation directory
+    required: false
+    default: "false"
+  cargo-audit-version:
+    description: Exact cargo-audit version represented in the tool cache key
+    required: true
+  cargo-fuzz-version:
+    description: Exact cargo-fuzz version represented in the tool cache key
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Cache Cargo registry and git sources
+      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: cargo-dependencies-${{ runner.os }}-${{ runner.arch }}-${{ inputs.dependency-fingerprint }}
+    - name: Cache Cargo target outputs
+      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: ${{ inputs.target-directory }}
+        key: cargo-target-${{ runner.os }}-${{ runner.arch }}-${{ inputs.build-fingerprint }}
+    - name: Cache pinned Cargo security tools
+      if: inputs.cache-tools == 'true'
+      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: ~/.cargo/bin
+        key: cargo-security-tools-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cargo-audit-version }}-${{ inputs.cargo-fuzz-version }}-${{ inputs.dependency-fingerprint }}

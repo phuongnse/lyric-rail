@@ -52,15 +52,27 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
-    assert "automation/renovate/engineering-process" in workflow
     assert "processctl adoption check" in workflow
+    assert workflow.count("processctl adoption check") == 1
     assert extract_policy_job(workflow) == EXPECTED_POLICY_JOB
     assert "    name: Python 3.12 (${{ matrix.os }})\n" in workflow
     assert "    name: Rust (${{ matrix.os }})\n" in workflow
 
     assert workflow.count("Install published engineering-process authority") == 4
     assert workflow.count("--require-hashes") == 4
-    assert "cargo install cargo-audit --version 0.22.2 --locked" in workflow
+    assert 'CARGO_AUDIT_VERSION: "0.22.2"' in workflow
+    assert 'CARGO_FUZZ_VERSION: "0.13.2"' in workflow
+    assert 'cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked' in workflow
+    assert "uses: ./.github/actions/cargo-cache" in workflow
+    assert workflow.count("uses: ./.github/actions/cargo-cache") == 2
+    cache_action = (ROOT / ".github" / "actions" / "cargo-cache" / "action.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809" in cache_action
+    assert "restore-keys:" not in cache_action
+    assert "~/.cargo/registry" in cache_action
+    assert "~/.cargo/git" in cache_action
+    assert "~/.cargo/bin" in cache_action
     assert "if: runner.os != 'Windows'" in workflow
     windows_gates = {
         "Validate Windows Rust environment": (
