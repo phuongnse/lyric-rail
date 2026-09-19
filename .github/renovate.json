@@ -11,7 +11,7 @@
   "extends": [
     "config:recommended",
     "helpers:pinGitHubActionDigests",
-    "github>phuongnse/engineering-process//templates/renovate#71bb94acb18aab41c97120f66e3cbd7c2fcee468"
+    "github>phuongnse/engineering-process//templates/renovate#c292559166faeda7715dedab3d28c08afdccc64c"
   ],
   "labels": [
     "dependencies"
@@ -52,6 +52,7 @@
         }
       },
       "prPriority": 100,
+      "recreateWhen": "always",
       "schedule": [
         "at any time"
       ]
