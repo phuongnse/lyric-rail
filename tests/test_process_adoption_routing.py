@@ -84,6 +84,8 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
         if step.get("uses") == "./.github/actions/cargo-cache"
     ]
     assert len(cache_steps) == 2
+    assert jobs["rust"]["steps"][2]["id"] == "cargo-cache"
+    assert jobs["security"]["steps"][2]["id"] == "cargo-cache"
     assert cache_steps[0]["with"]["toolchain-fingerprint"] == "stable"
     assert cache_steps[1]["with"]["toolchain-fingerprint"] == "${{ env.CARGO_FUZZ_TOOLCHAIN }}"
     security_install = next(
@@ -102,6 +104,25 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
         )
     )
     cache_action_steps = cache_action["runs"]["steps"]
+    assert set(cache_action["outputs"]) == {
+        "dependency-cache-hit",
+        "target-cache-hit",
+        "security-tools-cache-hit",
+    }
+    assert cache_action["outputs"]["dependency-cache-hit"]["value"] == (
+        "${{ steps.dependencies-cache.outputs.cache-hit }}"
+    )
+    assert cache_action["outputs"]["target-cache-hit"]["value"] == (
+        "${{ steps.target-cache.outputs.cache-hit }}"
+    )
+    assert cache_action["outputs"]["security-tools-cache-hit"]["value"] == (
+        "${{ steps.security-tools-cache.outputs.cache-hit }}"
+    )
+    assert [step["id"] for step in cache_action_steps] == [
+        "dependencies-cache",
+        "target-cache",
+        "security-tools-cache",
+    ]
     assert [step["uses"] for step in cache_action_steps] == [
         "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809",
         "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809",

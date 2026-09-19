@@ -120,6 +120,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Restore exact Cargo caches
+        id: cargo-cache
         uses: ./.github/actions/cargo-cache
         with:
           target-directory: ${{ env.CARGO_TARGET_DIR }}
@@ -127,6 +128,14 @@ jobs:
           cache-tools: "false"
           cargo-audit-version: ${{ env.CARGO_AUDIT_VERSION }}
           cargo-fuzz-version: ${{ env.CARGO_FUZZ_VERSION }}
+      - name: Record Cargo cache conditions
+        shell: bash
+        run: |
+          {
+            echo "### Cargo cache conditions"
+            echo "- dependency sources: ${{ steps.cargo-cache.outputs.dependency-cache-hit || 'false' }}"
+            echo "- target outputs: ${{ steps.cargo-cache.outputs.target-cache-hit || 'false' }}"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Install published engineering-process authority
         run: >-
           python -m pip install
@@ -188,6 +197,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Restore exact Cargo caches
+        id: cargo-cache
         uses: ./.github/actions/cargo-cache
         with:
           target-directory: ${{ env.CARGO_TARGET_DIR }}
@@ -195,6 +205,15 @@ jobs:
           cache-tools: "true"
           cargo-audit-version: ${{ env.CARGO_AUDIT_VERSION }}
           cargo-fuzz-version: ${{ env.CARGO_FUZZ_VERSION }}
+      - name: Record Cargo cache conditions
+        shell: bash
+        run: |
+          {
+            echo "### Cargo cache conditions"
+            echo "- dependency sources: ${{ steps.cargo-cache.outputs.dependency-cache-hit || 'false' }}"
+            echo "- target outputs: ${{ steps.cargo-cache.outputs.target-cache-hit || 'false' }}"
+            echo "- security tools: ${{ steps.cargo-cache.outputs.security-tools-cache-hit || 'false' }}"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Install published engineering-process authority
         run: >-
           python -m pip install

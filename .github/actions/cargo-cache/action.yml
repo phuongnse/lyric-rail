@@ -1,5 +1,15 @@
 name: Cache Cargo dependencies and build outputs
 description: Restore exact-input Cargo caches without replacing verification
+outputs:
+  dependency-cache-hit:
+    description: Whether the exact Cargo registry and git cache was restored
+    value: ${{ steps.dependencies-cache.outputs.cache-hit }}
+  target-cache-hit:
+    description: Whether the exact Cargo target cache was restored
+    value: ${{ steps.target-cache.outputs.cache-hit }}
+  security-tools-cache-hit:
+    description: Whether the exact pinned security-tool cache was restored
+    value: ${{ steps.security-tools-cache.outputs.cache-hit }}
 inputs:
   target-directory:
     description: Isolated Cargo target directory for this runner
@@ -21,6 +31,7 @@ runs:
   using: composite
   steps:
     - name: Cache Cargo registry and git sources
+      id: dependencies-cache
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         path: |
@@ -31,6 +42,7 @@ runs:
           ${{ inputs.toolchain-fingerprint }}-
           ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
     - name: Cache Cargo target outputs
+      id: target-cache
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         path: ${{ inputs.target-directory }}
@@ -41,6 +53,7 @@ runs:
           'scripts/bootstrap_windows.ps1', 'scripts/windows_dev_environment.ps1',
           'scripts/run_package_fuzz_smoke.py') }}
     - name: Cache pinned Cargo security tools
+      id: security-tools-cache
       if: inputs.cache-tools == 'true'
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
