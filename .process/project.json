@@ -1,4 +1,181 @@
 {
+  "impactProfiles": {
+    "profiles": {
+      "frontend": [
+        {
+          "id": "frontend-policy-refresh",
+          "paths": [
+            ".github/actions/**",
+            ".github/dependabot.yml",
+            ".github/dependabot.yaml",
+            ".github/renovate.json",
+            ".github/workflows/**",
+            ".process/project.json",
+            ".process/readiness.json"
+          ],
+          "run": [
+            "processctl",
+            "verify",
+            "--project-root",
+            ".",
+            "--profile",
+            "frontend"
+          ],
+          "timeoutSeconds": 3000
+        },
+        {
+          "id": "frontend-adoption-integrity",
+          "paths": [
+            ".agents/skills/**",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            ".process/adopt-process-windows-job.py",
+            ".process/adopt-process.py",
+            ".process/process.lock",
+            "AGENTS.md",
+            "requirements/process.in",
+            "requirements/process.txt"
+          ],
+          "run": [
+            "processctl",
+            "doctor",
+            "--project-root",
+            "."
+          ],
+          "timeoutSeconds": 900
+        }
+      ],
+      "python": [
+        {
+          "id": "python-policy-refresh",
+          "paths": [
+            ".github/actions/**",
+            ".github/dependabot.yml",
+            ".github/dependabot.yaml",
+            ".github/renovate.json",
+            ".github/workflows/**",
+            ".process/project.json",
+            ".process/readiness.json"
+          ],
+          "run": [
+            "processctl",
+            "verify",
+            "--project-root",
+            ".",
+            "--profile",
+            "python"
+          ],
+          "timeoutSeconds": 4200
+        },
+        {
+          "id": "python-adoption-integrity",
+          "paths": [
+            ".agents/skills/**",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            ".process/adopt-process-windows-job.py",
+            ".process/adopt-process.py",
+            ".process/process.lock",
+            "AGENTS.md",
+            "requirements/process.in",
+            "requirements/process.txt"
+          ],
+          "run": [
+            "processctl",
+            "doctor",
+            "--project-root",
+            "."
+          ],
+          "timeoutSeconds": 900
+        }
+      ],
+      "rust": [
+        {
+          "id": "rust-policy-refresh",
+          "paths": [
+            ".github/actions/**",
+            ".github/dependabot.yml",
+            ".github/dependabot.yaml",
+            ".github/renovate.json",
+            ".github/workflows/**",
+            ".process/project.json",
+            ".process/readiness.json"
+          ],
+          "run": [
+            "processctl",
+            "verify",
+            "--project-root",
+            ".",
+            "--profile",
+            "rust"
+          ],
+          "timeoutSeconds": 4800
+        },
+        {
+          "id": "rust-adoption-integrity",
+          "paths": [
+            ".agents/skills/**",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            ".process/adopt-process-windows-job.py",
+            ".process/adopt-process.py",
+            ".process/process.lock",
+            "AGENTS.md",
+            "requirements/process.in",
+            "requirements/process.txt"
+          ],
+          "run": [
+            "processctl",
+            "doctor",
+            "--project-root",
+            "."
+          ],
+          "timeoutSeconds": 900
+        }
+      ],
+      "security": [
+        {
+          "id": "security-policy-refresh",
+          "paths": [
+            ".github/actions/**",
+            ".github/dependabot.yml",
+            ".github/dependabot.yaml",
+            ".github/renovate.json",
+            ".github/workflows/**",
+            ".process/project.json",
+            ".process/readiness.json"
+          ],
+          "run": [
+            "processctl",
+            "verify",
+            "--project-root",
+            ".",
+            "--profile",
+            "security"
+          ],
+          "timeoutSeconds": 4500
+        },
+        {
+          "id": "security-adoption-integrity",
+          "paths": [
+            ".agents/skills/**",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            ".process/adopt-process-windows-job.py",
+            ".process/adopt-process.py",
+            ".process/process.lock",
+            "AGENTS.md",
+            "requirements/process.in",
+            "requirements/process.txt"
+          ],
+          "run": [
+            "processctl",
+            "doctor",
+            "--project-root",
+            "."
+          ],
+          "timeoutSeconds": 900
+        }
+      ]
+    },
+    "schemaVersion": 1
+  },
   "lifecycle": {
     "publication": {
       "required": true
