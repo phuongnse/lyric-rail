@@ -76,6 +76,9 @@ jobs:
         run: |
           processctl doctor --project-root .
           processctl verify --project-root . --profile python
+      - name: Diagnose direct Windows Python tests
+        if: failure() && runner.os == 'Windows'
+        run: python -m pytest -q -x
 
   frontend:
     name: Frontend build and audit
