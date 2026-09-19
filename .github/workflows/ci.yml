@@ -79,6 +79,27 @@ jobs:
       - name: Diagnose direct Windows Python tests
         if: failure() && runner.os == 'Windows'
         run: python -m pytest -q -x
+      - name: Diagnose managed Windows Python tests
+        if: failure() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          @"
+          import subprocess
+          import sys
+
+          from engineering_process.evidence import child_environment
+
+          completed = subprocess.run(
+              [sys.executable, "-m", "pytest", "-q", "-x"],
+              env=child_environment(executable=sys.executable),
+              text=True,
+              capture_output=True,
+          )
+          print(completed.stdout)
+          print(completed.stderr, file=sys.stderr)
+          raise SystemExit(completed.returncode)
+          "@ | python -
 
   frontend:
     name: Frontend build and audit
