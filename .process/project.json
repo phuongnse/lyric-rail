@@ -5,9 +5,10 @@
         {
           "id": "frontend-policy-refresh",
           "paths": [
+            ".github/actions/**",
             ".github/dependabot.yml",
             ".github/dependabot.yaml",
-            ".github/renovate.json5",
+            ".github/renovate.json",
             ".github/workflows/**",
             ".process/project.json",
             ".process/readiness.json"
@@ -47,9 +48,10 @@
         {
           "id": "python-policy-refresh",
           "paths": [
+            ".github/actions/**",
             ".github/dependabot.yml",
             ".github/dependabot.yaml",
-            ".github/renovate.json5",
+            ".github/renovate.json",
             ".github/workflows/**",
             ".process/project.json",
             ".process/readiness.json"
@@ -89,9 +91,10 @@
         {
           "id": "rust-policy-refresh",
           "paths": [
+            ".github/actions/**",
             ".github/dependabot.yml",
             ".github/dependabot.yaml",
-            ".github/renovate.json5",
+            ".github/renovate.json",
             ".github/workflows/**",
             ".process/project.json",
             ".process/readiness.json"
@@ -131,9 +134,10 @@
         {
           "id": "security-policy-refresh",
           "paths": [
+            ".github/actions/**",
             ".github/dependabot.yml",
             ".github/dependabot.yaml",
-            ".github/renovate.json5",
+            ".github/renovate.json",
             ".github/workflows/**",
             ".process/project.json",
             ".process/readiness.json"
