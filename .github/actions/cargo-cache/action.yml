@@ -1,14 +1,11 @@
 name: Cache Cargo dependencies and build outputs
 description: Restore exact-input Cargo caches without replacing verification
 inputs:
-  dependency-fingerprint:
-    description: Hash of Cargo manifests, locks, and the selected Rust toolchain
-    required: true
-  build-fingerprint:
-    description: Hash of build and native-input files that affect compiled outputs
-    required: true
   target-directory:
     description: Isolated Cargo target directory for this runner
+    required: true
+  toolchain-fingerprint:
+    description: The Rust toolchain identity used by this job's Cargo commands
     required: true
   cache-tools:
     description: Cache the pinned cargo-audit and cargo-fuzz installation directory
@@ -29,15 +26,30 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-        key: cargo-dependencies-${{ runner.os }}-${{ runner.arch }}-${{ inputs.dependency-fingerprint }}
+        key: >-
+          cargo-dependencies-${{ runner.os }}-${{ runner.arch }}-
+          ${{ inputs.toolchain-fingerprint }}-
+          ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
     - name: Cache Cargo target outputs
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
         path: ${{ inputs.target-directory }}
-        key: cargo-target-${{ runner.os }}-${{ runner.arch }}-${{ inputs.build-fingerprint }}
+        key: >-
+          cargo-target-${{ runner.os }}-${{ runner.arch }}-
+          ${{ inputs.toolchain-fingerprint }}-
+          ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml',
+          'scripts/bootstrap_windows.ps1', 'scripts/windows_dev_environment.ps1',
+          'scripts/run_package_fuzz_smoke.py') }}
     - name: Cache pinned Cargo security tools
       if: inputs.cache-tools == 'true'
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
-        path: ~/.cargo/bin
-        key: cargo-security-tools-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cargo-audit-version }}-${{ inputs.cargo-fuzz-version }}-${{ inputs.dependency-fingerprint }}
+        path: |
+          ~/.cargo/bin/cargo-audit
+          ~/.cargo/bin/cargo-fuzz
+        key: >-
+          cargo-security-tools-${{ runner.os }}-${{ runner.arch }}-
+          ${{ inputs.toolchain-fingerprint }}-
+          ${{ inputs.cargo-audit-version }}-${{ inputs.cargo-fuzz-version }}-
+          ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml',
+          'scripts/run_package_fuzz_smoke.py') }}

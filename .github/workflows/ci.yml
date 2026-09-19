@@ -12,6 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_AUDIT_VERSION: "0.22.2"
   CARGO_FUZZ_VERSION: "0.13.2"
+  CARGO_FUZZ_TOOLCHAIN: nightly-2026-07-01
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
@@ -121,9 +122,8 @@ jobs:
       - name: Restore exact Cargo caches
         uses: ./.github/actions/cargo-cache
         with:
-          dependency-fingerprint: ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
-          build-fingerprint: ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml', 'scripts/bootstrap_windows.ps1', 'scripts/windows_dev_environment.ps1') }}
           target-directory: ${{ env.CARGO_TARGET_DIR }}
+          toolchain-fingerprint: stable
           cache-tools: "false"
           cargo-audit-version: ${{ env.CARGO_AUDIT_VERSION }}
           cargo-fuzz-version: ${{ env.CARGO_FUZZ_VERSION }}
@@ -190,9 +190,8 @@ jobs:
       - name: Restore exact Cargo caches
         uses: ./.github/actions/cargo-cache
         with:
-          dependency-fingerprint: ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
-          build-fingerprint: ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml', 'scripts/bootstrap_windows.ps1', 'scripts/windows_dev_environment.ps1') }}
           target-directory: ${{ env.CARGO_TARGET_DIR }}
+          toolchain-fingerprint: ${{ env.CARGO_FUZZ_TOOLCHAIN }}
           cache-tools: "true"
           cargo-audit-version: ${{ env.CARGO_AUDIT_VERSION }}
           cargo-fuzz-version: ${{ env.CARGO_FUZZ_VERSION }}
@@ -211,14 +210,16 @@ jobs:
       - name: Install Rust security toolchain
         run: |
           set -euo pipefail
+          rustup toolchain install "$CARGO_FUZZ_TOOLCHAIN" --profile minimal
           audit_version="$(cargo audit --version 2>/dev/null || true)"
           if [ "$audit_version" != "cargo-audit ${CARGO_AUDIT_VERSION}" ]; then
-            cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+            rm -f "$HOME/.cargo/bin/cargo-audit"
+            cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked --force
           fi
-          rustup toolchain install nightly-2026-07-01 --profile minimal
           fuzz_version="$(cargo fuzz --version 2>/dev/null || true)"
           if [ "$fuzz_version" != "cargo-fuzz ${CARGO_FUZZ_VERSION}" ]; then
-            cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+            rm -f "$HOME/.cargo/bin/cargo-fuzz"
+            cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked --force
           fi
           test "$(cargo audit --version)" = "cargo-audit ${CARGO_AUDIT_VERSION}"
           test "$(cargo fuzz --version)" = "cargo-fuzz ${CARGO_FUZZ_VERSION}"

@@ -1,29 +1,29 @@
 import json
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parent.parent
 POLICY_REVISION = "38d952b8c94604df10fadc48b6c830a144ea1137"
-EXPECTED_POLICY_JOB = (
-    "  policy-verification:\n"
-    "    name: Policy verification\n"
-    "    if: github.event_name == 'pull_request'\n"
-    "    permissions:\n"
-    "      contents: read\n"
-    "      pull-requests: read\n"
-    "    uses: phuongnse/renovate-ops/.github/workflows/"
-    f"policy-verification.yml@{POLICY_REVISION}\n"
-)
+EXPECTED_POLICY_JOB = {
+    "name": "Policy verification",
+    "if": "github.event_name == 'pull_request'",
+    "permissions": {"contents": "read", "pull-requests": "read"},
+    "uses": (
+        "phuongnse/renovate-ops/.github/workflows/"
+        f"policy-verification.yml@{POLICY_REVISION}"
+    ),
+}
 
 
-def extract_policy_job(workflow: str) -> str | None:
-    marker = "  policy-verification:\n"
-    next_job = "\n  python:\n"
-    if marker not in workflow or next_job not in workflow:
+def extract_policy_job(workflow: str) -> dict | None:
+    document = yaml.safe_load(workflow)
+    jobs = document.get("jobs", {})
+    if not isinstance(jobs, dict):
         return None
-    return marker + workflow.split(marker, maxsplit=1)[1].split(
-        next_job, maxsplit=1
-    )[0]
+    policy_job = jobs.get("policy-verification")
+    return policy_job if isinstance(policy_job, dict) else None
 
 
 def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
@@ -52,48 +52,91 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
-    assert "processctl adoption check" in workflow
-    assert workflow.count("processctl adoption check") == 1
+    workflow_document = yaml.safe_load(workflow)
+    jobs = workflow_document["jobs"]
+    python_steps = jobs["python"]["steps"]
+    adoption_steps = [
+        step for step in python_steps if "processctl adoption check" in step.get("run", "")
+    ]
+    assert adoption_steps == [
+        {
+            "name": "Validate managed process distribution",
+            "if": "runner.os == 'Linux'",
+            "run": "processctl adoption check --project-root . --requirements-lock requirements/process.txt",
+        }
+    ]
     assert extract_policy_job(workflow) == EXPECTED_POLICY_JOB
-    assert "    name: Python 3.12 (${{ matrix.os }})\n" in workflow
-    assert "    name: Rust (${{ matrix.os }})\n" in workflow
+    assert jobs["python"]["name"] == "Python 3.12 (${{ matrix.os }})"
+    assert jobs["rust"]["name"] == "Rust (${{ matrix.os }})"
 
-    assert workflow.count("Install published engineering-process authority") == 4
-    assert workflow.count("--require-hashes") == 4
-    assert 'CARGO_AUDIT_VERSION: "0.22.2"' in workflow
-    assert 'CARGO_FUZZ_VERSION: "0.13.2"' in workflow
-    assert 'cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked' in workflow
-    assert "uses: ./.github/actions/cargo-cache" in workflow
-    assert workflow.count("uses: ./.github/actions/cargo-cache") == 2
-    cache_action = (ROOT / ".github" / "actions" / "cargo-cache" / "action.yml").read_text(
-        encoding="utf-8"
+    authority_steps = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if step.get("name") == "Install published engineering-process authority"
+    ]
+    assert len(authority_steps) == 4
+    assert all("--require-hashes" in step["run"] for step in authority_steps)
+    cache_steps = [
+        step
+        for job in (jobs["rust"], jobs["security"])
+        for step in job["steps"]
+        if step.get("uses") == "./.github/actions/cargo-cache"
+    ]
+    assert len(cache_steps) == 2
+    assert cache_steps[0]["with"]["toolchain-fingerprint"] == "stable"
+    assert cache_steps[1]["with"]["toolchain-fingerprint"] == "${{ env.CARGO_FUZZ_TOOLCHAIN }}"
+    security_install = next(
+        step["run"]
+        for step in jobs["security"]["steps"]
+        if step.get("name") == "Install Rust security toolchain"
     )
-    assert "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809" in cache_action
-    assert "restore-keys:" not in cache_action
-    assert "~/.cargo/registry" in cache_action
-    assert "~/.cargo/git" in cache_action
-    assert "~/.cargo/bin" in cache_action
-    assert "if: runner.os != 'Windows'" in workflow
-    windows_gates = {
-        "Validate Windows Rust environment": (
-            "processctl doctor --project-root .",
-            5,
-        ),
-        "Run Windows Rust formatting gate": ("cargo fmt --all --check", 1),
-        "Run Windows Rust test gate": ("cargo test --workspace --locked", 1),
-        "Run Windows Rust lint gate": (
-            "cargo clippy --workspace --all-targets --locked -- -D warnings",
-            1,
-        ),
-    }
-    for name, (command, expected_count) in windows_gates.items():
-        exact_step = (
-            f"      - name: {name}\n"
-            "        if: runner.os == 'Windows'\n"
-            f"        run: {command}\n"
+    assert 'rustup toolchain install "$CARGO_FUZZ_TOOLCHAIN"' in security_install
+    assert 'cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked --force' in security_install
+    assert 'cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked --force' in security_install
+    assert 'rm -f "$HOME/.cargo/bin/cargo-audit"' in security_install
+    assert 'rm -f "$HOME/.cargo/bin/cargo-fuzz"' in security_install
+    cache_action = yaml.safe_load(
+        (ROOT / ".github" / "actions" / "cargo-cache" / "action.yml").read_text(
+            encoding="utf-8"
         )
-        assert exact_step in workflow
-        assert workflow.count(command) == expected_count
+    )
+    cache_action_steps = cache_action["runs"]["steps"]
+    assert [step["uses"] for step in cache_action_steps] == [
+        "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809",
+        "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809",
+        "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809",
+    ]
+    assert all("restore-keys" not in step["with"] for step in cache_action_steps)
+    assert cache_action_steps[0]["with"]["path"].splitlines() == [
+        "~/.cargo/registry",
+        "~/.cargo/git",
+    ]
+    assert cache_action_steps[2]["with"]["path"].splitlines() == [
+        "~/.cargo/bin/cargo-audit",
+        "~/.cargo/bin/cargo-fuzz",
+    ]
+    assert "scripts/run_package_fuzz_smoke.py" in cache_action_steps[1]["with"]["key"]
+    assert "${{ inputs.toolchain-fingerprint }}" in cache_action_steps[1]["with"]["key"]
+    assert any(
+        step.get("if") == "runner.os != 'Windows'"
+        for step in jobs["rust"]["steps"]
+    )
+    windows_gates = {
+        "Validate Windows Rust environment": "processctl doctor --project-root .",
+        "Run Windows Rust formatting gate": "cargo fmt --all --check",
+        "Run Windows Rust test gate": "cargo test --workspace --locked",
+        "Run Windows Rust lint gate": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    }
+    for name, command in windows_gates.items():
+        matching_steps = [
+            step
+            for step in jobs["rust"]["steps"]
+            if step.get("name") == name
+            and step.get("if") == "runner.os == 'Windows'"
+            and step.get("run") == command
+        ]
+        assert len(matching_steps) == 1
 
     assert (ROOT / ".process" / "adopt-process.py").is_file()
 
