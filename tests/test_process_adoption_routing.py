@@ -86,6 +86,12 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
     assert len(cache_steps) == 2
     assert jobs["rust"]["steps"][2]["id"] == "cargo-cache"
     assert jobs["security"]["steps"][2]["id"] == "cargo-cache"
+    assert jobs["rust"]["env"]["CARGO_TARGET_DIR"] == (
+        "${{ github.workspace }}/.dev/target-${{ matrix.os }}"
+    )
+    assert jobs["security"]["env"]["CARGO_TARGET_DIR"] == (
+        "${{ github.workspace }}/.dev/target-security"
+    )
     assert cache_steps[0]["with"]["toolchain-fingerprint"] == "stable"
     assert cache_steps[1]["with"]["toolchain-fingerprint"] == "${{ env.CARGO_FUZZ_TOOLCHAIN }}"
     security_install = next(
