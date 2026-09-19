@@ -41,6 +41,7 @@ def test_process_adoption_is_materialized_by_the_managed_runner() -> None:
     )
     assert authority_rule["enabled"] is True
     assert authority_rule["draftPR"] is True
+    assert authority_rule["recreateWhen"] == "always"
     assert authority_rule["postUpgradeTasks"]["commands"] == [
         "python .process/adopt-process.py --project-root . "
         "--requirements-lock requirements/process.txt"
