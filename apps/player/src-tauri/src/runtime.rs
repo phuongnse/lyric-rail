@@ -9,11 +9,12 @@ use std::{
 use lrail_format::runtime::{
     RUNTIME_MANIFEST_NAME, RUNTIME_SIGNATURE_NAME, runtime_platform, verify_runtime_pack,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const RUNTIME_PUBLIC_KEY: &str = include_str!("../../../../config/runtime-signing-public.key");
 const MODEL_CACHE_POLICY_JSON: &str =
     include_str!("../../../../src/lyricrail/model_cache_policy.json");
+const MODEL_MANIFEST_JSON: &str = include_str!("../../../../config/model-manifest.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +84,27 @@ pub struct ResolvedRuntime {
     pub ffprobe: Option<PathBuf>,
     pub lrail: Option<PathBuf>,
     pub integrity: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalogEntry {
+    pub id: String,
+    pub kind: String,
+    pub task: String,
+    pub installed: bool,
+    pub size_bytes: Option<u64>,
+    pub license: Option<String>,
+    pub license_note: Option<String>,
+    pub location: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalog {
+    pub runtime_integrity: String,
+    pub install_allowed: bool,
+    pub models: Vec<ModelCatalogEntry>,
 }
 
 fn canonical_runtime_root(root: &Path) -> Result<PathBuf, String> {
@@ -377,6 +399,114 @@ pub(crate) fn model_files_present_at(root: &Path) -> Result<(), String> {
 
 pub fn model_files_present_hint() -> Result<(), String> {
     model_files_present_at(&project_root()?)
+}
+
+fn manifest_model_installed(
+    root: &Path,
+    policy: &ModelCachePolicy,
+    model: &serde_json::Value,
+) -> bool {
+    match model.get("type").and_then(serde_json::Value::as_str) {
+        Some("audio-separator-checkpoint") => {
+            let audio_root = root.join("models/audio-separator");
+            let Some(filename) = model.get("filename").and_then(serde_json::Value::as_str) else {
+                return false;
+            };
+            contained_regular_file(&audio_root, &audio_root.join(filename))
+                && model
+                    .get("associatedFileSha256")
+                    .and_then(serde_json::Value::as_object)
+                    .is_none_or(|files| {
+                        files.keys().all(|filename| {
+                            contained_regular_file(&audio_root, &audio_root.join(filename))
+                        })
+                    })
+        }
+        Some("huggingface-snapshot") => {
+            let huggingface_root = root.join(&policy.cache_root);
+            let (Some(repository), Some(revision)) = (
+                model.get("repository").and_then(serde_json::Value::as_str),
+                model.get("revision").and_then(serde_json::Value::as_str),
+            ) else {
+                return false;
+            };
+            let snapshot = huggingface_root
+                .join(format!("models--{}", repository.replace('/', "--")))
+                .join("snapshots")
+                .join(revision);
+            model
+                .get("requiredFiles")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|required| {
+                    required
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .all(|filename| {
+                            snapshot_entry(policy, &snapshot, filename).is_some_and(|path| {
+                                contained_snapshot_file(policy, &huggingface_root, &snapshot, &path)
+                            })
+                        })
+                })
+        }
+        _ => false,
+    }
+}
+
+pub fn model_catalog() -> Result<ModelCatalog, String> {
+    let runtime = resolve_runtime()?;
+    let policy = model_cache_policy()?;
+    let manifest: serde_json::Value = serde_json::from_str(MODEL_MANIFEST_JSON)
+        .map_err(|_| "Pinned model manifest is invalid".to_string())?;
+    let models = manifest
+        .get("models")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "Pinned model manifest has no model map".to_string())?;
+    let mut entries = models
+        .iter()
+        .map(|(id, model)| {
+            let kind = model
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned();
+            let location = if kind == "huggingface-snapshot" {
+                policy.cache_root.clone()
+            } else {
+                "models/audio-separator".to_owned()
+            };
+            let size_bytes = model
+                .get("fileSizeBytes")
+                .and_then(serde_json::Value::as_object)
+                .map(|files| files.values().filter_map(serde_json::Value::as_u64).sum())
+                .filter(|size| *size > 0);
+            ModelCatalogEntry {
+                id: id.clone(),
+                kind,
+                task: model
+                    .get("task")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Model-backed processing")
+                    .to_owned(),
+                installed: manifest_model_installed(&runtime.root, policy, model),
+                size_bytes,
+                license: model
+                    .get("license")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                license_note: model
+                    .get("licenseNote")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                location,
+            }
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(ModelCatalog {
+        runtime_integrity: runtime.integrity.to_owned(),
+        install_allowed: runtime.integrity == "development-unverified",
+        models: entries,
+    })
 }
 
 #[cfg(test)]

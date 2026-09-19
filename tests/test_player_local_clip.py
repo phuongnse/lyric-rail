@@ -166,6 +166,7 @@ def test_local_clip_trim_reuses_the_existing_catalog_and_worker_contract() -> No
     assert "artist: Option<String>" in LOCAL_CLIP_RUNTIME
     assert "composer: Option<String>" in LOCAL_CLIP_RUNTIME
     assert "lyrics: Option<String>" in LOCAL_CLIP_RUNTIME
+    assert "video_offset_millis: video_offset.unwrap_or(0.0)" in LOCAL_CLIP_RUNTIME
     assert 'provide_lyrics_text"' in APP
     assert "let admitted_items = items.clone()" in LOCAL_CLIP_RUNTIME
     assert "enqueue_ready(&app, admitted_items)" in LIB

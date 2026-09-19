@@ -3,13 +3,18 @@
 Open **Library → Local → Files** and choose one audio or video file. Your original
 file stays unchanged.
 
-In **Library**, an unfinished local media item can also be removed with **Remove from
-library**. LyricRail asks for confirmation and removes only that one unfinished row;
-the source media, lyric sidecar and sibling sections stay untouched. A queued item is
-cancelled only if processing has not started. Authenticated `.lrail` packages, cloud
-items and active processing never expose this action.
+In **Library**, an unfinished, available local-media row can be deleted with **Delete
+permanently**. LyricRail asks for confirmation, cancels queued work that has not
+started, rejects active processing, and removes only the Library record; source media,
+lyric sidecars, packages, sibling sections, and external cloud files stay untouched.
+Ready/package, unavailable and cloud-only items expose no delete action.
 
 ## One timeline for sections
+
+The editor keeps the manual timeline available as the explicit fallback. Its header also
+offers **AI process track**. That action starts the normal native/model processing path in
+the background and leaves the editor open; the inline status links to Activity for the
+full task view. It does not invent lyric text or silently change the current section.
 
 **Trim your song** opens with the whole file selected, so an uncut video can be
 edited and added to the queue immediately. To cut it, click the source timeline
@@ -20,11 +25,13 @@ frame. The selected section's exact frame timestamp is shown beside each edge.
 
 **Remove** removes the selected block. The transport has only Play/Pause and source
 frame stepping; section frame buttons sit beside Start and End. Moving an edge by a
-frame immediately auditions the new beginning or ending of that section.
+frame immediately auditions the new beginning or ending of that section. Dragging a
+timeline handle and committing an exact boundary uses the same edge audition.
 
 Invalid time drafts stay visible and block publishing until corrected. Escape in a
-time field discards that edit. Up to 128 sections may overlap; **Add N songs to queue**
-publishes the valid sections in the chosen order.
+time field discards that edit. Up to 128 non-overlapping sections are supported;
+overlapping ranges are rejected at admission. **Add N songs to queue** publishes the
+valid sections in the chosen order.
 
 ## Edit video information
 
@@ -43,11 +50,11 @@ The final queue action is the only action that publishes the sections.
 
 `VideoEditor` is a shared component: callers provide media, playback bounds and
 metadata, and receive metadata only when saving. It is independent of the section
-picker and can also be used by a future Library edit action.
+picker and is shared by the Clip Editor and local-backed Library Edit action.
 
 Lyrics remain exactly as entered. LyricRail never infers, corrects or replaces them.
-Empty lyrics leave the Library item waiting for Paste or TXT. A full-source sidecar
-is never silently assigned to an extracted section.
+Empty lyrics leave the Library item waiting for lyrics; reopen Edit video to supply
+them. A full-source sidecar is never silently assigned to an extracted section.
 
 ## Preview and precision
 

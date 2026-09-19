@@ -9,7 +9,7 @@
   gap: 10px;
   padding: clamp(12px, 2.2vw, 22px);
   color: var(--soft);
-  background: linear-gradient(180deg, transparent, rgba(3,4,7,.9));
+  background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,.35) 40%, rgba(0,0,0,.82) 100%);
   opacity: 0;
   pointer-events: none;
   transform: translateY(8px);
@@ -21,57 +21,99 @@
   pointer-events: auto;
   transform: none;
 }
+.media-player-frame.is-idle .media-control-overlay {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}
 .media-control-progress {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
   gap: 10px;
   align-items: center;
   color: var(--soft);
   font-size: var(--font-small);
   font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.media-control-progress output {
+  width: 48px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.media-control-progress output:first-of-type {
+  text-align: left;
+}
+.media-control-progress output:last-of-type {
+  text-align: right;
 }
 .media-control-progress input { min-width: 0; }
 .media-control-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 12px;
+  display: flex;
+  justify-content: space-between;
   align-items: center;
+  gap: 12px;
 }
 .media-control-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.media-control-group.player-transport { gap: 10px; }
 .media-control-group.end { justify-content: flex-end; }
+.media-control-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(12, 16, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+}
+.media-control-overlay .media-control-cluster .icon-control {
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+}
+.media-control-overlay .media-control-cluster .icon-control:hover:not(:disabled),
+.media-control-overlay .media-control-cluster .icon-control:focus-visible,
+.media-control-overlay .media-control-cluster .icon-control.active {
+  border-color: transparent;
+  color: var(--accent);
+  background: rgba(255, 204, 77, 0.14);
+}
 .media-control-overlay .icon-control {
-  border-color: rgba(255,255,255,.16);
+  border-color: rgba(255,255,255,.14);
   color: var(--soft);
-  background: rgba(5,7,11,.68);
-  backdrop-filter: blur(14px);
+  background: rgba(12,16,24,.85);
 }
 .media-control-overlay .icon-control:hover:not(:disabled),
 .media-control-overlay .icon-control:focus-visible,
 .media-control-overlay .icon-control.active {
   border-color: rgba(255,204,77,.42);
   color: var(--accent);
-  background: rgba(255,204,77,.12);
+  background: rgba(255,204,77,.14);
 }
 .media-control-overlay .media-control-primary {
   width: 46px;
   height: 46px;
-  border: 0;
+  border: 1px solid rgba(255,204,77,.5);
   border-radius: 50%;
-  color: #17120a;
-  background: linear-gradient(145deg, #ffe18a, var(--accent-strong));
-  box-shadow: 0 8px 24px rgba(255,184,46,.2);
+  color: #151108;
+  background: var(--accent);
+  box-shadow: 0 4px 16px rgba(0,0,0,.32);
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
 }
 .media-control-overlay .media-control-primary:hover:not(:disabled),
 .media-control-overlay .media-control-primary:focus-visible {
-  color: #17120a;
-  background: linear-gradient(145deg, #ffebad, #ffc84a);
+  color: #151108;
+  background: #ffd86b;
+  border-color: rgba(255,204,77,.8);
+  transform: scale(1.04);
 }
 .media-control-overlay input[type="range"] { background: linear-gradient(90deg, var(--accent) var(--progress, 0%), rgba(255,255,255,.24) var(--progress, 0%)); }
 .media-control-overlay .volume-range { width: min(112px, 12vw); }
 
 @media (max-width: 760px) {
   .media-control-overlay { padding: 10px; }
-  .media-control-row { grid-template-columns: 1fr auto; }
+  .media-control-row { display: grid; grid-template-columns: 1fr auto; }
   .player-controls .media-control-row > .media-control-group:first-child { grid-column: 1 / -1; }
   .player-controls .media-control-row > .media-control-group.end { grid-column: 2; justify-content: flex-end; }
   .media-control-overlay .volume-range { display: none; }

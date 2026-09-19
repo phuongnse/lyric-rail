@@ -191,6 +191,17 @@ it("shows exact frame timestamps and plays the changed edge immediately", async 
   expect(host.querySelector("audio")!.currentTime).toBeCloseTo(.2, 5);
 });
 
+it("auditions a direct section-handle edit", async () => {
+  await createSection(110, 800);
+  await act(async () => {
+    const handle = input("Section 1 start handle");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(handle, "200");
+    handle.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(host.querySelector("audio")!.currentTime).toBeCloseTo(.2, 5);
+  expect(button("Pause")).toBeDefined();
+});
+
 it("keeps selected playback inside the section while transport frame buttons remain visible", async () => {
   await createSection(110, 800);
   await act(async () => button("Pause")!.click());

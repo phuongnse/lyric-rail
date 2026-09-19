@@ -1,6 +1,18 @@
 import { useEffect, useRef, type RefObject } from "react";
 
 export const FOCUSABLE = "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])";
+const focusRestorationTargets = new WeakSet<HTMLElement>();
+
+export function markFocusRestoration(target: HTMLElement) {
+  focusRestorationTargets.add(target);
+  setTimeout(() => focusRestorationTargets.delete(target), 0);
+}
+
+export function consumeFocusRestoration(target: HTMLElement) {
+  const marked = focusRestorationTargets.has(target);
+  focusRestorationTargets.delete(target);
+  return marked;
+}
 
 export function useFocusContainment(
   open: boolean,
@@ -53,7 +65,10 @@ export function useFocusContainment(
       const restore = restoreContainer?.matches(FOCUSABLE)
         ? restoreContainer
         : restoreContainer?.querySelector<HTMLElement>(FOCUSABLE);
-      if (restore?.isConnected) restore.focus();
+      if (restore?.isConnected) {
+        markFocusRestoration(restore);
+        restore.focus();
+      }
     };
   }, [containerRef, initialRef, open, restoreRef]);
 }

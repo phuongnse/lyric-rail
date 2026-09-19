@@ -24,9 +24,9 @@ hand-authored SVG icon set. Icon-only actions include matching accessible labels
 hover/focus help text; compact UI copy is kept at a readable 10px minimum.
 
 Visible actions have one home. Library groups Files/Folder under Local and Google Drive
-under Cloud; lyric and retry controls stay on their song; playback controls stay in Player. Windows and
-Linux use no duplicate native menu. The top bar adds only a styled Activity entry and a
-small About utility on those platforms; macOS owns About in its minimal system menu.
+under Cloud; lyric and retry controls stay on their song; playback controls stay in Player.
+The idle Player frame owns one accessible Application menu for Settings and About, with
+macOS retaining its platform-conventional About entry where applicable.
 
 Activity is the single detailed home for long work. Tasks contains only queued/running
 work, while Issues contains failures and setup requirements from every subsystem. Both share
@@ -72,6 +72,18 @@ Large queues keep a bounded Activity snapshot/count, while every queued row can 
 its stable task directly by ID for View task and Cancel; no active task is rejected or hidden
 from its action path merely because it falls outside the snapshot window.
 
+Long-running actions keep their source context. Starting AI processing, model setup,
+preview preparation or a scan does not navigate away from the Library or editor: the
+source row/workbench shows compact progress and links to the same task in Activity.
+Activity can be opened, inspected and closed without losing that context. Processing
+can pause at a safe durable boundary and resume; other jobs expose only the controls
+their native owner can perform safely.
+
+The application menu includes Settings and About. Settings shows effective Library/import and
+cache locations, runtime integrity and the manifest-backed model catalog. Model downloads
+continue through the verified native installer and remain visible in Activity. Choosing a
+location never moves or deletes existing media or model files.
+
 The Clip Editor opens with the whole file selected, so an uncut song can be edited and
 queued immediately. Click the source timeline for Start, click again for End, then
 continue clicking pairs to create ordered sections. Select, trim exact Start/End
@@ -81,7 +93,7 @@ Double-click a block or press **Edit video** to open the shared information dial
 It previews only the selected interval with a zero-based clock and seek control,
 and edits Video name, Artist, Composer and exact UTF-8 lyrics. Save applies this
 information without changing the cut; Cancel discards the draft. Section operations
-remain on the timeline. The shared dialog is also ready for a future Library edit action.
+remain on the timeline. The shared dialog is also used by the Library Edit action.
 The editor supports up to 128 sections. See [the editor guide](docs/CLIP_EDITOR.md).
 All sections appear at the top of Library & queue in editor order, waiting for each
 section's exact lyrics when lyrics were not entered in Edit video. Existing active
@@ -119,9 +131,11 @@ search source are authenticated and encrypted at rest.
 
 ## Thumbnails and lyric revisions
 
-The core creates a compact encrypted WebP thumbnail from a representative frame and
-overlays the exact first non-empty lyric line. Audio-only sources use a deterministic
-local background. Older packages without artwork receive a neutral fallback.
+The core creates a compact encrypted WebP thumbnail from a representative frame.
+Library rows show artwork (or a neutral visual fallback) by default; the one focused row
+temporarily replaces that preview with its exact lyrics for quick reading. Audio-only
+sources use a deterministic local background. Older packages without artwork receive a
+neutral fallback. The artwork asset itself is never changed.
 
 The source lyric file is never edited. A package stores the exact user-confirmed UTF-8
 text separately from derived timing. For a local typo correction with the same safe

@@ -5,11 +5,44 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
 import type { CatalogSnapshot } from "./library";
 import type { KaraokePresentation } from "./LyricOverlay";
+import type { SystemIssue } from "./issues";
+import type { TaskRecord, TaskRuntimeUpdate, TaskSnapshot } from "./tasks";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
-const readyCatalog: CatalogSnapshot = { items: [{ id: "song", title: "Song", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: false, hasThumbnail: false }], localSources: [], driveSources: [] };
+const readyCatalog: CatalogSnapshot = { items: [{ id: "song", title: "Song", firstLyricLine: "Exact words", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false }], localSources: [], driveSources: [] };
 let catalogFixture: CatalogSnapshot = readyCatalog;
+let commitSnapshotFixture: CatalogSnapshot = readyCatalog;
+let systemIssuesFixture: SystemIssue[] = [];
+let taskSnapshotFixture: TaskSnapshot = { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
+const eventListeners = new Map<string, (event: { payload: unknown }) => void>();
+const runningTask: TaskRecord = {
+  id: "task-1",
+  kind: "processing",
+  title: "Processing Song",
+  status: "running",
+  progressMode: "determinate",
+  progressPercent: 42,
+  stageProgressPercent: 42,
+  cancellable: true,
+  startedAtMillis: 1_000,
+  updatedAtMillis: 2_000,
+  outputLineCount: 0,
+  outputTruncated: false,
+};
+const liveIssue: SystemIssue = {
+  id: "issue-1",
+  code: "processing.runtime",
+  scope: "processing",
+  severity: "warning",
+  title: "Runtime warning",
+  summary: "The processing runtime needs attention.",
+  state: "open",
+  occurrences: 1,
+  createdAtMillis: 1_000,
+  updatedAtMillis: 2_000,
+  actions: [{ kind: "reconnect-drive", label: "Reconnect Drive", requiresConfirmation: false }],
+};
 const presentation: KaraokePresentation = {
   referenceResolution: [1920, 1080],
   layout: { lineMode: "alternating-two-lines", alignment: "top-left-bottom-right", bottomMargin: 84, lineGap: 28, safeAreaPercent: 3.5, maximumLineWidthPercent: 93 },
@@ -21,42 +54,58 @@ const presentation: KaraokePresentation = {
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command: string) => {
   if (command === "catalog_snapshot") return catalogFixture;
-  if (command === "remove_unprocessed_local_item") return { items: [], localSources: [], driveSources: [] };
+  if (command === "delete_library_item") return { items: [], localSources: [], driveSources: [] };
   if (command === "player_status") return { version: "0.8.0", platform: "windows", vaultAvailable: true, processing: { pendingJobs: 0, runtimeAvailable: true } };
-  if (command === "system_issues") return [];
-  if (command === "task_runtime_snapshot") return { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
+  if (command === "system_issues") return systemIssuesFixture;
+  if (command === "task_runtime_snapshot") return taskSnapshotFixture;
   if (command === "open_library_item") return { packageId: "package", metadata: {}, renderPlan: { events: [] }, presentation, media: { videoUrl: "http://fixture/video", audioTracks: [{ id: "karaoke", name: "Karaoke", url: "http://fixture/karaoke", default: true }, { id: "original-reference", name: "Original", url: "http://fixture/original", default: false }] } };
   if (command === "prepare_local_clip") return { clipId: "clip", suggestedTitle: "Song", sizeBytes: 10, durationMillis: 3000, previewUrl: "http://fixture/preview" };
+  if (command === "prepare_library_item") return { clipId: "library-clip", suggestedTitle: "Song", sizeBytes: 10, durationMillis: 3000, previewUrl: "http://fixture/preview", videoUrl: "http://fixture/video", direct: true };
+  if (command === "commit_local_sections") return commitSnapshotFixture;
+  if (command === "update_library_item") return readyCatalog;
   if (command === "item_lyrics") return "Exact words";
   return null;
 }) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (event: string, callback: (event: { payload: unknown }) => void) => {
+  eventListeners.set(event, callback);
+  return () => { if (eventListeners.get(event) === callback) eventListeners.delete(event); };
+}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(async () => ["song.mp4"]), save: vi.fn() }));
 
 let host: HTMLDivElement;
 let root: Root;
+let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 beforeEach(async () => {
   catalogFixture = readyCatalog;
+  commitSnapshotFixture = readyCatalog;
+  systemIssuesFixture = [];
+  taskSnapshotFixture = { sequence: 0, tasks: [], activeTaskCount: 0, historyCount: 0 };
+  eventListeners.clear();
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   Object.assign(window, { __TAURI_INTERNALS__: {} });
   globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as typeof ResizeObserver;
+  scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+  Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => { root.render(<App />); });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
 });
 afterEach(() => {
   act(() => root.unmount()); host.remove();
+  if (scrollIntoViewDescriptor) Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+  else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   vi.restoreAllMocks();
 });
 
 async function checkDialog(launcher: HTMLButtonElement) {
-  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
   expect(dialog).not.toBeNull();
   expect(dialog.contains(document.activeElement)).toBe(true);
-  expect(host.querySelector(".topbar")?.hasAttribute("inert")).toBe(true);
+  expect(host.querySelector(".player-area")?.hasAttribute("inert")).toBe(true);
   expect(host.querySelector("#library-drawer")?.hasAttribute("inert")).toBe(true);
   const buttons = dialog.querySelectorAll<HTMLButtonElement>("button:not([disabled])");
   const first = buttons[0]; const last = buttons[buttons.length - 1];
@@ -72,15 +121,317 @@ async function checkDialog(launcher: HTMLButtonElement) {
   }
   expect(open).not.toHaveBeenCalled();
   expect(vi.mocked(invoke).mock.calls.some(([command]) => ["prepare_local_clip", "rescan_library", "add_local_files", "add_local_folder"].includes(command))).toBe(false);
-  expect(host.querySelector('[role="dialog"]')).toBe(dialog);
+  expect(document.querySelector('[role="dialog"]')).toBe(dialog);
   act(() => { last.focus(); last.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })); });
   expect(document.activeElement).toBe(first);
   act(() => { first.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })); });
   expect(document.activeElement).toBe(last);
   await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(document.activeElement).toBe(launcher);
 }
+
+it("replaces the main topbar with an in-player grouped application menu", async () => {
+  expect(host.querySelector(".topbar")).toBeNull();
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  const context = frame.querySelector<HTMLElement>(".player-context")!;
+  expect(context.querySelector(".now-playing")).toBeNull();
+  expect(frame.querySelector(".empty-stage")?.textContent).toContain("Open library");
+  const trigger = context.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  expect(trigger.classList.contains("player-application-toggle")).toBe(true);
+  expect(trigger.querySelector(".icon-control-label")?.textContent).toBe("Application");
+
+  await act(async () => trigger.click());
+  const menu = frame.querySelector<HTMLElement>("#player-application-menu")!;
+  expect(menu).not.toBeNull();
+  expect(menu.textContent).toContain("Settings");
+  expect(menu.textContent).toContain("About");
+  expect(menu.textContent).not.toContain("Library");
+  expect(menu.textContent).not.toContain("Activity");
+  expect(context.querySelector(".issues-toggle")).not.toBeNull();
+  expect(context.querySelector(".issues-toggle")?.textContent).toContain("Activity");
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(document.activeElement).toBe(menu.querySelector("button"));
+  const menuItems = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  expect(menuItems).toHaveLength(2);
+  expect(menuItems.map((item) => item.textContent?.trim())).toEqual(["Settings", "About"]);
+  const settingsItem = menuItems.find((item) => item.textContent?.includes("Settings"));
+  expect(settingsItem?.querySelector("circle[cx='12'][cy='12'][r='3']")).not.toBeNull();
+  expect(settingsItem?.querySelector("path")?.getAttribute("d")).toContain("M19.4 15a1.65 1.65 0 0 0 .33 1.82");
+  menuItems[menuItems.length - 1]!.focus();
+  act(() => menuItems[menuItems.length - 1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+  expect(document.activeElement).toBe(menuItems[0]);
+  act(() => menuItems[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })));
+  expect(document.activeElement).toBe(menuItems[1]);
+
+  await act(async () => {
+    frame.querySelector<HTMLButtonElement>('[aria-label="Close application menu"]')!.click();
+  });
+  expect(frame.querySelector("#player-application-menu")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+
+  await act(async () => trigger.click());
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(frame.querySelector("#player-application-menu")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+
+  await act(async () => trigger.click());
+  expect(frame.querySelector("#player-application-menu")).not.toBeNull();
+  await act(async () => {
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+  });
+  expect(frame.querySelector("#player-application-menu")).toBeNull();
+
+  await act(async () => trigger.click());
+  const about = [...frame.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("About"))!;
+  await act(async () => about.click());
+  const aboutDialog = host.querySelector<HTMLElement>(".about-dialog")!;
+  expect(aboutDialog.closest(".modal-layer")).not.toBeNull();
+  expect(aboutDialog.closest(".about-layer")).toBeNull();
+  expect(aboutDialog.querySelector("#about-title")?.textContent).toBe("LyricRail");
+  expect(aboutDialog.textContent).toContain("A karaoke player for local and cloud libraries.");
+  expect(aboutDialog.textContent).not.toContain("Private karaoke");
+  expect(aboutDialog.textContent).not.toContain("One focused local karaoke core");
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector("#about-title")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+
+  await act(async () => trigger.click());
+  const aboutAgain = [...frame.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("About"))!;
+  await act(async () => aboutAgain.click());
+  const modalLayer = host.querySelector<HTMLElement>(".modal-layer")!;
+  expect(modalLayer).not.toBeNull();
+  await act(async () => modalLayer.click());
+  expect(host.querySelector("#about-title")).toBeNull();
+});
+
+it("removes the menu tooltip when the outside scrim is clicked", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  await act(async () => {
+    trigger.focus();
+    await Promise.resolve();
+  });
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+  expect(trigger.getAttribute("aria-describedby")).not.toBeNull();
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close application menu"]')!.click());
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+  expect(trigger.getAttribute("aria-describedby")).toBeNull();
+});
+
+it("opens Settings from the application menu without losing the Player context", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("Settings"))!.click());
+  expect(host.querySelector("#settings-title")?.textContent).toBe("Settings");
+  expect(host.querySelector(".library-drawer.open")).not.toBeNull();
+  await act(async () => host.querySelector<HTMLButtonElement>(".settings-dialog .dialog-close")!.click());
+  expect(host.querySelector(".settings-dialog")).toBeNull();
+});
+
+it("does not recreate the tooltip when About or Activity restores focus", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("About"))?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".about-dialog .dialog-close")!.click());
+  expect(host.querySelector(".about-dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-header .icon-control")!.click());
+  expect(host.querySelector(".issues-drawer.open")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+});
+
+it("clears tooltips when Escape closes menu, Activity or About", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  const expectCleared = () => {
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    expect(trigger.getAttribute("aria-describedby")).toBeNull();
+  };
+
+  await act(async () => trigger.click());
+  await act(async () => {
+    trigger.focus();
+    await Promise.resolve();
+  });
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+  expectCleared();
+
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  await act(async () => {
+    trigger.focus();
+    await Promise.resolve();
+  });
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector(".issues-drawer.open")).toBeNull();
+  expectCleared();
+
+  await act(async () => trigger.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>(".player-menu-action")]
+    .find((button) => button.textContent?.includes("About"))?.click());
+  expect(host.querySelector(".about-dialog")).not.toBeNull();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(host.querySelector(".about-dialog")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expectCleared();
+});
+
+it("keeps a compact Open library shortcut in the idle Player", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  const empty = host.querySelector<HTMLElement>(".empty-stage")!;
+  expect(empty.querySelector("h1, p, .empty-brand-lockup")).toBeNull();
+
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close application menu"]')!.click());
+  expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
+  await act(async () => host.querySelector<HTMLButtonElement>(".library-drawer .drawer-tool[aria-label='Close library']")!.click());
+  expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(false);
+  await act(async () => empty.querySelector<HTMLButtonElement>(".empty-stage-library-btn")!.click());
+  expect(host.querySelector<HTMLElement>(".library-drawer")?.classList.contains("open")).toBe(true);
+});
+
+it("renders YouTube-style video card grid on the idle stage and opens an item directly on click", async () => {
+  const empty = host.querySelector<HTMLElement>(".empty-stage")!;
+  const grid = empty.querySelector<HTMLElement>(".stage-video-grid")!;
+  expect(grid).not.toBeNull();
+  const libraryCard = grid.querySelector<HTMLButtonElement>(".stage-library-card")!;
+  expect(libraryCard).not.toBeNull();
+  expect(grid.firstElementChild).toBe(libraryCard);
+  expect(libraryCard.textContent).toContain("Open library");
+
+  const card = grid.querySelector<HTMLButtonElement>(".stage-video-card:not(.stage-library-card)")!;
+  expect(card).not.toBeNull();
+  expect(card.textContent).toContain("Song");
+
+  await act(async () => card.click());
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("open_library_item", { itemId: "song" });
+});
+
+it("keeps Library and Activity badges synchronized with live state", async () => {
+  await act(async () => root.unmount());
+  catalogFixture = {
+    ...readyCatalog,
+    items: [
+      ...readyCatalog.items,
+      { id: "queued", title: "Queued song", status: "queued", progressPercent: 12, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false },
+    ],
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  const libraryCard = host.querySelector<HTMLButtonElement>(".stage-library-card.library-toggle");
+  expect(libraryCard).not.toBeNull();
+  expect(libraryCard?.querySelector("b")?.textContent).toBe("1");
+  expect(libraryCard?.getAttribute("aria-label")).toBe("Open library, 1 queued item");
+  expect(host.querySelector(".issues-toggle b")).toBeNull();
+
+  const update: TaskRuntimeUpdate = {
+    sequence: 1,
+    tasks: [runningTask],
+    output: [],
+    outputGaps: [],
+    outputGapAll: false,
+    removedTaskIds: [],
+    tasksReset: false,
+    activeTaskCount: 1,
+    historyCount: 0,
+  };
+  await act(async () => {
+    eventListeners.get("task-runtime-update")?.({ payload: update });
+    eventListeners.get("system-issues-changed")?.({ payload: [liveIssue] });
+  });
+  expect(host.querySelector<HTMLButtonElement>(".issues-toggle b")?.textContent).toBe("2");
+  expect(host.querySelector<HTMLButtonElement>(".issues-toggle")?.getAttribute("aria-label")).toBe("Activity, 2 updates");
+  expect(host.querySelector(".issues-toggle")?.className).toContain("has-issues");
+});
+
+it("keeps Library context while the menu and Activity are inspected", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
+  expect(library().classList.contains("open")).toBe(true);
+
+  await act(async () => trigger.click());
+  expect(host.querySelector("#player-application-menu")).not.toBeNull();
+  expect(library().classList.contains("open")).toBe(true);
+
+  await act(async () => host.querySelector<HTMLButtonElement>(".library-drawer .drawer-tool[aria-label='Close library']")!.click());
+  expect(library().classList.contains("open")).toBe(false);
+  expect(activity().classList.contains("open")).toBe(false);
+
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+  expect(library().classList.contains("open")).toBe(false);
+  expect(activity().classList.contains("open")).toBe(true);
+
+  await act(async () => trigger.click());
+  expect(host.querySelector("#player-application-menu")).not.toBeNull();
+  expect(activity().classList.contains("open")).toBe(true);
+});
+
+it("reconnects Drive into Library without leaving Activity open", async () => {
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => eventListeners.get("system-issues-changed")?.({ payload: [liveIssue] }));
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    .find((button) => button.textContent?.includes("Issues"))?.click());
+  const reconnect = [...host.querySelectorAll<HTMLButtonElement>(".issue-card button")]
+    .find((button) => button.textContent === "Reconnect Drive")!;
+  await act(async () => {
+    reconnect.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["connect_google_drive"]);
+  expect(library().classList.contains("open")).toBe(true);
+  expect(activity().classList.contains("open")).toBe(false);
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+});
+
+it("opens Library exclusively after committing a clip from Activity", async () => {
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  await act(async () => trigger.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true })));
+  const add = [...host.querySelectorAll<HTMLButtonElement>("[role=dialog] button")]
+    .find((button) => button.textContent === "Add 1 song to queue")!;
+  await act(async () => add.click());
+  expect(library().classList.contains("open")).toBe(true);
+  expect(activity().classList.contains("open")).toBe(false);
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+});
+
+it("opens Activity exclusively from an issue toast over Library", async () => {
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  const activity = () => host.querySelector<HTMLElement>(".issues-drawer")!;
+  await act(async () => eventListeners.get("system-issues-changed")?.({ payload: [liveIssue] }));
+  const toast = host.querySelector<HTMLButtonElement>(".issue-toast")!;
+  expect(toast).not.toBeNull();
+  await act(async () => toast.click());
+  expect(library().classList.contains("open")).toBe(true);
+  expect(activity().classList.contains("open")).toBe(true);
+  expect(host.querySelector("#player-application-menu")).toBeNull();
+});
 
 it("keeps main playback actions in a focused icon-only overlay", async () => {
   const firstSong = readyCatalog.items[0]!;
@@ -93,8 +444,8 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
   await act(async () => root.render(<App />));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
 
-  const libraryPlay = host.querySelector<HTMLButtonElement>('[aria-label="Play Song"]')!;
-  await act(async () => { libraryPlay.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await act(async () => host.querySelector<HTMLElement>('[aria-label="Play Song"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
   const overlay = frame.querySelector<HTMLElement>('.media-control-overlay.player-controls')!;
   const control = (label: string) => overlay.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
@@ -103,9 +454,16 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
 
   expect(host.querySelector(".transport")).toBeNull();
   expect([...overlay.querySelectorAll("button")].every((button) => !button.textContent?.trim())).toBe(true);
-  for (const label of ["Play song", "Previous ready song", "Next ready song", "Use Karaoke audio", "Use Original audio", "Mute volume", "Enter fullscreen"]) {
+  for (const label of ["Play song", "Stop playback", "Previous ready song", "Next ready song", "Enable vocals (Original)", "Mute volume", "Enter fullscreen"]) {
     expect(control(label)).toBeDefined();
   }
+  const clusters = overlay.querySelectorAll(".player-transport .media-control-cluster");
+  expect(clusters.length).toBe(2);
+  expect(clusters[0].querySelector('[aria-label="Play song"]')).not.toBeNull();
+  expect(clusters[0].querySelector('[aria-label="Stop playback"]')).not.toBeNull();
+  expect(clusters[1].querySelector('[aria-label="Previous ready song"]')).not.toBeNull();
+  expect(clusters[1].querySelector('[aria-label="Next ready song"]')).not.toBeNull();
+  expect(control("Play song").classList.contains("media-control-primary")).toBe(false);
   for (const action of overlay.querySelectorAll<HTMLButtonElement>("button")) {
     action.focus();
     expect(document.activeElement).toBe(action);
@@ -130,15 +488,17 @@ it("keeps main playback actions in a focused icon-only overlay", async () => {
   expect(audio.currentTime).toBe(12);
   expect(video.currentTime).toBe(12);
 
-  await act(async () => control("Use Original audio").click());
+  expect(control("Enable vocals (Original)").querySelector("svg")?.innerHTML).toContain("m2 2 20 20");
+  await act(async () => control("Enable vocals (Original)").click());
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-  expect(control("Use Original audio").getAttribute("aria-pressed")).toBe("true");
+  expect(control("Mute vocals (Karaoke)").getAttribute("aria-pressed")).toBe("true");
+  expect(control("Mute vocals (Karaoke)").querySelector("svg")?.innerHTML).toContain("M12 2a3 3 0 0 0-3 3v7");
   expect(audio.src).toContain("/original");
 
   await act(async () => control("Mute volume").click());
   expect(audio.volume).toBe(0);
   await act(async () => control("Unmute volume").click());
-  expect(audio.volume).toBeCloseTo(.9, 5);
+  expect(audio.volume).toBeCloseTo(1, 5);
 
   vi.mocked(invoke).mockClear();
   await act(async () => control("Next ready song").click());
@@ -173,7 +533,8 @@ it("keeps queue navigation disabled when no ready songs are available", async ()
   root = createRoot(host);
   await act(async () => root.render(<App />));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
-  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Play Song"]')!.click(); await Promise.resolve(); });
+  await act(async () => host.querySelector<HTMLElement>('[aria-label="Play Song"]')!.click());
+  await act(async () => { await Promise.resolve(); });
   const overlay = host.querySelector<HTMLElement>('.media-control-overlay.player-controls')!;
   expect(overlay.querySelector<HTMLButtonElement>('[aria-label="Previous ready song"]')!.disabled).toBe(true);
   expect(overlay.querySelector<HTMLButtonElement>('[aria-label="Next ready song"]')!.disabled).toBe(true);
@@ -187,14 +548,75 @@ it("contains the clip editor and restores its persistent Local launcher", async 
   await checkDialog(local);
 });
 
-it("contains the lyric editor and restores the selected song's edit button", async () => {
-  const edit = host.querySelector<HTMLButtonElement>('[aria-label="Edit lyrics for Song"]')!;
-  await act(async () => { edit.focus(); edit.click(); });
-  expect(document.activeElement?.tagName).toBe("TEXTAREA");
-  await checkDialog(edit);
+it("opens the shared VideoEditor from Library and restores its Edit trigger", async () => {
+  const editTrigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => editTrigger.click());
+  const edit = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    .find((button) => button.textContent === "Edit video")!;
+  await act(async () => { edit.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(document.querySelector(".clip-video-dialog")).not.toBeNull();
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Video name");
+  await checkDialog(editTrigger);
 });
 
-it("requires confirmation before removing an unfinished Library item", async () => {
+it("saves Library video metadata and exact lyrics through the native update", async () => {
+  const editTrigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => editTrigger.click());
+  await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Edit video")!.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  vi.mocked(invoke).mockClear();
+  await act(async () => document.querySelector<HTMLButtonElement>('.clip-video-dialog button.primary')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["update_library_item", { update: {
+    itemId: "song",
+    clipId: "library-clip",
+    startMillis: 0,
+    endMillis: 3000,
+    title: "Song",
+    artist: undefined,
+    composer: undefined,
+    lyrics: "Exact words",
+  } }]);
+  expect(document.querySelector(".clip-video-dialog")).toBeNull();
+});
+
+it("does not open Library Edit with a partial lyric preload", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args, options) => command === "item_lyrics"
+    ? Promise.reject(new Error("Synthetic lyric read failure"))
+    : original(command, args, options));
+  const editTrigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  vi.mocked(invoke).mockClear();
+  await act(async () => editTrigger.click());
+  await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Edit video")!.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(document.querySelector(".clip-video-dialog")).toBeNull();
+  expect(document.querySelector("#library-video-error-title")).not.toBeNull();
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Edit video could not open");
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["cancel_local_clip", { clipId: "library-clip" }]);
+  vi.mocked(invoke).mockImplementation(original);
+});
+
+it("keeps the Library editor preview and draft usable after a save failure", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let attempts = 0;
+  vi.mocked(invoke).mockImplementation((command, args, options) => command === "update_library_item"
+    ? (++attempts === 1 ? Promise.reject(new Error("Synthetic catalog failure")) : Promise.resolve(readyCatalog))
+    : original(command, args, options));
+  const editTrigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => editTrigger.click());
+  await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Edit video")!.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  const dialog = () => document.querySelector<HTMLElement>(".clip-video-dialog")!;
+  await act(async () => dialog().querySelector<HTMLButtonElement>("button.primary")!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(dialog()).not.toBeNull();
+  expect(dialog().textContent).toContain("draft and preview are still open");
+  await act(async () => dialog().querySelector<HTMLButtonElement>("button.primary")!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(attempts).toBe(2);
+  expect(document.querySelector(".clip-video-dialog")).toBeNull();
+  vi.mocked(invoke).mockImplementation(original);
+});
+
+it("requires confirmation before deleting any Library item", async () => {
   await act(async () => root.unmount());
   catalogFixture = { items: [{ id: "unfinished", title: "Unfinished", status: "queued", progressPercent: 0, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false }], localSources: [], driveSources: [] };
   root = createRoot(host);
@@ -202,22 +624,71 @@ it("requires confirmation before removing an unfinished Library item", async () 
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
 
   const rowRemove = () => [...host.querySelectorAll<HTMLButtonElement>("button")]
-    .find((button) => button.textContent === "Remove from library" && !button.closest('[role="dialog"]'))!;
+    .find((button) => button.getAttribute("aria-label") === "Open actions for Unfinished")!;
   expect(rowRemove()).toBeTruthy();
-  vi.mocked(invoke).mockClear();
   await act(async () => rowRemove().click());
+  const removeAction = () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    .find((button) => button.textContent === "Delete")!;
+  expect(removeAction()).toBeTruthy();
+  vi.mocked(invoke).mockClear();
+  await act(async () => removeAction().click());
   const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-  expect(dialog.textContent).toContain("Remove “Unfinished”?");
-  expect(dialog.textContent).toContain("original media file and its lyric sidecar stay unchanged");
-  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "remove_unprocessed_local_item")).toBe(false);
+  expect(dialog.textContent).toContain("Delete “Unfinished”?");
+  expect(dialog.textContent).toContain("permanently removes the item from Library");
+  expect(dialog.textContent).toContain("original local media, lyric sidecar, and external cloud file stay unchanged");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "delete_library_item")).toBe(false);
   await act(async () => [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Cancel")!.click());
   expect(host.querySelector('[role="dialog"]')).toBeNull();
 
   await act(async () => rowRemove().click());
+  await act(async () => removeAction().click());
   const confirm = [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
-    .find((button) => button.textContent === "Remove from library")!;
+    .find((button) => button.textContent === "Delete permanently")!;
+  vi.mocked(invoke).mockClear();
   await act(async () => confirm.click());
-  expect(vi.mocked(invoke).mock.calls).toContainEqual(["remove_unprocessed_local_item", { itemId: "unfinished" }]);
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["delete_library_item", { itemId: "unfinished" }]);
+  expect(host.querySelector('[aria-label="Open actions for Unfinished"]')).toBeNull();
+});
+
+it("keeps cloud-only Library statuses read-only", async () => {
+  await act(async () => root.unmount());
+  const rows: CatalogSnapshot["items"] = [
+    { id: "ready-local", title: "Ready local", status: "ready", progressPercent: 100, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false },
+    { id: "offline-cloud", title: "Offline cloud", status: "offline", progressPercent: 0, sources: ["Drive"], canProcess: false, canDelete: false, hasThumbnail: false },
+    { id: "failed-local", title: "Failed local", status: "failed", progressPercent: 0, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false },
+    { id: "processing-local", title: "Processing local", status: "processing", progressPercent: 42, sources: ["Disk"], canProcess: true, canDelete: true, hasThumbnail: false },
+  ];
+  catalogFixture = { items: rows, localSources: [], driveSources: [] };
+  root = createRoot(host);
+  await act(async () => { root.render(<App />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+  for (const row of rows) {
+    const shell = [...host.querySelectorAll<HTMLElement>(".song-row")]
+      .find((candidate) => candidate.textContent?.includes(row.title))!;
+    const trigger = shell.querySelector<HTMLButtonElement>('[aria-label^="Open actions for"]');
+    if (row.canDelete === false) {
+      expect(trigger).toBeNull();
+      continue;
+    }
+    await act(async () => trigger!.click());
+    expect([...shell.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].some((button) => button.textContent === "Delete")).toBe(true);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  }
+});
+
+it("keeps the permanent-delete confirmation when native deletion fails", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args, options) => command === "delete_library_item"
+    ? Promise.reject(new Error("Synthetic persistence failure"))
+    : original(command, args, options));
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => trigger.click());
+  await act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) => button.textContent === "Delete")!.click());
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+  await act(async () => dialog.querySelector<HTMLButtonElement>('button.danger')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(host.querySelector('[role="dialog"]')).toBe(dialog);
+  vi.mocked(invoke).mockImplementation(original);
 });
 
 it("wraps focus around visible controls while a clip commit disables the footer", async () => {
@@ -239,15 +710,17 @@ it("wraps focus around visible controls while a clip commit disables the footer"
 });
 
 it("dismisses the clip editor before Activity and restores normal shortcuts", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]')!;
+  act(() => trigger.click());
   const activity = host.querySelector<HTMLButtonElement>(".issues-toggle")!;
   act(() => { activity.focus(); activity.click(); });
   const pressOpen = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "o", ctrlKey: true, bubbles: true, cancelable: true }));
   await act(async () => { pressOpen(); });
   expect(host.querySelector('[role="dialog"]')).not.toBeNull();
-  expect(activity.getAttribute("aria-expanded")).toBe("true");
+  expect(host.querySelector(".issues-drawer.open")).not.toBeNull();
   await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect(host.querySelector('[role="dialog"]')).toBeNull();
-  expect(activity.getAttribute("aria-expanded")).toBe("true");
+  expect(host.querySelector(".issues-drawer.open")).not.toBeNull();
   vi.mocked(open).mockClear();
   await act(async () => { pressOpen(); });
   expect(open).toHaveBeenCalledOnce();
@@ -357,4 +830,245 @@ it("keeps the old editor when compatible preview preparation is cancelled", asyn
   } finally {
     vi.mocked(invoke).mockImplementation(original);
   }
+});
+
+it("aligns now-playing header with menu toggle and supports interaction-driven visibility", async () => {
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  const context = frame.querySelector<HTMLElement>(".player-context")!;
+  const menuToggle = context.querySelector<HTMLButtonElement>(".player-menu-toggle")!;
+  expect(menuToggle).not.toBeNull();
+  expect(context.classList.contains("is-visible")).toBe(true);
+
+  await act(async () => host.querySelector<HTMLElement>('[aria-label="Play Song"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const nowPlaying = host.querySelector<HTMLElement>(".now-playing")!;
+  expect(nowPlaying).not.toBeNull();
+  const title = nowPlaying.querySelector<HTMLElement>(".now-playing-title")!;
+  expect(title).not.toBeNull();
+  expect(title.textContent).toBe("Song");
+  expect(context.classList.contains("is-visible")).toBe(true);
+
+  await act(async () => {
+    window.dispatchEvent(new Event("pointermove"));
+  });
+  expect(context.classList.contains("is-visible")).toBe(true);
+});
+
+it("cleanly stops playback and returns to the stage when playback ends and no next song is available", async () => {
+  await act(async () => host.querySelector<HTMLElement>('[aria-label="Play Song"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  const overlay = frame.querySelector<HTMLElement>(".media-control-overlay.player-controls")!;
+  const audio = frame.querySelector<HTMLAudioElement>("audio")!;
+  const control = (label: string) => overlay.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+
+  Object.defineProperty(audio, "duration", { configurable: true, value: 180 });
+  await act(async () => audio.dispatchEvent(new Event("loadedmetadata", { bubbles: true })));
+
+  const seek = overlay.querySelector<HTMLInputElement>('[aria-label="Seek song"]')!;
+  expect(seek.max).toBe("180");
+  expect(seek.value).toBe("0");
+
+  await act(async () => control("Play song").click());
+  expect(control("Pause song")).toBeDefined();
+
+  // Simulate playback ending for single ready song
+  vi.mocked(invoke).mockClear();
+  Object.defineProperty(audio, "ended", { configurable: true, value: true });
+  Object.defineProperty(audio, "currentTime", { configurable: true, value: 180, writable: true });
+  await act(async () => audio.dispatchEvent(new Event("ended", { bubbles: true })));
+
+  // Cleanly stops playback and returns to stage when no next song exists
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["set_playback_active", { playing: false }]);
+  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).not.toBeNull();
+});
+
+it("advances to next song on song end or returns to stage when reaching end of queue", async () => {
+  await act(async () => root.unmount());
+  const firstSong = readyCatalog.items[0]!;
+  catalogFixture = {
+    ...readyCatalog,
+    items: [firstSong, { ...firstSong, id: "song-2", title: "Second song" }],
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  // Play first song
+  await act(async () => host.querySelector<HTMLElement>('[aria-label="Play Song"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  const audio = frame.querySelector<HTMLAudioElement>("audio")!;
+
+  // First song ends -> advances to second song
+  vi.mocked(invoke).mockClear();
+  Object.defineProperty(audio, "ended", { configurable: true, value: true });
+  await act(async () => audio.dispatchEvent(new Event("ended", { bubbles: true })));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["open_library_item", { itemId: "song-2" }]);
+
+  // Second song ends -> end of queue without shuffle -> returns to stage
+  vi.mocked(invoke).mockClear();
+  const currentAudio = frame.querySelector<HTMLAudioElement>("audio")!;
+  Object.defineProperty(currentAudio, "ended", { configurable: true, value: true });
+  await act(async () => currentAudio.dispatchEvent(new Event("ended", { bubbles: true })));
+
+  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).not.toBeNull();
+});
+
+it("does not render a close button in now-playing", async () => {
+  await act(async () => root.unmount());
+  const firstSong = readyCatalog.items[0]!;
+  catalogFixture = {
+    ...readyCatalog,
+    items: [firstSong],
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  await act(async () => host.querySelector<HTMLElement>('[aria-label="Play Song"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  expect(frame.querySelector(".media-control-overlay.player-controls")).not.toBeNull();
+  expect(frame.querySelector(".empty-stage")).toBeNull();
+
+  const closeBtn = frame.querySelector<HTMLButtonElement>('.now-playing [aria-label="Close song"]');
+  expect(closeBtn).toBeNull();
+});
+
+it("stops playback and exits to the empty stage when Escape is pressed during playback", async () => {
+  await act(async () => root.unmount());
+  const firstSong = readyCatalog.items[0]!;
+  catalogFixture = {
+    ...readyCatalog,
+    items: [firstSong],
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  await act(async () => host.querySelector<HTMLElement>('[aria-label="Play Song"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  expect(frame.querySelector(".media-control-overlay.player-controls")).not.toBeNull();
+  expect(frame.querySelector(".empty-stage")).toBeNull();
+
+  await act(async () => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+
+  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).not.toBeNull();
+});
+
+it("stops playback and exits to the empty stage when Stop button is clicked", async () => {
+  await act(async () => root.unmount());
+  const firstSong = readyCatalog.items[0]!;
+  catalogFixture = {
+    ...readyCatalog,
+    items: [firstSong],
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  await act(async () => host.querySelector<HTMLElement>('[aria-label="Play Song"]')!.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  const frame = host.querySelector<HTMLElement>(".video-stage.media-player-frame")!;
+  expect(frame.querySelector(".media-control-overlay.player-controls")).not.toBeNull();
+  expect(frame.querySelector(".empty-stage")).toBeNull();
+
+  const stopBtn = frame.querySelector<HTMLButtonElement>('.player-transport [aria-label="Stop playback"]')!;
+  expect(stopBtn).not.toBeNull();
+
+  vi.mocked(invoke).mockClear();
+  await act(async () => stopBtn.click());
+
+  expect(vi.mocked(invoke).mock.calls).toContainEqual(["set_playback_active", { playing: false }]);
+  expect(frame.querySelector(".media-control-overlay.player-controls")).toBeNull();
+  expect(frame.querySelector(".empty-stage")).not.toBeNull();
+});
+
+it("renders icon+text Library toggle during playback and clear Library actions", async () => {
+  await act(async () => root.unmount());
+  catalogFixture = {
+    ...readyCatalog,
+  };
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 160)); });
+
+  // On idle stage, header renders application menu toggle
+  const idleToggle = host.querySelector<HTMLButtonElement>('[aria-label="Open application menu"]');
+  expect(idleToggle).not.toBeNull();
+  expect(idleToggle?.textContent).toContain("Application");
+  expect(host.querySelector(".player-library-toggle")).toBeNull();
+
+  await act(async () => host.querySelector<HTMLButtonElement>(".issues-toggle")!.click());
+  expect(host.querySelector(".issues-drawer.open")).not.toBeNull();
+
+  const row = host.querySelector<HTMLElement>('.library-drawer .song-row-main[aria-label="Play Song"]')!;
+  const rowShell = row.closest<HTMLElement>(".song-row")!;
+  const actionTrigger = rowShell.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => actionTrigger.click());
+  const rowMenu = rowShell.querySelector<HTMLElement>(".row-menu")!;
+  const menuButtons = Array.from(rowMenu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'));
+  expect(menuButtons).toHaveLength(2);
+  const editButton = menuButtons.find((button) => button.textContent === "Edit video");
+  expect(editButton?.querySelector("svg")).not.toBeNull();
+  expect(editButton?.querySelector("span")).not.toBeNull();
+  expect(rowMenu.textContent).not.toContain("Play");
+  await act(async () => actionTrigger.click());
+
+  // Play the song
+  await act(async () => row.click());
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  // During playback, header menu toggle transforms into icon+text Library toggle without tooltip
+  expect(host.querySelector(".issues-toggle")).toBeNull();
+  expect(host.querySelector(".issues-drawer")).toBeNull();
+  const libraryToggle = host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle");
+  expect(libraryToggle).not.toBeNull();
+  expect(libraryToggle!.textContent).toContain("Library");
+  expect(libraryToggle!.querySelector("svg")).not.toBeNull();
+  expect(libraryToggle!.querySelector("span")?.textContent).toBe("Library");
+  // Ensure no tooltip attributes
+  expect(libraryToggle!.getAttribute("title")).toBeNull();
+  expect(libraryToggle!.getAttribute("aria-describedby")).toBeNull();
+
+  // Clicking Library toggle opens library drawer
+  const library = () => host.querySelector<HTMLElement>(".library-drawer")!;
+  expect(library().classList.contains("open")).toBe(false);
+
+  await act(async () => libraryToggle!.click());
+  expect(library().classList.contains("open")).toBe(true);
+  const activeToggle = host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle")!;
+  expect(activeToggle.classList.contains("active")).toBe(true);
+
+  const playbackRow = library().querySelector<HTMLElement>('.song-row-main[aria-label="Play Song"]')!;
+  const playbackRowShell = playbackRow.closest<HTMLElement>(".song-row")!;
+  const playbackAction = playbackRowShell.querySelector<HTMLButtonElement>('[aria-label="Open actions for Song"]')!;
+  await act(async () => playbackAction.click());
+  expect(playbackRowShell.querySelector(".row-menu")?.textContent).not.toContain("Activity");
+  expect(playbackRowShell.querySelector(".row-menu")).not.toBeNull();
+  await act(async () => playbackAction.click());
+
+  // Clicking it again closes the drawer
+  await act(async () => activeToggle.click());
+  expect(library().classList.contains("open")).toBe(false);
+  expect(host.querySelector<HTMLButtonElement>(".player-menu-toggle.player-library-toggle")!.classList.contains("active")).toBe(false);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Stop playback"]')!.click());
+  expect(host.querySelector(".issues-toggle")).not.toBeNull();
+  expect(host.querySelector(".issues-drawer")).not.toBeNull();
 });
